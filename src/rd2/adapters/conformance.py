@@ -56,6 +56,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "production_date",
         ],
     },
+    "보건복지부": {
+        # 실사(2026-07-08, 목록 15건 + 상세 3건 샘플)로 확인: 게시판 성격상
+        # 항상 값이 있었다. disclosure_status/cso_classification은 이 소스에
+        # 비공개 개념이 아예 없어 항상 공개/O로 고정되고, doc_type도 제목 키워드로
+        # 항상 추론되므로 always_filled에 넣는다(adapters/mohw.py 참고).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "start_date",
+            "end_date",
+            "doc_type",
+        ],
+        # 이 게시판엔 단위업무/분류체계/목차/수행기관/비공개근거 개념 자체가 없다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+        ],
+    },
 }
 
 
