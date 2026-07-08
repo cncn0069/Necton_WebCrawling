@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+.gstack/
+data/
+*.sqlite*
+*.log
+.venv/
+*.egg-info/
+*.prism_checkpoint.json
+*.bak-*
+.claude/settings.local.json

@@ -1,0 +1,18 @@
+# 개발 환경에서 검증된 버전으로 고정(pip freeze 기준, 2026-07-08).
+# pyproject.toml의 범위(>=)와 달리, 새 서버(EC2 등)에 처음 설치할 때
+# 로컬과 다른 버전이 깔려 재현 안 되는 문제를 막기 위한 고정 버전 목록이다.
+pydantic==2.13.4
+httpx==0.28.1
+beautifulsoup4==4.15.0
+python-dotenv==1.2.2
+openai==2.44.0
+
+# --- 개발/테스트 전용(운영 배포 시 생략 가능) ---
+pytest==9.1.1
+
+# --- pip으로 설치되지 않는 별도 의존성(직접 설치 필요) ---
+# gstack browse CLI(헤드리스 브라우저) — src/rd2/adapters/browse_client.py가
+# 서브프로세스로 호출한다. 정보공개포털/PRISM 둘 다 이 바이너리 없이는 전혀
+# 동작하지 않는다. 새 서버에 배포할 때 반드시 같이 설치해야 한다:
+#   ~/.claude/skills/gstack/browse/dist/browse (또는 PATH의 browse/browse.exe)
+# 설치 방법은 gstack의 browse 스킬 setup 스크립트를 참고할 것.
