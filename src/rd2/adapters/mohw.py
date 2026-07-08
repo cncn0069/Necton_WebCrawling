@@ -62,6 +62,13 @@ def _infer_doc_type(title: str) -> str:
 
 
 def _parse_period(period_text: str | None) -> tuple[date | None, date | None]:
+    """"제안서제출기간" 값을 시작/종료일로 나눈다. None을 반환하는 게 정상인 경우가
+    실제로 많다 — 2026-07-08 전수 크롤링(733건 샘플)으로 확인: 2021년 이후 게시물은
+    거의 다 채워져 있지만, 2012~2020년 게시물(이 게시판 물량의 대부분)은 상세페이지에
+    "제안서제출기간" 항목 자체는 있으나 사이트가 값을 비워둔 채(`<span> ~ </span>`)
+    등록해놨다 — 사이트 템플릿이 그 시절엔 이 필드를 안 쓴 것으로 보이며, 어댑터
+    파싱 버그가 아니다(원문 HTML 직접 확인함). 그래서 conformance.py의 보건복지부
+    계약에서도 start_date/end_date를 always_filled에 넣지 않는다."""
     if not period_text or "~" not in period_text:
         return None, None
     start_str, end_str = (p.strip() for p in period_text.split("~", 1))
