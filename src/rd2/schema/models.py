@@ -28,7 +28,7 @@ class Document(BaseModel):
     # 필요한 메타정보 (RD-2 v1.1)
     title: str = Field(description="문서 제목")
     ordering_agency: str = Field(description="기관(발주기관)")
-    department: str | None = Field(default=None, description="담당부서")
+    department: str | None = Field(default=None, description="생성부서")
     unit_task: str | None = Field(default=None, description="단위업무")
     production_date: date | None = Field(default=None, description="생산일자")
     disclosure_status: DisclosureStatus = Field(description="공개여부")
