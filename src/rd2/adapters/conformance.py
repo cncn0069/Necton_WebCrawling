@@ -56,6 +56,37 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "production_date",
         ],
     },
+    "보건복지부": {
+        # 최초 실사(2026-07-08, 목록 15건 + 상세 3건 샘플)로는 start_date/end_date도
+        # always_filled로 보였으나, 실제 전수 크롤링(같은 날, 733건 샘플)으로 확인해보니
+        # 92~93%가 비어있었다 — start_date/end_date는 always_filled에서 뺐다(아래
+        # "never_from_source에도 안 넣는 이유" 참고, adapters/mohw.py의 _parse_period
+        # 독스트링에 원인 기록).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+        ],
+        # 이 게시판엔 단위업무/분류체계/목차/수행기관/비공개근거 개념 자체가 없다.
+        # start_date/end_date는 여기 넣지 않는다 — "전혀 없는 개념"이 아니라 최근
+        # 게시물(2021년 이후)엔 실제로 채워지는 조건부 필드라서(2012~2020년 게시물만
+        # 사이트가 빈 값으로 등록해둠), never_from_source(이 소스는 원천적으로 이
+        # 필드가 없다는 뜻)에 넣으면 오해를 유발한다. always_filled/never_from_source
+        # 둘 다에 없는 필드는 조건부로만 채워지는 필드라는 모듈 독스트링 규칙 그대로
+        # 조건부로 둔다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+        ],
+    },
 }
 
 

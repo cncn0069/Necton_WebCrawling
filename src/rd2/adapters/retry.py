@@ -8,16 +8,25 @@ import subprocess
 import time
 from typing import Callable, TypeVar
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 # 재시도 대상은 "일시적일 수 있는 실패"로 한정한다 — browse CLI 호출 실패(RuntimeError,
-# browse_client._run_browse 참고), 서브프로세스 타임아웃, API 응답이 JSON이 아닌 경우.
+# browse_client._run_browse 참고), 서브프로세스 타임아웃, API 응답이 JSON이 아닌 경우,
+# httpx 전송 오류(연결 끊김/타임아웃 등 — mohw.py처럼 browse_client 없이 httpx로 직접
+# 요청하는 어댑터용, httpx.HTTPStatusError는 서버가 명확히 응답한 것이라 제외).
 # KeyError/AttributeError/TypeError 등 코드 자체의 버그는 여기서 잡지 않고 바로
 # 전파되어야 한다 — bare Exception으로 잡으면 진짜 버그도 "일시적 실패"로 오인해
 # 3회(최대 3초) 재시도한 뒤에야 드러나 디버깅을 늦춘다(plan-eng-review 지적).
-RETRYABLE_EXCEPTIONS = (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError)
+RETRYABLE_EXCEPTIONS = (
+    RuntimeError,
+    subprocess.TimeoutExpired,
+    json.JSONDecodeError,
+    httpx.TransportError,
+)
 
 
 def with_retry(fn: Callable[[], T], *, max_attempts: int = 3, backoff_seconds: float = 1.0) -> T:
