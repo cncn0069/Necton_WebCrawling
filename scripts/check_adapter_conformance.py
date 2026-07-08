@@ -16,6 +16,7 @@ from _common import ensure_src_on_path
 ensure_src_on_path()
 
 from rd2.adapters.conformance import ConformanceError, assert_conformance  # noqa: E402
+from rd2.adapters.mohw import MohwAdapter  # noqa: E402
 from rd2.adapters.open_go_kr import OpenGoKrAdapter  # noqa: E402
 from rd2.adapters.prism import PrismAdapter  # noqa: E402
 
@@ -64,7 +65,29 @@ def check_prism(sample_size: int = 10) -> bool:
     return True
 
 
+def check_mohw(sample_size: int = 10) -> bool:
+    adapter = MohwAdapter()
+
+    docs = []
+    for raw_item in adapter.fetch_list(max_items=sample_size):
+        try:
+            detail = adapter.parse_detail(raw_item)
+            docs.append(adapter.to_schema(detail))
+        except Exception as exc:  # noqa: BLE001
+            print(f"SKIP (parse error): {exc}")
+
+    print(f"보건복지부 수집 샘플: {len(docs)}건")
+    try:
+        assert_conformance("보건복지부", docs)
+    except ConformanceError as exc:
+        print(f"FAIL: {exc}")
+        return False
+    print("PASS: 보건복지부 always_filled 계약 충족")
+    return True
+
+
 if __name__ == "__main__":
     ok_open_go_kr = check_open_go_kr()
     ok_prism = check_prism()
-    sys.exit(0 if (ok_open_go_kr and ok_prism) else 1)
+    ok_mohw = check_mohw()
+    sys.exit(0 if (ok_open_go_kr and ok_prism and ok_mohw) else 1)
