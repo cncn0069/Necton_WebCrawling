@@ -39,7 +39,7 @@ def _save_checkpoint(path: Path, processed: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="rd2.db", help="저장할 DB 파일 경로 (기본: rd2.db)")
-    parser.add_argument("--count", type=int, default=10, help="수집할 건수 (기본: 10)")
+    parser.add_argument("count", type=int, default=10, help="수집할 건수 (기본: 10)")
     parser.add_argument(
         "--skip", type=int, default=None,
         help="목록 앞에서 건너뛸 건수. 생략하면 체크포인트 파일의 이어할 위치를 사용",

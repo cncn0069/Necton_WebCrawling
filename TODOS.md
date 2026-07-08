@@ -361,3 +361,51 @@
 **Effort:** M (경로 참조 여러 곳 수정 + 기존 로컬 DB/체크포인트 이동)
 **Priority:** P3
 **Depends on:** 없음, 다만 GitHub 업로드 이후 진행 권장(업로드 전에 하면 오늘 작업과 충돌 위험)
+
+### browse_client.py 전역변수 `_NAVIGATED`를 인스턴스 변수로 이동
+
+**What:** `_ensure_navigated()`가 참조하는 모듈레벨 전역 `_NAVIGATED` 플래그를 `OpenGoKrAdapter` 인스턴스 변수로 옮긴다.
+
+**Why:** 지금은 스크립트가 어댑터 하나만 프로세스당 실행해서 문제가 안 되지만, 한 프로세스에서 여러 어댑터(정보공개포털+PRISM 등)를 같이 돌리는 스크립트가 생기면 이 전역 상태가 실제로는 "다른 어댑터가 브라우저를 이동시켰는데도 목록 페이지에 있다고 착각"하는 조용한 버그로 이어질 수 있다(2026-07-08 plan-eng-review 지적).
+
+**Context:** `src/rd2/adapters/browse_client.py:53` 부근. PRISM 쪽은 이미 매번 목록 URL로 재-goto하는 방식으로 이 문제를 피해가고 있다(`fetch_prism_list_page` 참고) — 같은 패턴을 정보공개포털에도 적용하거나, 최소한 전역 대신 인스턴스 상태로 캡슐화한다.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** 없음
+
+### generate.py — OPENAI_API_KEY 누락 시 명확한 에러 메시지
+
+**What:** `os.environ["OPENAI_API_KEY"]` 직접 인덱싱을 `os.environ.get("OPENAI_API_KEY")` + 명시적 `RuntimeError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다...")`로 교체.
+
+**Why:** 지금은 키가 없으면 `KeyError: 'OPENAI_API_KEY'`라는 맥락 없는 에러만 뜬다. 본인만 쓰는 로컬 스크립트라 우선순위는 낮지만, 나중에 다른 사람이 같은 스크립트를 돌릴 때 원인 파악 시간을 아낀다(2026-07-08 plan-eng-review 지적).
+
+**Context:** `src/rd2/generators/generate.py:59`.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** 없음
+
+### 합성 C/S 문서 시나리오 다양성 부족 — 25개 시나리오로 31,000건 목표
+
+**What:** `clause_data.py`의 조항별 `scenario_prompts`(현재 조항 8개 합쳐 총 25개)를 늘리거나, LLM이 매 생성마다 시나리오 자체를 변형(장소·산업·구체적 상황 치환 등)하도록 프롬프트를 개선한다.
+
+**Why:** C(16,000건)+S(15,000건) 총 31,000건 목표 대비 시나리오 25개는 조항당 재사용률이 극단적으로 높다(2026-07-08 plan-eng-review의 Claude 서브에이전트 outside voice 발견). LLM 생성 자체는 매번 다른 문장을 만들어내지만, 바탕이 되는 "상황" 자체가 25가지뿐이면 분류기가 진짜 기밀성 신호가 아니라 이 25개 템플릿의 표면적 패턴을 학습할 위험이 있다 — 기존 TODOS의 "분포 혼선(O vs C/S 문체 차이)" 항목보다 더 구체적인, C/S 트랙 **내부** 다양성 문제.
+
+**Context:** `src/rd2/generators/clause_data.py`(시나리오 정의), `src/rd2/generators/generate.py`(생성 로직). RD-1(분류기 학습) 인계 시 이 리스크도 "분포 혼선 RD-1 인계 노트" 항목과 함께 명시적으로 전달해야 한다.
+
+**Effort:** M (시나리오 작성은 사람 검토가 필요한 콘텐츠 작업 — 조항당 몇 개를 몇 개로 늘릴지부터 결정 필요)
+**Priority:** P2
+**Depends on:** 없음, "분포 혼선 RD-1 인계 노트" 항목과 함께 다루는 게 자연스러움
+
+### with_retry — 밴/타임아웃 구분 없는 재시도(안티블로킹 전략 부재)
+
+**What:** `with_retry`가 지금은 모든 `RETRYABLE_EXCEPTIONS`(RuntimeError 등)를 동일하게 취급해 재시도한다. 사이트가 실제로 접근을 차단(예: 지속적인 403, CAPTCHA, IP 차단)한 경우와 일시적 타임아웃을 구분해, 차단 상황에서는 더 긴 백오프나 알림/중단을 하도록 정책을 분리한다.
+
+**Why:** 대규모(수만 건) 상시 크롤링(EC2 배포 예정)에서 실제로 차단이 발생하면 지금 로직은 그걸 일반 타임아웃과 똑같이 짧게 재시도만 반복해, 차단 상태를 눈치채지 못한 채 계속 실패할 위험이 있다(2026-07-08 plan-eng-review의 Claude 서브에이전트 outside voice 발견). 아직 실제로 차단을 겪은 이력은 없다 — 실제 문제가 되면 그때 대응해도 되는 성격.
+
+**Context:** `src/rd2/adapters/retry.py`. "EC2 상시 크롤링 전 robots.txt/이용약관/속도제한 점검" 항목과 밀접하게 연관 — 그 점검에서 요청 간격을 지키면 애초에 차단당할 가능성 자체가 줄어든다.
+
+**Effort:** M (차단 신호를 어떻게 감지할지부터 설계 필요 — browse CLI가 HTTP 상태 코드를 노출하는지 확인부터)
+**Priority:** P3
+**Depends on:** "EC2 상시 크롤링 전 robots.txt/이용약관/속도제한 점검" 항목 이후 실제로 필요한지 재평가

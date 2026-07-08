@@ -37,7 +37,7 @@ cp .env.example .env
 ## 실행
 
 ```bash
-python scripts/collect_prism.py --db rd2.db --count 10
+python scripts/collect_prism.py 10 --db rd2.db
 ```
 
 DB 스키마는 `storage/db.py`의 `CREATE TABLE IF NOT EXISTS`로 첫 실행 시 자동 생성된다 —
