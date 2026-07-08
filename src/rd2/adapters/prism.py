@@ -23,7 +23,6 @@ RD-2 v1.1 최상위 4개 출처 중 하나, 우선순위 2위(`안순현-수집�
 from __future__ import annotations
 
 from datetime import date, datetime
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -31,29 +30,13 @@ from bs4 import BeautifulSoup
 
 from rd2.adapters import browse_client
 from rd2.adapters.base import SourceAdapter
+from rd2.adapters.file_select import pick_primary_file
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.files import save_body_file
 
 _DOC_TYPE = "연구보고서"
 _DEFAULT_FILES_ROOT = Path(__file__).resolve().parents[3] / "data"
-
-
-def _normalize_for_match(text: str) -> str:
-    return "".join(text.split()).lower()
-
-
-def _pick_primary_file(files: list[dict], title: str) -> dict:
-    """프로젝트당 파일이 여러 개(심의신청서/활용결과보고서/최종보고서 등)일 때,
-    body_file_path에 넣을 대표 파일을 제목과 가장 비슷한 파일명으로 고른다
-    (2026-07-07 사용자 결정 — 부수 문서가 실수로 대표 파일이 되는 걸 방지)."""
-    normalized_title = _normalize_for_match(title)
-
-    def _score(f: dict) -> float:
-        name = Path(f["fileNm"]).stem
-        return SequenceMatcher(None, normalized_title, _normalize_for_match(name)).ratio()
-
-    return max(files, key=_score)
 
 _DISCLOSURE_TEXT_MAP = {
     "공개": DisclosureStatus.OPEN,
@@ -200,7 +183,7 @@ class PrismAdapter(SourceAdapter):
                 file_meta["_raw_bytes"],
             )
             saved.append((path, file_meta))
-        primary_meta = _pick_primary_file(downloaded, title)
+        primary_meta = pick_primary_file(downloaded, title)
         body_file_path = next(path for path, fm in saved if fm is primary_meta)
         other_file_paths = [path for path, fm in saved if fm is not primary_meta]
         return body_file_path, other_file_paths
