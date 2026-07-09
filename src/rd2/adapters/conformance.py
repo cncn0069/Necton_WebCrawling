@@ -16,7 +16,13 @@
 from __future__ import annotations
 
 from rd2.schema.models import Document
-from rd2.storage.naming import SOURCE_ALIO, SOURCE_MOHW, SOURCE_OPEN_GO_KR, SOURCE_PRISM
+from rd2.storage.naming import (
+    SOURCE_ALIO,
+    SOURCE_MOHW,
+    SOURCE_MOLIT,
+    SOURCE_OPEN_GO_KR,
+    SOURCE_PRISM,
+)
 
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
     SOURCE_OPEN_GO_KR: {
@@ -99,6 +105,37 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
         # 전부 채워짐을 확인(parse_detail이 404 등으로 못 가져오면 검색 API
         # 필드로 폴백하되, 그 경우도 title/production_date 자체는 채워짐 —
         # department/body_text/table_of_contents만 비게 된다).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "body_file_path",
+            "body_text",
+            "table_of_contents",
+            "start_date",
+            "end_date",
+        ],
+        # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
+        # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
+        # "문서 공개 판단에 걸린 시일"로 본다. 이 소스엔 단위업무/분류체계/
+        # 수행기관/비공개사유 개념 자체가 없다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "content_summary",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+        ],
+    },
+    SOURCE_MOLIT: {
+        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
+        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
+        # 항상 존재했다.
         "always_filled": [
             "title",
             "ordering_agency",
