@@ -6,7 +6,7 @@ import pytest
 from rd2.adapters import molit
 from rd2.adapters.molit import MolitAdapter
 from rd2.schema.models import CsoClassification, DisclosureStatus
-from rd2.storage.naming import DOC_TYPE_POLICY_MATERIAL, SOURCE_MOLIT
+from rd2.storage.naming import DOC_TYPE_MEETING_MINUTES, DOC_TYPE_POLICY_MATERIAL, SOURCE_MOLIT
 
 # 실제 사이트(molit.go.kr, m_34681) 원문 HTML 구조를 그대로 축약한 샘플
 # (2026-07-09 httpx 직접 요청으로 실사 확인). 목록의 "번호"(4585)와 상세링크의
@@ -131,6 +131,27 @@ SAMPLE_DETAIL_HTML_MULTI_FILE = """
   </li>
  </ul>
  <div class="bd_view_cont">건설기술진흥법 제67조제3항 및 시행령 제105조제4항에 따라 사조조사 결과보고를 공개합니다.</div>
+</div>
+"""
+
+# 제목에 "회의록"이 들어간 케이스 — 실제 캡처는 아니고(이 게시판 실사 10건 샘플엔
+# 없었음) 확인된 selector 구조를 그대로 써서 구성. 회의록은 doc_type이 분리돼야
+# 한다는 요청(2026-07-09)에 따른 회귀 테스트용.
+SAMPLE_DETAIL_HTML_MEETING_MINUTES = """
+<div class="bd_view">
+ <h4>2026년 제3차 도로정책심의위원회 회의록</h4>
+ <ul class="bd_view_ul_info">
+  <li><strong>담당부서</strong><span>도로정책과</span></li>
+  <li><strong>등록일</strong><span>2026-06-20</span></li>
+  <li><strong>분류</strong><span>도로철도 &gt; 도로정책</span></li>
+  <li class="file">
+   <strong>첨부파일</strong>
+   <span>
+    <a href="/portal/common/download/DownloadMltm2.jsp?FilePath=portal/DextUpload/202606/20260620_090000_001.pdf&amp;FileName=2026년 제3차 도로정책심의위원회 회의록.pdf">2026년 제3차 도로정책심의위원회 회의록.pdf</a>
+   </span>
+  </li>
+ </ul>
+ <div class="bd_view_cont">2026년 제3차 도로정책심의위원회 회의록을 공개합니다.</div>
 </div>
 """
 
@@ -348,6 +369,42 @@ def test_parse_detail_recovers_filename_when_source_html_truncates_it(monkeypatc
         Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "4899_20260701_131225_903.pdf"
     )
     assert doc.body_file_path.endswith(".pdf")
+
+
+def test_meeting_minutes_get_separate_doc_type_and_directory(monkeypatch, tmp_path):
+    """제목에 "회의록"이 있으면 doc_type이 policy_material이 아니라
+    meeting_minutes로 분리돼야 하고, 저장 폴더도 source/doc_type 기준이라
+    자동으로 별도 디렉토리에 쌓여야 한다(2026-07-09 사용자 요청)."""
+    monkeypatch.setattr(
+        molit, "_fetch_detail_html", lambda item_id: SAMPLE_DETAIL_HTML_MEETING_MINUTES
+    )
+    monkeypatch.setattr(
+        molit, "_download_file_streaming", lambda url, dest: dest.write_bytes(b"x")
+    )
+
+    adapter = MolitAdapter(files_root=tmp_path)
+    raw = {
+        "_item_id": "5001",
+        "_title": "2026년 제3차 도로정책심의위원회 회의록",
+        "_detail_url": "https://www.molit.go.kr/USR/policyData/m_34681/dtl.jsp?id=5001",
+        "_category": "도로철도>도로정책",
+        "_list_date": "2026-06-20",
+    }
+    detail = adapter.parse_detail(raw)
+    doc = adapter.to_schema(detail)
+
+    assert doc.doc_type == DOC_TYPE_MEETING_MINUTES
+    assert doc.body_file_path == str(
+        Path(SOURCE_MOLIT) / DOC_TYPE_MEETING_MINUTES
+        / "5001_2026년 제3차 도로정책심의위원회 회의록.pdf"
+    )
+    assert (tmp_path / SOURCE_MOLIT / DOC_TYPE_MEETING_MINUTES).is_dir()
+    assert not (tmp_path / SOURCE_MOLIT / DOC_TYPE_POLICY_MATERIAL).exists()
+
+
+def test_infer_doc_type_only_matches_meeting_minutes_keyword():
+    assert molit._infer_doc_type("2026년 제3차 도로정책심의위원회 회의록") == DOC_TYPE_MEETING_MINUTES
+    assert molit._infer_doc_type("2차로형 회전교차로 설치 및 개선 가이드라인") == DOC_TYPE_POLICY_MATERIAL
 
 
 def test_parse_detail_raises_on_page_moved_response(monkeypatch):

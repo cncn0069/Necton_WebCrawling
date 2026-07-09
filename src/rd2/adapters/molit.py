@@ -14,9 +14,11 @@ RD-2 O트랙 신규 출처. 실제 사이트 조사(httpx 직접 요청, 2026-07
   `<a href>`에서 파싱한 `id` 값을 써야 하고, 번호로 유추하면 안 된다(실사 중 실제로
   이 착오로 엉뚱한 게시물을 받은 적 있음).
 - 게시판 성격상 전부 국토교통부가 배포하는 공개 정책자료라 비공개·부분공개
-  개념이 없다 — disclosure_status/cso_classification은 항상 OPEN/O. 이 게시판은
-  mohw와 달리 문서종류가 섞이지 않아(전부 "정책정보" 단일 유형) doc_type을
-  PRISM처럼 고정값으로 둔다.
+  개념이 없다 — disclosure_status/cso_classification은 항상 OPEN/O.
+- doc_type은 기본적으로 "정책정보" 단일 유형이지만, 제목에 "회의록"이 있으면
+  별도 doc_type(meeting_minutes)으로 분리한다 — 저장 폴더가 source/doc_type
+  기준이라(storage/files.py) 이 값만 바꾸면 회의록이 자동으로 별도 디렉토리에
+  쌓인다(2026-07-09 사용자 요청).
 - 첨부파일 다운로드 응답 헤더의 Content-Type이 실제로는 PDF인데도
   `application/x-msdownload`로 오는 경우를 확인했다 — Content-Type을 신뢰하지
   말고 요청 시 넘긴 FileName(확장자 포함)만 신뢰한다.
@@ -43,7 +45,7 @@ from rd2.adapters.file_select import pick_primary_file
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.files import resolve_body_file_path
-from rd2.storage.naming import DOC_TYPE_POLICY_MATERIAL, SOURCE_MOLIT
+from rd2.storage.naming import DOC_TYPE_MEETING_MINUTES, DOC_TYPE_POLICY_MATERIAL, SOURCE_MOLIT
 
 BASE_URL = "https://www.molit.go.kr"
 LIST_URL = f"{BASE_URL}/USR/policyData/m_34681/lst.jsp"
@@ -60,6 +62,15 @@ _REQUEST_DELAY_SECONDS = 0.6
 
 def _throttle() -> None:
     time.sleep(_REQUEST_DELAY_SECONDS)
+
+
+def _infer_doc_type(title: str) -> str:
+    """제목에 "회의록"이 있으면 별도 doc_type으로 분리한다(저장 폴더도 자동으로
+    나뉜다, storage/files.py의 source/doc_type 기준 저장 규칙 참고). 그 외에는
+    이 게시판의 기본 유형인 정책정보로 취급한다."""
+    if "회의록" in title:
+        return DOC_TYPE_MEETING_MINUTES
+    return DOC_TYPE_POLICY_MATERIAL
 
 
 def _fetch_list_html(page: int) -> str:
@@ -165,7 +176,7 @@ class MolitAdapter(SourceAdapter):
             page += 1
 
     def _download_and_save_files(
-        self, item_id: str, title: str, file_list: list[dict]
+        self, item_id: str, title: str, doc_type: str, file_list: list[dict]
     ) -> tuple[str | None, list[str]]:
         if not file_list:
             return None, []
@@ -178,7 +189,7 @@ class MolitAdapter(SourceAdapter):
             final_path = resolve_body_file_path(
                 self.files_root,
                 SOURCE_MOLIT,
-                DOC_TYPE_POLICY_MATERIAL,
+                doc_type,
                 item_id,
                 file_meta["filename"],
             )
@@ -257,11 +268,13 @@ class MolitAdapter(SourceAdapter):
                     continue
                 file_list.append({"filename": filename, "href": urljoin(BASE_URL, href)})
 
+        detail["_doc_type"] = _infer_doc_type(detail["_title"] or "")
+
         detail["_body_file_path"] = None
         detail["_other_file_paths"] = []
         if download_files and file_list:
             body_file_path, other_file_paths = self._download_and_save_files(
-                item_id, detail["_title"] or "", file_list
+                item_id, detail["_title"] or "", detail["_doc_type"], file_list
             )
             detail["_body_file_path"] = body_file_path
             detail["_other_file_paths"] = other_file_paths
@@ -291,6 +304,6 @@ class MolitAdapter(SourceAdapter):
             cso_classification=CsoClassification.O,
             source=self.source_name,
             source_url=enriched_item["_detail_url"],
-            doc_type=DOC_TYPE_POLICY_MATERIAL,
+            doc_type=enriched_item.get("_doc_type") or _infer_doc_type(title),
             is_synthetic=False,
         )

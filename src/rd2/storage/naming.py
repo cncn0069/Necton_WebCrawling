@@ -22,7 +22,8 @@ DOC_TYPE_BID_RENOTICE = "bid_renotice"  # 입찰재공고 (mohw)
 DOC_TYPE_PUBLIC_OFFERING = "public_offering"  # 공모 (mohw)
 DOC_TYPE_NOTICE = "notice"  # 공고 — 위 키워드에 안 걸리는 mohw 최종 폴백
 DOC_TYPE_OFFICIAL_DOCUMENT = "official_document"  # 공문 (open_go_kr, 메타데이터 전용)
-DOC_TYPE_POLICY_MATERIAL = "policy_material"  # 정책정보 (molit, 이 게시판은 단일 doc_type)
+DOC_TYPE_POLICY_MATERIAL = "policy_material"  # 정책정보 (molit 기본값)
+DOC_TYPE_MEETING_MINUTES = "meeting_minutes"  # 회의록 (molit, 제목 키워드로 분리)
 DOC_TYPE_SYNTHETIC_DOCUMENT = "synthetic_document"  # 합성문서 (synthetic-llm, 메타데이터 전용)
 
 # 마이그레이션 스크립트가 순회할 한글→영어 딕셔너리.
