@@ -144,23 +144,18 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "disclosure_status",
             "cso_classification",
             "doc_type",
-            "body_file_path",
-            "body_text",
-            "table_of_contents",
-            "start_date",
-            "end_date",
+            "subject_category",
         ],
-        # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
-        # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
-        # "문서 공개 판단에 걸린 시일"로 본다. 이 소스엔 단위업무/분류체계/
-        # 수행기관/비공개사유 개념 자체가 없다.
+        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
+        # (mohw와 동일한 성격의 공지형 게시판).
         "never_from_source": [
             "unit_task",
-            "subject_category",
-            "content_summary",
+            "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
+            "start_date",
+            "end_date",
         ],
     },
 }
