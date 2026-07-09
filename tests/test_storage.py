@@ -8,8 +8,15 @@ from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_OPEN_GO_KR, SOUR
 
 
 @pytest.fixture
-def store(tmp_path):
-    db = DocumentStore(tmp_path / "test.db")
+def store():
+    db = DocumentStore(database="rd2_test")
+    # 매 테스트가 빈 테이블에서 시작하도록 정리 — 로컬 MariaDB rd2_test는
+    # 세션 내내 살아있는 DB라 tmp_path 방식(테스트마다 새 파일)과 달리
+    # 명시적으로 비워줘야 한다.
+    for table in ("documents", "quarantine", "pending_downloads"):
+        with db._conn.cursor() as cur:
+            cur.execute(f"TRUNCATE TABLE {table}")
+    db._conn.commit()
     yield db
     db.close()
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -25,19 +24,15 @@ from rd2.storage.db import DocumentStore  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", default="rd2.db", help="대상 DB 파일 경로 (기본: rd2.db)")
     parser.add_argument(
         "--count", type=int, default=None,
         help="이번 실행에서 처리할 최대 건수 (생략하면 큐 전체)",
     )
     args = parser.parse_args()
 
-    repo_root = Path(__file__).parent.parent
-    db_path = repo_root / args.db
-
     adapter = PrismAdapter()
 
-    with DocumentStore(db_path) as store:
+    with DocumentStore() as store:
         pending = store.list_pending_downloads("PRISM")
         if args.count is not None:
             pending = pending[: args.count]
