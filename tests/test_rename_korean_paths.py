@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -15,8 +14,26 @@ from rd2.storage.db import DocumentStore
 from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_PRISM
 
 
-def _seed_db(db_path: Path, *, source: str, doc_type: str, body_file_path: str) -> None:
-    store = DocumentStore(db_path)
+@pytest.fixture(autouse=True)
+def _use_test_database(monkeypatch):
+    """_migrate_db/_validate는 rename_korean_paths.py 안에서 인자 없이 DocumentStore()를
+    호출해 .env의 MARIADB_DATABASE를 그대로 본다 — 그게 rd2_dev(운영 데이터)를 가리키므로,
+    env를 rd2_test로 덮어써서 이 테스트 파일의 모든 DocumentStore() 호출(테스트 헬퍼+
+    스크립트 함수 양쪽 다)이 같은 테스트 DB를 보게 강제한다. 이걸 빼먹으면 테스트가
+    실수로 운영 DB를 UPDATE할 수 있다(실제로 한 번 이렇게 걸렸음)."""
+    monkeypatch.setenv("MARIADB_DATABASE", "rd2_test")
+    store = DocumentStore()
+    try:
+        with store._conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE documents")
+        store._conn.commit()
+    finally:
+        store.close()
+    yield
+
+
+def _seed_db(*, source: str, doc_type: str, body_file_path: str | None) -> None:
+    store = DocumentStore()
     try:
         payload = {
             "title": "테스트 문서",
@@ -29,20 +46,31 @@ def _seed_db(db_path: Path, *, source: str, doc_type: str, body_file_path: str) 
             "disclosure_status": "공개",
             "is_synthetic": False,
         }
-        store._conn.execute(
-            "INSERT INTO documents (dedup_key, payload_json, cso_classification, source, "
-            "doc_type, body_file_path, other_file_paths) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                f"{source}::https://example.com/1",
-                json.dumps(payload, ensure_ascii=False),
-                "O",
-                source,
-                doc_type,
-                body_file_path,
-                "",
-            ),
-        )
+        with store._conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO documents (dedup_key, payload_json, cso_classification, source, "
+                "doc_type, body_file_path, other_file_paths) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    f"{source}::https://example.com/1",
+                    json.dumps(payload, ensure_ascii=False),
+                    "O",
+                    source,
+                    doc_type,
+                    body_file_path,
+                    "",
+                ),
+            )
         store._conn.commit()
+    finally:
+        store.close()
+
+
+def _fetch_one(sql: str):
+    store = DocumentStore()
+    try:
+        with store._conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchone()
     finally:
         store.close()
 
@@ -97,27 +125,20 @@ def test_rename_folders_dry_run_makes_no_changes(tmp_path):
     assert not (data_root / "PRISM" / "research_report").exists()
 
 
-def test_migrate_db_updates_column_and_payload_json_together(tmp_path):
-    db_path = tmp_path / "test.db"
+def test_migrate_db_updates_column_and_payload_json_together():
     _seed_db(
-        db_path,
         source="보건복지부",
         doc_type="입찰공고",
         body_file_path="보건복지부/입찰공고/1_file.pdf",
     )
 
-    changes = _migrate_db(db_path, dry_run=False)
+    changes = _migrate_db(dry_run=False)
     assert len(changes) == 1
 
-    conn = sqlite3.connect(db_path)
-    try:
-        row = conn.execute(
-            "SELECT source, doc_type, body_file_path, payload_json FROM documents"
-        ).fetchone()
-    finally:
-        conn.close()
+    source, doc_type, body_file_path, payload_json = _fetch_one(
+        "SELECT source, doc_type, body_file_path, payload_json FROM documents"
+    )
 
-    source, doc_type, body_file_path, payload_json = row
     expected_path = str(Path("mohw") / "bid_notice" / "1_file.pdf")
     assert source == "mohw"
     assert doc_type == "bid_notice"
@@ -131,82 +152,68 @@ def test_migrate_db_updates_column_and_payload_json_together(tmp_path):
     assert payload["title"] == "테스트 문서"
 
 
-def test_migrate_db_is_idempotent(tmp_path):
-    db_path = tmp_path / "test.db"
+def test_migrate_db_is_idempotent():
     _seed_db(
-        db_path,
         source="보건복지부",
         doc_type="입찰공고",
         body_file_path="보건복지부/입찰공고/1_file.pdf",
     )
 
-    _migrate_db(db_path, dry_run=False)
-    second_run_changes = _migrate_db(db_path, dry_run=False)
+    _migrate_db(dry_run=False)
+    second_run_changes = _migrate_db(dry_run=False)
 
     assert second_run_changes == []
 
 
-def test_migrate_db_dry_run_makes_no_changes(tmp_path):
-    db_path = tmp_path / "test.db"
+def test_migrate_db_dry_run_makes_no_changes():
     _seed_db(
-        db_path,
         source="보건복지부",
         doc_type="입찰공고",
         body_file_path="보건복지부/입찰공고/1_file.pdf",
     )
 
-    changes = _migrate_db(db_path, dry_run=True)
+    changes = _migrate_db(dry_run=True)
     assert len(changes) == 1
 
-    conn = sqlite3.connect(db_path)
-    try:
-        source = conn.execute("SELECT source FROM documents").fetchone()[0]
-    finally:
-        conn.close()
+    source = _fetch_one("SELECT source FROM documents")[0]
     assert source == "보건복지부"
 
 
 def test_validate_passes_after_full_migration(tmp_path):
     data_root = tmp_path / "data"
-    db_path = tmp_path / "test.db"
     (data_root / "mohw" / "bid_notice").mkdir(parents=True)
     (data_root / "mohw" / "bid_notice" / "1_file.pdf").write_bytes(b"x")
     _seed_db(
-        db_path,
         source="mohw",
         doc_type="bid_notice",
         body_file_path="mohw/bid_notice/1_file.pdf",
     )
 
-    failures = _validate(db_path, data_root)
+    failures = _validate(data_root)
     assert failures == []
 
 
 def test_validate_catches_leftover_korean_column_value(tmp_path):
     data_root = tmp_path / "data"
-    db_path = tmp_path / "test.db"
     data_root.mkdir()
     _seed_db(
-        db_path,
         source="보건복지부",
         doc_type="입찰공고",
         body_file_path=None,
     )
 
-    failures = _validate(db_path, data_root)
+    failures = _validate(data_root)
     assert any("한글" in f for f in failures)
 
 
 def test_validate_catches_missing_referenced_file(tmp_path):
     data_root = tmp_path / "data"
-    db_path = tmp_path / "test.db"
     data_root.mkdir()
     _seed_db(
-        db_path,
         source="mohw",
         doc_type="bid_notice",
         body_file_path="mohw/bid_notice/missing.pdf",
     )
 
-    failures = _validate(db_path, data_root)
+    failures = _validate(data_root)
     assert any("파일 없음" in f for f in failures)

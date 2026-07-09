@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
 
 from _common import ensure_src_on_path
 
@@ -24,7 +23,7 @@ def main() -> None:
 
     collected = 0
     quarantined = 0
-    with DocumentStore(Path(__file__).parent.parent / "rd2.db") as store:
+    with DocumentStore() as store:
         try:
             for raw_item in adapter.fetch_list(start_date=start, end_date=end, max_items=5):
                 try:

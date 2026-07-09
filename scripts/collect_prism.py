@@ -38,7 +38,6 @@ def _save_checkpoint(path: Path, processed: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", default="rd2.db", help="저장할 DB 파일 경로 (기본: rd2.db)")
     parser.add_argument("count", type=int, default=10, help="수집할 건수 (기본: 10)")
     parser.add_argument(
         "--skip", type=int, default=None,
@@ -46,7 +45,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--checkpoint", default=None,
-        help="진행 상황 저장 파일 경로 (기본: <db 경로>.prism_checkpoint.json)",
+        help="진행 상황 저장 파일 경로 (기본: rd2.db.prism_checkpoint.json)",
     )
     parser.add_argument(
         "--reset-checkpoint", action="store_true",
@@ -63,9 +62,10 @@ def main() -> None:
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
-    db_path = repo_root / args.db
+    # 파일명은 SQLite 시절 그대로 유지 — 기존 체크포인트 파일과의 연속성을 위해
+    # DB 경로에서 파생시키지 않고 이름을 고정한다.
     checkpoint_path = (
-        Path(args.checkpoint) if args.checkpoint else db_path.with_suffix(db_path.suffix + ".prism_checkpoint.json")
+        Path(args.checkpoint) if args.checkpoint else repo_root / "rd2.db.prism_checkpoint.json"
     )
 
     if args.reset_checkpoint:
@@ -84,7 +84,7 @@ def main() -> None:
     quarantined = 0
     processed_position = base_skip
     docs = []
-    with DocumentStore(db_path) as store:
+    with DocumentStore() as store:
         try:
             # skip을 fetch_list에 직접 넘겨 건너뛸 행은 클릭(상세 URL 조회) 자체를
             # 하지 않는다 — 예전엔 max_items=base_skip+count로 받아 파이썬에서

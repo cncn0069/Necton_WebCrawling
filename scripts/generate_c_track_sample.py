@@ -6,8 +6,6 @@ Genalog 이미지 증강은 후속 단계 — 이 스크립트는 텍스트 생�
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from _common import ensure_src_on_path
 
 ensure_src_on_path()
@@ -19,7 +17,7 @@ from rd2.storage.db import DocumentStore  # noqa: E402
 def main() -> None:
     doc = generate_clause_document("1", scenario_index=0)
 
-    with DocumentStore(Path(__file__).parent.parent / "rd2.db") as store:
+    with DocumentStore() as store:
         stored = store.upsert(doc)
         print(f"[{'stored' if stored else 'dup-skip'}] {doc.title!r}")
         print(f"    cso_classification={doc.cso_classification.value!r} sub_clause={doc.cso_sub_clause!r}")
