@@ -16,6 +16,7 @@ from openai import OpenAI
 
 from rd2.generators.clause_data import CLAUSES, ClauseDefinition
 from rd2.schema.models import Document
+from rd2.storage.naming import DOC_TYPE_SYNTHETIC_DOCUMENT
 
 load_dotenv()
 
@@ -77,7 +78,7 @@ def generate_clause_document(
         cso_sub_clause=clause.clause_no,
         source="synthetic-llm",
         source_url=None,
-        doc_type="합성문서",
+        doc_type=DOC_TYPE_SYNTHETIC_DOCUMENT,
         is_synthetic=True,
     )
 

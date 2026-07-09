@@ -6,6 +6,7 @@ import pytest
 from rd2.adapters import open_go_kr
 from rd2.adapters.open_go_kr import OpenGoKrAdapter
 from rd2.schema.models import CsoClassification, DisclosureStatus
+from rd2.storage.naming import SOURCE_OPEN_GO_KR
 
 SAMPLE_LIST_ITEM = {
     "CHRG_DEPT_NM": "미래교육과",
@@ -109,7 +110,7 @@ def test_end_to_end_fetch_parse_to_schema(adapter):
     )
     detail = adapter.parse_detail(items[0])
     doc = adapter.to_schema(detail)
-    assert doc.source == "정보공개포털"
+    assert doc.source == SOURCE_OPEN_GO_KR
     assert doc.cso_classification.value == "O"
 
 

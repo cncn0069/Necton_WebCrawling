@@ -4,6 +4,7 @@ import pytest
 
 from rd2.adapters.conformance import ConformanceError, assert_conformance
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
+from rd2.storage.naming import SOURCE_OPEN_GO_KR
 
 
 def _doc(**overrides):
@@ -15,7 +16,7 @@ def _doc(**overrides):
         disclosure_status=DisclosureStatus.OPEN,
         content_summary="요약",
         cso_classification=CsoClassification.O,
-        source="정보공개포털",
+        source=SOURCE_OPEN_GO_KR,
         is_synthetic=False,
     )
     kwargs.update(overrides)
@@ -24,20 +25,20 @@ def _doc(**overrides):
 
 def test_conformance_passes_when_always_filled_fields_present():
     docs = [_doc(), _doc(title="다른 문서")]
-    assert_conformance("정보공개포털", docs)  # 예외 없이 통과
+    assert_conformance(SOURCE_OPEN_GO_KR, docs)  # 예외 없이 통과
 
 
 def test_conformance_fails_when_always_filled_field_missing():
     docs = [_doc(), _doc(department=None)]
     with pytest.raises(ConformanceError, match="department"):
-        assert_conformance("정보공개포털", docs)
+        assert_conformance(SOURCE_OPEN_GO_KR, docs)
 
 
 def test_conformance_fails_on_empty_sample():
     with pytest.raises(ConformanceError, match="비어있어"):
-        assert_conformance("정보공개포털", [])
+        assert_conformance(SOURCE_OPEN_GO_KR, [])
 
 
 def test_conformance_fails_for_unknown_adapter():
     with pytest.raises(ConformanceError, match="계약이 없음"):
-        assert_conformance("존재하지않는어댑터", [_doc()])
+        assert_conformance("unknown_adapter", [_doc()])

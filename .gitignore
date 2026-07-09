@@ -10,5 +10,7 @@ data/
 .venv/
 *.egg-info/
 *.prism_checkpoint.json
+*.mohw_checkpoint.json
 *.bak-*
 .claude/settings.local.json
+.DS_Store

@@ -6,6 +6,7 @@ import pytest
 from rd2.adapters import browse_client, prism
 from rd2.adapters.prism import PrismAdapter
 from rd2.schema.models import CsoClassification, DisclosureStatus
+from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_PRISM
 
 SAMPLE_LIST_HTML = """
 <table>
@@ -238,13 +239,13 @@ def test_open_item_downloads_click_verified_files_and_picks_title_match(monkeypa
     detail = adapter.parse_detail(raw)
     doc = adapter.to_schema(detail)
 
-    assert (tmp_path / "PRISM" / "연구보고서" / "3330000-1_정책연구과제_심의신청서(샘플).pdf").exists()
-    assert (tmp_path / "PRISM" / "연구보고서" / "3330000-1_공개 연구 샘플.pdf").exists()
+    assert (tmp_path / SOURCE_PRISM / DOC_TYPE_RESEARCH_REPORT / "3330000-1_정책연구과제_심의신청서(샘플).pdf").exists()
+    assert (tmp_path / SOURCE_PRISM / DOC_TYPE_RESEARCH_REPORT / "3330000-1_공개 연구 샘플.pdf").exists()
     assert doc.body_file_path == str(
-        Path("PRISM") / "연구보고서" / "3330000-1_공개 연구 샘플.pdf"
+        Path(SOURCE_PRISM) / DOC_TYPE_RESEARCH_REPORT / "3330000-1_공개 연구 샘플.pdf"
     )
     assert doc.other_file_paths == [
-        str(Path("PRISM") / "연구보고서" / "3330000-1_정책연구과제_심의신청서(샘플).pdf")
+        str(Path(SOURCE_PRISM) / DOC_TYPE_RESEARCH_REPORT / "3330000-1_정책연구과제_심의신청서(샘플).pdf")
     ]
 
 
@@ -364,9 +365,9 @@ def test_download_files_for_reruns_click_verification_later(monkeypatch, tmp_pat
     )
 
     assert goto_calls == ["https://www.prism.go.kr/homepage/asmt/3330000-1"]
-    assert body_file_path == str(Path("PRISM") / "연구보고서" / "3330000-1_공개 연구 샘플.pdf")
+    assert body_file_path == str(Path(SOURCE_PRISM) / DOC_TYPE_RESEARCH_REPORT / "3330000-1_공개 연구 샘플.pdf")
     assert other_file_paths == []
-    assert (tmp_path / "PRISM" / "연구보고서" / "3330000-1_공개 연구 샘플.pdf").exists()
+    assert (tmp_path / SOURCE_PRISM / DOC_TYPE_RESEARCH_REPORT / "3330000-1_공개 연구 샘플.pdf").exists()
 
 
 def test_partial_item_downloads_only_click_verified_subset(monkeypatch, tmp_path):
@@ -405,7 +406,7 @@ def test_partial_item_downloads_only_click_verified_subset(monkeypatch, tmp_path
     detail = adapter.parse_detail(raw)
     doc = adapter.to_schema(detail)
     assert doc.body_file_path == str(
-        Path("PRISM") / "연구보고서" / "3330000-5_정책연구_활용결과_보고서.pdf"
+        Path(SOURCE_PRISM) / DOC_TYPE_RESEARCH_REPORT / "3330000-5_정책연구_활용결과_보고서.pdf"
     )
     assert doc.other_file_paths == []
-    assert not (tmp_path / "PRISM" / "연구보고서" / "3330000-5_[요약본]부분공개 샘플.pdf").exists()
+    assert not (tmp_path / SOURCE_PRISM / DOC_TYPE_RESEARCH_REPORT / "3330000-5_[요약본]부분공개 샘플.pdf").exists()
