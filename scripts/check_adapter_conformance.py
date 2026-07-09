@@ -15,6 +15,7 @@ from _common import ensure_src_on_path
 
 ensure_src_on_path()
 
+from rd2.adapters.alio import AlioAdapter  # noqa: E402
 from rd2.adapters.conformance import ConformanceError, assert_conformance  # noqa: E402
 from rd2.adapters.mohw import MohwAdapter  # noqa: E402
 from rd2.adapters.open_go_kr import OpenGoKrAdapter  # noqa: E402
@@ -86,8 +87,30 @@ def check_mohw(sample_size: int = 10) -> bool:
     return True
 
 
+def check_alio(sample_size: int = 10) -> bool:
+    adapter = AlioAdapter()
+
+    docs = []
+    for raw_item in adapter.fetch_list(max_items=sample_size):
+        try:
+            detail = adapter.parse_detail(raw_item)
+            docs.append(adapter.to_schema(detail))
+        except Exception as exc:  # noqa: BLE001
+            print(f"SKIP (parse error): {exc}")
+
+    print(f"ALIO 수집 샘플: {len(docs)}건")
+    try:
+        assert_conformance(adapter.source_name, docs)
+    except ConformanceError as exc:
+        print(f"FAIL: {exc}")
+        return False
+    print("PASS: ALIO always_filled 계약 충족")
+    return True
+
+
 if __name__ == "__main__":
     ok_open_go_kr = check_open_go_kr()
     ok_prism = check_prism()
     ok_mohw = check_mohw()
-    sys.exit(0 if (ok_open_go_kr and ok_prism and ok_mohw) else 1)
+    ok_alio = check_alio()
+    sys.exit(0 if (ok_open_go_kr and ok_prism and ok_mohw and ok_alio) else 1)

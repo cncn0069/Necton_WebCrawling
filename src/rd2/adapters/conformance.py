@@ -16,7 +16,13 @@
 from __future__ import annotations
 
 from rd2.schema.models import Document
-from rd2.storage.naming import SOURCE_MOHW, SOURCE_MOLIT, SOURCE_OPEN_GO_KR, SOURCE_PRISM
+from rd2.storage.naming import (
+    SOURCE_ALIO,
+    SOURCE_MOHW,
+    SOURCE_MOLIT,
+    SOURCE_OPEN_GO_KR,
+    SOURCE_PRISM,
+)
 
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
     SOURCE_OPEN_GO_KR: {
@@ -83,6 +89,44 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "unit_task",
             "subject_category",
             "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+        ],
+    },
+    SOURCE_ALIO: {
+        # 실사(2026-07-09, 검색 API 직접 호출)로 확인: 검색 결과 한 행이 첨부파일
+        # 한 건과 1:1이라 이 필드들은 항상 채워진다 — body_file_path도 예외 없이
+        # 다운로드 대상이 있는 행만 검색 결과로 나온다(section=attach 자체가
+        # "첨부파일 탭"이므로). title/department/body_text/table_of_contents는
+        # 검색 API가 아니라 게시글 상세 조각(doc.html/toc.html)에서 채워진다
+        # (2026-07-09 사용자 지적으로 추가 — 상세 조회 없이는 title이 기관 불문
+        # 전부 "내부·외부 감사결과"로 뭉개져 있었다). 상세 조각 8건 실사 샘플로
+        # 전부 채워짐을 확인(parse_detail이 404 등으로 못 가져오면 검색 API
+        # 필드로 폴백하되, 그 경우도 title/production_date 자체는 채워짐 —
+        # department/body_text/table_of_contents만 비게 된다).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "body_file_path",
+            "body_text",
+            "table_of_contents",
+            "start_date",
+            "end_date",
+        ],
+        # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
+        # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
+        # "문서 공개 판단에 걸린 시일"로 본다. 이 소스엔 단위업무/분류체계/
+        # 수행기관/비공개사유 개념 자체가 없다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "content_summary",
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
