@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from rd2.schema.models import Document
-from rd2.storage.naming import SOURCE_MOHW, SOURCE_OPEN_GO_KR, SOURCE_PRISM
+from rd2.storage.naming import SOURCE_MOHW, SOURCE_MOLIT, SOURCE_OPEN_GO_KR, SOURCE_PRISM
 
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
     SOURCE_OPEN_GO_KR: {
@@ -86,6 +86,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
+        ],
+    },
+    SOURCE_MOLIT: {
+        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
+        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
+        # 항상 존재했다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "subject_category",
+        ],
+        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
+        # (mohw와 동일한 성격의 공지형 게시판).
+        "never_from_source": [
+            "unit_task",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
         ],
     },
 }
