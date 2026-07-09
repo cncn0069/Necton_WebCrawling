@@ -409,3 +409,27 @@
 **Effort:** M (차단 신호를 어떻게 감지할지부터 설계 필요 — browse CLI가 HTTP 상태 코드를 노출하는지 확인부터)
 **Priority:** P3
 **Depends on:** "EC2 상시 크롤링 전 robots.txt/이용약관/속도제한 점검" 항목 이후 실제로 필요한지 재평가
+
+### 나라장터(G2B) 어댑터용 영어 source 코드 미리 결정
+
+**What:** 나라장터 어댑터가 실제로 구현될 때 쓸 영어 source 코드(예: `g2b`)를 `src/rd2/storage/naming.py`에 미리 정의해둔다.
+
+**Why:** 2026-07-09 plan-eng-review에서 data/ 폴더명·doc_type·DB path를 한글→영어로 정리하며 PRISM/mohw/open_go_kr의 네이밍은 확정했지만, 나라장터는 아직 어댑터 자체가 없어(테스트 픽스처의 placeholder일 뿐) 이번 범위에서 제외했다. 나중에 어댑터를 만들 때 이 결정을 다시 논의하지 않도록 미리 정해두면 좋다.
+
+**Context:** `src/rd2/storage/naming.py`(2026-07-09 신설 예정). "O트랙 최상위 3개 + 후순위 4개 출처 확장" 항목(위) 참고 — 나라장터는 최상위 3개 중 하나.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** 나라장터 어댑터 구현 착수 시점
+
+### conformance에 "한글 리터럴 재유입 방지" 가드 추가
+
+**What:** `ADAPTER_FIELD_CONTRACTS`나 별도 검증 스크립트에, source/doc_type 값으로 한글 문자열이 들어오면 실패하는 가드를 추가한다(예: 정규식으로 한글 유니코드 범위 검사).
+
+**Why:** 2026-07-09 plan-eng-review에서 data/ 폴더명·doc_type을 한글→영어로 정리하고 `src/rd2/storage/naming.py`로 중앙화했지만, 강제력 없이는 나중에 새 소스/doc_type을 추가하는 사람이 다시 한글 리터럴을 쓸 수 있다 — 그러면 이번 리팩토링이 다시 필요해지는 상황이 재발한다.
+
+**Context:** `src/rd2/adapters/conformance.py`, `src/rd2/storage/naming.py`(2026-07-09 신설 예정).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** naming.py 신설(위 리팩토링) 완료

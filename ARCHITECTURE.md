@@ -48,7 +48,8 @@ src/rd2/adapters/    출처별 어댑터 (base.py=공통 인터페이스, browse
                      retry.py=재시도 헬퍼)
 src/rd2/schema/      Document Pydantic 모델 (16개 핵심 필드 + source/doc_type)
 src/rd2/storage/     db.py=SQLite 저장/마이그레이션, files.py=본문파일 저장 규칙
-                     (data/{source}/{doc_type}/{id}_{파일명})
+                     (data/{source}/{doc_type}/{id}_{파일명}), naming.py=source/doc_type
+                     영어 코드 정의(단일 진실 공급원 — 자세한 내용은 DOC_TYPES.md)
 src/rd2/generators/  C/S 트랙 합성 문서 생성(LLM 기반, 실제 수집과 별개 파이프라인)
 scripts/             실행 진입점 (collect_prism.py, collect_open_go_kr.py 등)
 tests/               34~36개 테스트 — 대부분 실제 사이트 실사로 확인된 HTML 구조를
@@ -71,7 +72,9 @@ tests/               34~36개 테스트 — 대부분 실제 사이트 실사로
   기반으로 하고 있어 같은 위험은 낮다고 판단됨, 2026-07-08 확인.)
 - **원문정보(wonmun) 파일 다운로드 체인 미구현**: 정보공개포털의 부분공개 문서 실제 파일
   다운로드는 브라우저 네이티브 폼 제출 방식이라 아직 못 받아온다(`TODOS.md` P2 항목).
-- **`doc_type` 판정 로직 없음**: 지금은 어댑터당 문서종류가 고정 상수라 문제 없지만,
-  나라장터처럼 한 출처에 여러 문서종류가 섞이는 어댑터가 붙으면 별도 설계가 필요하다.
+- **나라장터 등 향후 출처의 doc_type 판정 로직 미정**: mohw.py는 제목 키워드 기반
+  판정 로직(`_infer_doc_type`)이 이미 있지만(한 출처에 여러 문서종류가 섞이는 경우
+  대응), 앞으로 추가될 출처마다 같은 설계를 새로 할지, 공통화할지는 아직 결정 안 됨.
 
+doc_type/source 전체 목록과 영어 코드 매핑, 새 코드 추가 방법은 `DOC_TYPES.md` 참고.
 전체 이력과 실사 과정은 `TODOS.md`를 참고.

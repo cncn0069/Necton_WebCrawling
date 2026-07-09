@@ -4,6 +4,14 @@ from pathlib import Path
 from rd2.adapters import mohw
 from rd2.adapters.mohw import MohwAdapter
 from rd2.schema.models import CsoClassification, DisclosureStatus
+from rd2.storage.naming import (
+    DOC_TYPE_BID_NOTICE,
+    DOC_TYPE_BID_RENOTICE,
+    DOC_TYPE_NOTICE,
+    DOC_TYPE_PRE_SPEC_NOTICE,
+    DOC_TYPE_PUBLIC_OFFERING,
+    SOURCE_MOHW,
+)
 
 # 실제 사이트(mohw.go.kr, bid=0025) 원문 HTML 구조를 그대로 축약한 샘플
 # (2026-07-08 httpx 직접 요청으로 실사 확인 — tbody/tr[data-label] 구조).
@@ -138,15 +146,15 @@ def test_parse_detail_and_to_schema_maps_open_track(monkeypatch, tmp_path):
     assert doc.production_date == date(2025, 4, 29)
     assert doc.start_date == date(2025, 4, 29)
     assert doc.end_date == date(2025, 6, 9)
-    assert doc.doc_type == "입찰공고"
+    assert doc.doc_type == DOC_TYPE_BID_NOTICE
     assert doc.non_disclosure_reason is None  # OPEN이라 검증 통과해야 함
     assert len(downloaded_urls) == 2
     # 제목과 가장 비슷한 파일명("모집 공고.pdf")이 대표 파일로 선정돼야 한다.
     assert doc.body_file_path == str(
-        Path("보건복지부") / "입찰공고" / "1485628_전자바우처 통합카드사업자 모집 공고.pdf"
+        Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1485628_전자바우처 통합카드사업자 모집 공고.pdf"
     )
     assert doc.other_file_paths == [
-        str(Path("보건복지부") / "입찰공고" / "1485628_입찰공고서(전자바우처 통합카드사업).hwpx")
+        str(Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1485628_입찰공고서(전자바우처 통합카드사업).hwpx")
     ]
 
 
@@ -170,7 +178,7 @@ def test_parse_detail_without_attachments_has_no_files(monkeypatch, tmp_path):
 
     assert doc.body_file_path is None
     assert doc.other_file_paths == []
-    assert doc.doc_type == "공모"
+    assert doc.doc_type == DOC_TYPE_PUBLIC_OFFERING
     assert doc.department == "장애인권익지원과"
 
 
@@ -197,8 +205,34 @@ def test_download_files_false_skips_network_download(monkeypatch, tmp_path):
 
 
 def test_infer_doc_type_priority():
-    assert mohw._infer_doc_type("[사전규격공개] 전자바우처 통합카드사업") == "사전규격공개"
-    assert mohw._infer_doc_type("지자체 사회보장사업 실태조사 입찰 재공고") == "입찰재공고"
-    assert mohw._infer_doc_type("2024년 장애인거주시설 인권실태조사 수행기관 공모") == "공모"
-    assert mohw._infer_doc_type("전자바우처 통합카드사업자 모집 공고") == "입찰공고"
-    assert mohw._infer_doc_type("2021년도 취학 전 아동 실명예방 사업 민간경상보조사업") == "공고"
+    assert mohw._infer_doc_type("[사전규격공개] 전자바우처 통합카드사업") == DOC_TYPE_PRE_SPEC_NOTICE
+    assert mohw._infer_doc_type("지자체 사회보장사업 실태조사 입찰 재공고") == DOC_TYPE_BID_RENOTICE
+    assert mohw._infer_doc_type("2024년 장애인거주시설 인권실태조사 수행기관 공모") == DOC_TYPE_PUBLIC_OFFERING
+    assert mohw._infer_doc_type("전자바우처 통합카드사업자 모집 공고") == DOC_TYPE_BID_NOTICE
+    assert mohw._infer_doc_type("2021년도 취학 전 아동 실명예방 사업 민간경상보조사업") == DOC_TYPE_NOTICE
+
+
+def test_download_and_save_files_uses_inferred_doc_type_not_hardcoded_bid_notice(
+    monkeypatch, tmp_path
+):
+    """회귀 테스트(2026-07-09 plan-eng-review): mohw.py:176이 실제 저장 시
+    _infer_doc_type(title) 대신 하드코딩된 입찰공고 폴더를 쓰던 버그를 고쳤다 —
+    사전규격공개/재공고/공모 제목의 파일이 각자 올바른 doc_type 폴더에
+    저장되는지 확인한다(지금까지 이 4가지 분기의 실제 저장 경로를 검증하는
+    테스트가 없었다 — 메타데이터 doc_type 필드만 테스트했었다)."""
+    monkeypatch.setattr(mohw, "_download_file_bytes", lambda url: b"content")
+
+    adapter = MohwAdapter(files_root=tmp_path)
+
+    cases = [
+        ("[사전규격공개] 전자바우처 통합카드사업", DOC_TYPE_PRE_SPEC_NOTICE),
+        ("지자체 사회보장사업 실태조사 입찰 재공고", DOC_TYPE_BID_RENOTICE),
+        ("2024년 장애인거주시설 인권실태조사 수행기관 공모", DOC_TYPE_PUBLIC_OFFERING),
+        ("전자바우처 통합카드사업자 모집 공고", DOC_TYPE_BID_NOTICE),
+    ]
+    for i, (title, expected_doc_type) in enumerate(cases):
+        body_file_path, _ = adapter._download_and_save_files(
+            f"list-{i}", title, [{"filename": "file.pdf", "href": f"https://example.com/{i}"}]
+        )
+        assert body_file_path == str(Path(SOURCE_MOHW) / expected_doc_type / f"list-{i}_file.pdf")
+        assert (tmp_path / SOURCE_MOHW / expected_doc_type / f"list-{i}_file.pdf").exists()

@@ -109,7 +109,7 @@ def main() -> None:
             # (storage/db.py) — 이 값은 보건복지부만이 아니라 전체 소스의 O트랙 합계다.
             print(f"Total O-track docs in DB (전체 소스 합산): {store.count_documents(cso_classification='O')}")
             if docs:
-                assert_conformance("보건복지부", docs)
+                assert_conformance(adapter.source_name, docs)
                 print("Conformance: PASS")
 
 

@@ -2,6 +2,7 @@ import json
 import sqlite3
 
 from rd2.storage.db import DocumentStore
+from rd2.storage.naming import DOC_TYPE_OFFICIAL_DOCUMENT, SOURCE_OPEN_GO_KR
 
 
 def _create_old_schema_db(db_path, *, extra_columns: str = "") -> None:
@@ -43,13 +44,13 @@ def test_migrate_and_backfill_adds_missing_columns_from_payload_json(tmp_path):
         "department": "테스트부서",
         "disclosure_status": "공개",
         "cso_classification": "O",
-        "source": "정보공개포털",
-        "doc_type": "공문",
+        "source": SOURCE_OPEN_GO_KR,
+        "doc_type": DOC_TYPE_OFFICIAL_DOCUMENT,
     }
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO documents (dedup_key, payload_json, cso_classification) VALUES (?, ?, ?)",
-        ("정보공개포털::https://open.go.kr/1", json.dumps(payload, ensure_ascii=False), "O"),
+        (f"{SOURCE_OPEN_GO_KR}::https://open.go.kr/1", json.dumps(payload, ensure_ascii=False), "O"),
     )
     conn.commit()
     conn.close()
@@ -65,8 +66,8 @@ def test_migrate_and_backfill_adds_missing_columns_from_payload_json(tmp_path):
             "테스트기관",
             "테스트부서",
             "공개",
-            "정보공개포털",
-            "공문",
+            SOURCE_OPEN_GO_KR,
+            DOC_TYPE_OFFICIAL_DOCUMENT,
         )
     finally:
         store.close()

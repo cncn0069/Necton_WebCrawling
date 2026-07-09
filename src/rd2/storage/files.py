@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 _INVALID_PATH_CHARS = re.compile(r'[\\/:*?"<>|]')
-_UNCLASSIFIED = "_미분류"
+_UNCLASSIFIED = "_unclassified"
 
 
 def _sanitize_path_component(value: str | None) -> str:

@@ -29,14 +29,14 @@ from typing import Any, Iterator
 from bs4 import BeautifulSoup
 
 from rd2.adapters import browse_client
-from rd2.adapters.base import SourceAdapter
+from rd2.adapters.base import DEFAULT_FILES_ROOT, SourceAdapter
 from rd2.adapters.file_select import pick_primary_file
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.files import save_body_file
+from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_PRISM
 
-_DOC_TYPE = "연구보고서"
-_DEFAULT_FILES_ROOT = Path(__file__).resolve().parents[3] / "data"
+_DOC_TYPE = DOC_TYPE_RESEARCH_REPORT
 
 _DISCLOSURE_TEXT_MAP = {
     "공개": DisclosureStatus.OPEN,
@@ -67,10 +67,10 @@ def _parse_clause_numbers(clause_text: str) -> list[int]:
 
 
 class PrismAdapter(SourceAdapter):
-    source_name = "PRISM"
+    source_name = SOURCE_PRISM
 
     def __init__(self, files_root: Path | None = None):
-        self.files_root = files_root or _DEFAULT_FILES_ROOT
+        self.files_root = files_root or DEFAULT_FILES_ROOT
 
     def fetch_list(
         self,

@@ -26,25 +26,32 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from rd2.adapters.base import SourceAdapter
+from rd2.adapters.base import DEFAULT_FILES_ROOT, SourceAdapter
 from rd2.adapters.file_select import pick_primary_file
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.files import save_body_file
+from rd2.storage.naming import (
+    DOC_TYPE_BID_NOTICE,
+    DOC_TYPE_BID_RENOTICE,
+    DOC_TYPE_NOTICE,
+    DOC_TYPE_PRE_SPEC_NOTICE,
+    DOC_TYPE_PUBLIC_OFFERING,
+    SOURCE_MOHW,
+)
 
 BASE_URL = "https://www.mohw.go.kr"
 LIST_URL = f"{BASE_URL}/board.es"
 MID = "a10502000000"
 BID = "0025"
-_DEFAULT_FILES_ROOT = Path(__file__).resolve().parents[3] / "data"
 
 # 우선순위 순서대로 검사 — "사전규격"이 있으면 "공고"로 끝나도 사전규격공개가 맞다
 # (예: "[사전규격공개] 전자바우처 통합카드사업"에는 "공고"라는 글자 자체가 없지만,
 # 만약 있었다 해도 사전규격공개가 더 구체적인 유형이라 먼저 검사한다).
 _DOC_TYPE_KEYWORDS: list[tuple[str, str]] = [
-    ("사전규격", "사전규격공개"),
-    ("재공고", "입찰재공고"),
-    ("공모", "공모"),
+    ("사전규격", DOC_TYPE_PRE_SPEC_NOTICE),
+    ("재공고", DOC_TYPE_BID_RENOTICE),
+    ("공모", DOC_TYPE_PUBLIC_OFFERING),
 ]
 
 
@@ -57,8 +64,8 @@ def _infer_doc_type(title: str) -> str:
         if keyword in title:
             return doc_type
     if "입찰" in title or title.rstrip().endswith("공고"):
-        return "입찰공고"
-    return "공고"
+        return DOC_TYPE_BID_NOTICE
+    return DOC_TYPE_NOTICE
 
 
 def _parse_period(period_text: str | None) -> tuple[date | None, date | None]:
@@ -103,10 +110,10 @@ def _download_file_bytes(url: str) -> bytes:
 
 
 class MohwAdapter(SourceAdapter):
-    source_name = "보건복지부"
+    source_name = SOURCE_MOHW
 
     def __init__(self, files_root: Path | None = None):
-        self.files_root = files_root or _DEFAULT_FILES_ROOT
+        self.files_root = files_root or DEFAULT_FILES_ROOT
 
     def fetch_list(
         self,
@@ -173,7 +180,12 @@ class MohwAdapter(SourceAdapter):
 
             raw_bytes = with_retry(_do_download)
             path = save_body_file(
-                self.files_root, self.source_name, "입찰공고", list_no, file_meta["filename"], raw_bytes
+                self.files_root,
+                self.source_name,
+                _infer_doc_type(title),
+                list_no,
+                file_meta["filename"],
+                raw_bytes,
             )
             saved.append((path, file_meta))
 

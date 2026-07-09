@@ -19,6 +19,7 @@ from rd2.adapters import browse_client
 from rd2.adapters.base import SourceAdapter
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
+from rd2.storage.naming import DOC_TYPE_OFFICIAL_DOCUMENT, SOURCE_OPEN_GO_KR
 
 BASE_URL = "https://www.open.go.kr"
 LIST_ENDPOINT = f"{BASE_URL}/othicInfo/infoList/infoList.ajax"
@@ -38,7 +39,7 @@ _NO_BODY_MARKERS = ("청구신청", "열람이 불가능", "열람이 제한")
 
 
 class OpenGoKrAdapter(SourceAdapter):
-    source_name = "정보공개포털"
+    source_name = SOURCE_OPEN_GO_KR
 
     def fetch_list(
         self,
@@ -174,6 +175,6 @@ class OpenGoKrAdapter(SourceAdapter):
             cso_classification=cso_classification,
             source=self.source_name,
             source_url=source_url,
-            doc_type="공문",
+            doc_type=DOC_TYPE_OFFICIAL_DOCUMENT,
             is_synthetic=False,
         )

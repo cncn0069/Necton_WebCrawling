@@ -36,7 +36,7 @@ def check_open_go_kr(sample_size: int = 15) -> bool:
 
     print(f"수집 샘플: {len(docs)}건")
     try:
-        assert_conformance("정보공개포털", docs)
+        assert_conformance(adapter.source_name, docs)
     except ConformanceError as exc:
         print(f"FAIL: {exc}")
         return False
@@ -57,7 +57,7 @@ def check_prism(sample_size: int = 10) -> bool:
 
     print(f"PRISM 수집 샘플: {len(docs)}건")
     try:
-        assert_conformance("PRISM", docs)
+        assert_conformance(adapter.source_name, docs)
     except ConformanceError as exc:
         print(f"FAIL: {exc}")
         return False
@@ -78,7 +78,7 @@ def check_mohw(sample_size: int = 10) -> bool:
 
     print(f"보건복지부 수집 샘플: {len(docs)}건")
     try:
-        assert_conformance("보건복지부", docs)
+        assert_conformance(adapter.source_name, docs)
     except ConformanceError as exc:
         print(f"FAIL: {exc}")
         return False

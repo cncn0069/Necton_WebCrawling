@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 from rd2.schema.models import Document
+from rd2.storage.naming import SOURCE_MOHW, SOURCE_OPEN_GO_KR, SOURCE_PRISM
 
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
-    "정보공개포털": {
+    SOURCE_OPEN_GO_KR: {
         # 실사(2026-07-07, 15~16건 샘플)로 확인: 이 필드들은 항상 실제 값이 있었다.
         # 비어있으면 어댑터 파싱 버그로 간주한다.
         "always_filled": [
@@ -39,7 +40,7 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "body_file_path",
         ],
     },
-    "PRISM": {
+    SOURCE_PRISM: {
         # 실사(2026-07-07)로 확인: 목록·상세 어디서든 항상 값이 있었다.
         "always_filled": [
             "title",
@@ -56,7 +57,7 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "production_date",
         ],
     },
-    "보건복지부": {
+    SOURCE_MOHW: {
         # 최초 실사(2026-07-08, 목록 15건 + 상세 3건 샘플)로는 start_date/end_date도
         # always_filled로 보였으나, 실제 전수 크롤링(같은 날, 733건 샘플)으로 확인해보니
         # 92~93%가 비어있었다 — start_date/end_date는 always_filled에서 뺐다(아래

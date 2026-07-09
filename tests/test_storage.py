@@ -4,6 +4,7 @@ import pytest
 
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.db import DocumentStore
+from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_OPEN_GO_KR, SOURCE_PRISM
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def _doc(**overrides):
         disclosure_status=DisclosureStatus.OPEN,
         body_text="본문",
         cso_classification=CsoClassification.O,
-        source="정보공개포털",
+        source=SOURCE_OPEN_GO_KR,
         source_url="https://open.go.kr/doc/1",
         is_synthetic=False,
     )
@@ -65,29 +66,33 @@ def test_quarantine_stores_failed_record(store):
 
 
 def test_pending_download_lifecycle(store):
-    doc = _doc(source="PRISM", source_url="https://www.prism.go.kr/homepage/asmt/1")
+    doc = _doc(source=SOURCE_PRISM, source_url="https://www.prism.go.kr/homepage/asmt/1")
     store.upsert(doc)
     store.mark_pending_download(doc)
 
-    pending = store.list_pending_downloads("PRISM")
+    pending = store.list_pending_downloads(SOURCE_PRISM)
     assert len(pending) == 1
     assert pending[0]["source_url"] == doc.source_url
 
     dedup_key = pending[0]["dedup_key"]
     assert store.get_title(dedup_key) == doc.title
 
-    store.update_files(dedup_key, "PRISM/연구보고서/1_본문.pdf", ["PRISM/연구보고서/1_부속.pdf"])
+    store.update_files(
+        dedup_key,
+        f"{SOURCE_PRISM}/{DOC_TYPE_RESEARCH_REPORT}/1_본문.pdf",
+        [f"{SOURCE_PRISM}/{DOC_TYPE_RESEARCH_REPORT}/1_부속.pdf"],
+    )
     store.clear_pending_download(dedup_key)
 
-    assert store.list_pending_downloads("PRISM") == []
+    assert store.list_pending_downloads(SOURCE_PRISM) == []
 
 
 def test_mark_pending_download_is_idempotent(store):
-    doc = _doc(source="PRISM", source_url="https://www.prism.go.kr/homepage/asmt/1")
+    doc = _doc(source=SOURCE_PRISM, source_url="https://www.prism.go.kr/homepage/asmt/1")
     store.upsert(doc)
     store.mark_pending_download(doc)
     store.mark_pending_download(doc)
-    assert len(store.list_pending_downloads("PRISM")) == 1
+    assert len(store.list_pending_downloads(SOURCE_PRISM)) == 1
 
 
 def test_mark_pending_download_skips_synthetic_docs_without_url(store):
