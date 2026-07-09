@@ -13,6 +13,7 @@ SOURCE_PRISM = "PRISM"  # 원래부터 영문 — 변경 없음
 SOURCE_MOHW = "mohw"  # 보건복지부 — scripts/collect_mohw.py 이름과 통일
 SOURCE_OPEN_GO_KR = "open_go_kr"  # 정보공개포털 — scripts/collect_open_go_kr.py 이름과 통일
 SOURCE_ALIO = "alio"  # ALIO 공공기관 경영정보 공개시스템 — scripts/collect_alio.py 이름과 통일
+SOURCE_MOLIT = "molit"  # 국토교통부 정책정보 게시판 — scripts/collect_molit.py 이름과 통일
 
 # --- doc_type 코드 ---
 DOC_TYPE_RESEARCH_REPORT = "research_report"  # 연구보고서 (PRISM)
@@ -22,6 +23,8 @@ DOC_TYPE_BID_RENOTICE = "bid_renotice"  # 입찰재공고 (mohw)
 DOC_TYPE_PUBLIC_OFFERING = "public_offering"  # 공모 (mohw)
 DOC_TYPE_NOTICE = "notice"  # 공고 — 위 키워드에 안 걸리는 mohw 최종 폴백
 DOC_TYPE_OFFICIAL_DOCUMENT = "official_document"  # 공문 (open_go_kr, 메타데이터 전용)
+DOC_TYPE_POLICY_MATERIAL = "policy_material"  # 정책정보 (molit 기본값)
+DOC_TYPE_MEETING_MINUTES = "meeting_minutes"  # 회의록 (molit, 제목 키워드로 분리)
 DOC_TYPE_SYNTHETIC_DOCUMENT = "synthetic_document"  # 합성문서 (synthetic-llm, 메타데이터 전용)
 DOC_TYPE_AUDIT_RESULT = "audit_result"  # 감사결과 (alio 고정값 — 검색어 자체가 "감사결과")
 
