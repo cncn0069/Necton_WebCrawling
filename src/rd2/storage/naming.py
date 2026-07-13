@@ -27,6 +27,13 @@ DOC_TYPE_POLICY_MATERIAL = "policy_material"  # 정책정보 (molit 기본값)
 DOC_TYPE_MEETING_MINUTES = "meeting_minutes"  # 회의록 (molit, 제목 키워드로 분리)
 DOC_TYPE_SYNTHETIC_DOCUMENT = "synthetic_document"  # 합성문서 (synthetic-llm, 메타데이터 전용)
 DOC_TYPE_AUDIT_RESULT = "audit_result"  # 감사결과 (alio 고정값 — 검색어 자체가 "감사결과")
+DOC_TYPE_REPORT = "report"  # 보고서/결과보고 (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_PERSONNEL = "personnel"  # 인사발령 (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_APPROVAL = "approval"  # 승인/승인요청 (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_REPLY_NOTIFICATION = "reply_notification"  # 회신/통보 (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_BUDGET_EXECUTION = "budget_execution"  # 지급/지출/품의 등 예산집행 (open_go_kr, 최다 비중 52%)
+DOC_TYPE_PLAN = "plan"  # 계획(안) (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_BUSINESS_TRIP = "business_trip"  # 출장 (open_go_kr, 제목 키워드로 분리)
 
 # 마이그레이션 스크립트가 순회할 한글→영어 딕셔너리.
 # 어댑터/conformance.py는 위 개별 상수를 직접 참조하고, 값 치환이 필요한

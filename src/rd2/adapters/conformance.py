@@ -27,7 +27,8 @@ from rd2.storage.naming import (
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
     SOURCE_OPEN_GO_KR: {
         # 실사(2026-07-07, 15~16건 샘플)로 확인: 이 필드들은 항상 실제 값이 있었다.
-        # 비어있으면 어댑터 파싱 버그로 간주한다.
+        # 비어있으면 어댑터 파싱 버그로 간주한다. doc_type은 2026-07-13 제목 키워드
+        # 기반 분류(_infer_doc_type) 추가 후 항상 값이 있음(매칭 안 되면 공문으로 폴백).
         "always_filled": [
             "title",
             "ordering_agency",
@@ -35,6 +36,7 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "production_date",
             "disclosure_status",
             "content_summary",
+            "doc_type",
         ],
         # 이 어댑터(O트랙, 사전정보공개 목록) 설계상 원천적으로 값이 없는 필드 —
         # 다른 트랙/어댑터에서만 의미 있음.
@@ -130,23 +132,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
-=========
+        ],
+    },
+    SOURCE_MOLIT: {
+        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
+        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
+        # 항상 존재했다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
             "subject_category",
         ],
-        # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
-        # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
-        # "문서 공개 판단에 걸린 시일"로 본다. 이 소스엔 단위업무/분류체계/
-        # 수행기관/비공개사유 개념 자체가 없다.
+        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
+        # (mohw와 동일한 성격의 공지형 게시판).
         "never_from_source": [
             "unit_task",
-            "subject_category",
-            "content_summary",
+            "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
             "start_date",
             "end_date",
->>>>>>>>> Temporary merge branch 2
         ],
     },
 }
