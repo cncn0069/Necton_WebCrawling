@@ -161,9 +161,56 @@ def _wait_for_row_count(*, min_count: int, timeout: float = _ROW_RENDER_TIMEOUT)
         raise RuntimeError(f"PRISM 목록 재렌더링 대기 실패: {result!r} (min_count={min_count})")
 
 
+def _current_first_row_title() -> str:
+    raw = _run_browse(
+        "js",
+        "(() => { const el = document.querySelector('tbody tr .b_tit a.ellipsis');"
+        " return el ? el.textContent.trim() : ''; })()",
+        timeout=_QUICK_JS_TIMEOUT,
+    )
+    return _unwrap_js_string(raw)
+
+
+def _wait_for_page_render_change(previous_first_title: str, timeout: float = _ROW_RENDER_TIMEOUT) -> None:
+    """페이지네이션 클릭 후 React가 실제로 새 페이지 데이터로 테이블을 다시 그릴 때까지
+    폴링한다.
+
+    실사로 확인된 버그(2026-07-12, 8,076건 규모 실제 크롤링 중 재현 — 제목-URL 오매칭
+    버그의 재발): `wait --networkidle`은 페이지네이션 데이터 fetch가 끝났다는 것만
+    보장하고, React가 그 데이터로 테이블을 실제로 다시 그리는 것까지는 보장하지
+    않는다. networkidle 직후 바로 html을 캡처하면(구 `_paginate_to_prism_page`가
+    하던 방식) 여전히 이전 페이지의 행이 보이는데, 이 시점의 행 개수는 이전/새 페이지가
+    똑같아(둘 다 10행) `_wait_for_row_count` 같은 개수 기반 검증으로는 못 잡는다 —
+    실제로 "내용이 바뀌었는지"를 봐야 한다. 그래서 첫 행 제목이 이전 값과 달라질
+    때까지 폴링하는 방식으로 검증한다. 이 검증 없이 진행하면 목록 페이지 HTML에서
+    뽑은 제목(`fetch_prism_list_page`)은 항상 옛 페이지 것인 채, 그 뒤 행 클릭으로
+    알아낸 상세페이지 URL/파일은 시간이 더 지나 실제로 이동한 새 페이지의 것이 되는
+    조용한 제목-내용 불일치가 생긴다(실제 rd2.db에서 1,453건 오염 확인)."""
+    js_expr = (
+        "(() => new Promise((resolve) => {"
+        "const start = Date.now();"
+        f"const prev = {json.dumps(previous_first_title)};"
+        "const check = () => {"
+        "const el = document.querySelector('tbody tr .b_tit a.ellipsis');"
+        "const cur = el ? el.textContent.trim() : '';"
+        "if (cur && cur !== prev) return resolve('OK cur=' + cur);"
+        f"if (Date.now() - start > {int(timeout * 1000)}) return resolve('TIMEOUT cur=' + cur);"
+        "setTimeout(check, 200);"
+        "};"
+        "check();"
+        "}))()"
+    )
+    result = _run_browse("js", js_expr, timeout=timeout + _ROW_RENDER_BUFFER).strip()
+    if "OK" not in result:
+        raise RuntimeError(
+            f"PRISM 페이지 전환 재렌더링 확인 실패: {result!r} (이전 제목={previous_first_title!r})"
+        )
+
+
 def _paginate_to_prism_page(page_number: int) -> None:
     """이미 PRISM 목록 페이지에 있다고 가정하고, 스핀버튼+'이동' 버튼으로
     page_number 페이지로 이동한다(URL 쿼리파라미터로는 이동 불가 — 실사 확인)."""
+    previous_first_title = _current_first_row_title()
     js_expr = (
         "(() => {"
         "const input = document.querySelector('input.curr_page');"
@@ -182,6 +229,7 @@ def _paginate_to_prism_page(page_number: int) -> None:
     if result not in ("OK", "'OK'", '"OK"'):
         raise RuntimeError(f"PRISM 페이지 이동 실패: {result!r} (page={page_number})")
     _run_browse("wait", "--networkidle", timeout=_NETWORKIDLE_TIMEOUT)
+    _wait_for_page_render_change(previous_first_title, timeout=_ROW_RENDER_TIMEOUT)
 
 
 def fetch_prism_list_page(page_number: int) -> str:
