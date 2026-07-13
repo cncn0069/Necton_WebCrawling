@@ -4,7 +4,7 @@ import pytest
 
 from rd2.adapters.conformance import ConformanceError, assert_conformance
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
-from rd2.storage.naming import SOURCE_OPEN_GO_KR
+from rd2.storage.naming import DOC_TYPE_OFFICIAL_DOCUMENT, SOURCE_OPEN_GO_KR
 
 
 def _doc(**overrides):
@@ -17,6 +17,7 @@ def _doc(**overrides):
         content_summary="요약",
         cso_classification=CsoClassification.O,
         source=SOURCE_OPEN_GO_KR,
+        doc_type=DOC_TYPE_OFFICIAL_DOCUMENT,
         is_synthetic=False,
     )
     kwargs.update(overrides)

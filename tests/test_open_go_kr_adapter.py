@@ -131,6 +131,58 @@ def test_closed_document_maps_to_c_track(adapter, monkeypatch):
     assert doc.non_disclosure_reason is not None
 
 
+def test_fetch_list_skip_skips_within_and_across_pages(monkeypatch):
+    """skip은 페이지 경계를 넘나들며 정확한 위치부터 재개해야 한다(체크포인트 재개용).
+    row_page=10일 때 skip=12는 2페이지(0-based index 2, 전체 12번째 항목)부터 시작."""
+    pages = {
+        1: [{"INFO_SJ": f"item-{i}"} for i in range(10)],
+        2: [{"INFO_SJ": f"item-{i}"} for i in range(10, 20)],
+    }
+
+    def _fake_fetch_list_page(*, view_page, **kwargs):
+        return {"result": {"rtnList": pages.get(view_page, [])}}
+
+    monkeypatch.setattr(open_go_kr.browse_client, "fetch_list_page", _fake_fetch_list_page)
+
+    adapter = OpenGoKrAdapter()
+    items = list(
+        adapter.fetch_list(
+            start_date=date(2026, 6, 7), end_date=date(2026, 7, 6), max_items=3, skip=12
+        )
+    )
+    assert [i["INFO_SJ"] for i in items] == ["item-12", "item-13", "item-14"]
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("2026년 상반기 정기 인사발령 알림", "personnel"),
+        ("2026년 8월 복직예정 교육공무원 호봉재획정 요청", "personnel"),
+        ("[품의] 2026학년도 제2회 심의위원회 기타수당 지급", "budget_execution"),
+        ("[카드] 연수원 보도블록 청소(이끼제거)", "budget_execution"),
+        ("궤도재료(이음매PCT) 운송비용 지불결의", "budget_execution"),
+        ("[협조] 신청서 승인요청 안내", "approval"),
+        ("[회신] 2026년 상반기 해외특화사업 실적 제출요청", "reply_notification"),
+        ("성희롱 성폭력 사안 발생 사실 통보서 제출", "reply_notification"),
+        ("2026 파주 AI-ROAD 찾아가는 맞춤형 교원 연수 운영 계획(안)", "plan"),
+        ("(알제리) 공용차량 보험료 납부 결과 보고", "report"),
+        ("길 위의 인문학 참가자 접수 현황", "report"),
+        ("[공모] 2026 학생주도 학교특색스포츠클럽활동 지원 신청 알림", "notice"),
+        ("제75회 학교폭력대책심의위원회 참석 출장 요청", "business_trip"),
+        ("아무 키워드도 없는 일반 공문 제목", "official_document"),
+    ],
+)
+def test_infer_doc_type_from_title_keywords(title, expected):
+    assert open_go_kr._infer_doc_type(title) == expected
+
+
+def test_to_schema_sets_doc_type_from_title(adapter):
+    detail = adapter.parse_detail(SAMPLE_LIST_ITEM)
+    detail["_title"] = "[회신] 실적 제출요청"
+    doc = adapter.to_schema(detail)
+    assert doc.doc_type == "reply_notification"
+
+
 def test_partial_document_maps_to_s_track(adapter, monkeypatch):
     monkeypatch.setattr(
         open_go_kr.browse_client,

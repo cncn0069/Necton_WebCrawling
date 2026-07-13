@@ -28,7 +28,8 @@ from rd2.storage.naming import (
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
     SOURCE_OPEN_GO_KR: {
         # 실사(2026-07-07, 15~16건 샘플)로 확인: 이 필드들은 항상 실제 값이 있었다.
-        # 비어있으면 어댑터 파싱 버그로 간주한다.
+        # 비어있으면 어댑터 파싱 버그로 간주한다. doc_type은 2026-07-13 제목 키워드
+        # 기반 분류(_infer_doc_type) 추가 후 항상 값이 있음(매칭 안 되면 공문으로 폴백).
         "always_filled": [
             "title",
             "ordering_agency",
@@ -36,6 +37,7 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "production_date",
             "disclosure_status",
             "content_summary",
+            "doc_type",
         ],
         # 이 어댑터(O트랙, 사전정보공개 목록) 설계상 원천적으로 값이 없는 필드 —
         # 다른 트랙/어댑터에서만 의미 있음.

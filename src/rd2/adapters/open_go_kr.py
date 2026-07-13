@@ -19,7 +19,18 @@ from rd2.adapters import browse_client
 from rd2.adapters.base import SourceAdapter
 from rd2.adapters.retry import with_retry
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
-from rd2.storage.naming import DOC_TYPE_OFFICIAL_DOCUMENT, SOURCE_OPEN_GO_KR
+from rd2.storage.naming import (
+    DOC_TYPE_APPROVAL,
+    DOC_TYPE_BUDGET_EXECUTION,
+    DOC_TYPE_BUSINESS_TRIP,
+    DOC_TYPE_NOTICE,
+    DOC_TYPE_OFFICIAL_DOCUMENT,
+    DOC_TYPE_PERSONNEL,
+    DOC_TYPE_PLAN,
+    DOC_TYPE_REPLY_NOTIFICATION,
+    DOC_TYPE_REPORT,
+    SOURCE_OPEN_GO_KR,
+)
 
 BASE_URL = "https://www.open.go.kr"
 LIST_ENDPOINT = f"{BASE_URL}/othicInfo/infoList/infoList.ajax"
@@ -38,6 +49,54 @@ _DISCLOSURE_TEXT_MAP = {
 _NO_BODY_MARKERS = ("청구신청", "열람이 불가능", "열람이 제한")
 
 
+def _infer_doc_type(title: str) -> str:
+    """사전정보공개 목록은 절차상 전부 "결재문서"라 doc_type을 공문 하나로
+    고정해뒀었는데, 실제 제목을 보면 문서 성격 자체는 여러 갈래로 갈린다
+    (molit.py의 회의록 분리와 동일한 문제, 2026-07-13 사용자 지적으로 추가).
+
+    버킷·키워드는 처음엔 눈에 띄는 사례 몇 건으로 추측해서 시작했는데(인사/승인/
+    회신·통보/보고/공고 5개), 실제 500건 표본(최근 3년치, 목록 조회만으로 충분 —
+    parse_detail 없이도 INFO_SJ 제목만 보면 됨)으로 검증해보니 그 5개가 전체의
+    25%밖에 못 잡았다. 압도적 1위는 지급/지출/카드/원인행위/품의 등 예산집행
+    계열(52%)이었는데 처음 추측엔 아예 없었던 카테고리다 — 표본 없이 감으로
+    분류 체계를 짜면 이렇게 실제 분포와 어긋난다는 걸 보여주는 사례.
+    최종 9개 버킷으로 표본의 91%를 커버(2026-07-13 재검증). 나머지 9%는 철도
+    운영 로그처럼 기관별로 완전히 이질적인 소수 항목이라 규칙을 더 늘리는 게
+    비효율적이라 판단해 공문(기본값)으로 남겨둔다.
+
+    분류 순서: 더 구체적인 카테고리를 먼저 검사해 "승인 요청 보고" 같이 여러
+    키워드가 섞인 제목에서도 더 구체적인 분류가 이긴다. 예산집행 키워드가
+    "승인"보다 먼저 검사되는 이유: 이 포털에서 "품의"/"지급" 문서에 "승인요청"
+    문구가 같이 나오는 경우가 실제로 있는데, 그런 문서는 시민 대상 인허가
+    승인이 아니라 내부 예산 결재 절차이므로 예산집행으로 분류하는 게 맞다."""
+    if any(
+        keyword in title
+        for keyword in ("인사발령", "인사 발령", "발령", "휴직", "복직", "임용", "채용", "호봉")
+    ):
+        return DOC_TYPE_PERSONNEL
+    if any(
+        keyword in title
+        for keyword in (
+            "지급", "지출", "카드", "원인행위", "품의", "계약방법결정", "구입", "교부",
+            "강사비", "구매", "경비", "환불", "반납", "지불",
+        )
+    ):
+        return DOC_TYPE_BUDGET_EXECUTION
+    if "승인" in title:
+        return DOC_TYPE_APPROVAL
+    if any(keyword in title for keyword in ("회신", "통보", "통지")):
+        return DOC_TYPE_REPLY_NOTIFICATION
+    if "계획" in title:
+        return DOC_TYPE_PLAN
+    if any(keyword in title for keyword in ("보고", "제출", "결과", "송부", "접수")):
+        return DOC_TYPE_REPORT
+    if any(keyword in title for keyword in ("공고", "안내", "알림", "협조", "공모")):
+        return DOC_TYPE_NOTICE
+    if "출장" in title:
+        return DOC_TYPE_BUSINESS_TRIP
+    return DOC_TYPE_OFFICIAL_DOCUMENT
+
+
 class OpenGoKrAdapter(SourceAdapter):
     source_name = SOURCE_OPEN_GO_KR
 
@@ -48,6 +107,7 @@ class OpenGoKrAdapter(SourceAdapter):
         end_date: date,
         max_items: int | None = None,
         row_page: int = 10,
+        skip: int = 0,
     ) -> Iterator[dict]:
         """목록 조회.
 
@@ -57,15 +117,22 @@ class OpenGoKrAdapter(SourceAdapter):
         gstack 헤드리스 브라우저(browse_client)를 거쳐 같은 오리진에서
         fetch()를 실행한다. 상세 페이지(parse_detail)는 봇 탐지가 없어
         httpx로 충분하다.
+
+        skip: 대량 수집 체크포인트 재개용. 이 목록은 페이지당 순수 JSON AJAX
+        호출 한 번뿐이라(PRISM처럼 행마다 브라우저 클릭이 필요 없음) 건너뛸
+        페이지까지는 그냥 요청 자체를 안 보내고, 시작 페이지 안에서 남는
+        건수만 파이썬에서 슬라이싱한다 — PRISM의 "건너뛰는 행도 비용이 든다"
+        문제(TODOS.md)가 이 어댑터엔 애초에 해당하지 않는다.
         """
-        page = 1
+        page = (skip // row_page) + 1
+        remaining_skip = skip % row_page
         yielded = 0
         while True:
-            def _do_request() -> dict:
+            def _do_request(p: int = page) -> dict:
                 return browse_client.fetch_list_page(
                     start_date=start_date.strftime("%Y%m%d"),
                     end_date=end_date.strftime("%Y%m%d"),
-                    view_page=page,
+                    view_page=p,
                     row_page=row_page,
                 )
 
@@ -73,6 +140,9 @@ class OpenGoKrAdapter(SourceAdapter):
             items = payload.get("result", {}).get("rtnList", [])
             if not items:
                 return
+            if remaining_skip:
+                items = items[remaining_skip:]
+                remaining_skip = 0
             for item in items:
                 yield item
                 yielded += 1
@@ -160,9 +230,10 @@ class OpenGoKrAdapter(SourceAdapter):
             f"{DETAIL_ENDPOINT}?prdnNstRgstNo={enriched_item['PRDCTN_INSTT_REGIST_NO']}"
             f"&prdnDt={enriched_item['PRDCTN_DT']}&nstSeCd={enriched_item['INSTT_SE_CD']}"
         )
+        title = enriched_item.get("_title") or enriched_item["INFO_SJ"]
 
         return Document(
-            title=enriched_item.get("_title") or enriched_item["INFO_SJ"],
+            title=title,
             ordering_agency=enriched_item.get("_agency") or enriched_item["PROC_INSTT_NM"],
             department=enriched_item.get("_department") or enriched_item.get("CHRG_DEPT_NM"),
             unit_task=enriched_item.get("_unit_task") or enriched_item.get("UNIT_JOB_NM"),
@@ -175,6 +246,6 @@ class OpenGoKrAdapter(SourceAdapter):
             cso_classification=cso_classification,
             source=self.source_name,
             source_url=source_url,
-            doc_type=DOC_TYPE_OFFICIAL_DOCUMENT,
+            doc_type=_infer_doc_type(title),
             is_synthetic=False,
         )
