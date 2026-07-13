@@ -14,6 +14,7 @@ data/
 *.alio_checkpoint.json
 *.molit_checkpoint.json
 *.orginl_info*checkpoint.json
+*.moe_checkpoint.json
 *.bak-*
 .claude/settings.local.json
 .DS_Store
