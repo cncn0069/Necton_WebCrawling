@@ -18,6 +18,7 @@ from __future__ import annotations
 from rd2.schema.models import Document
 from rd2.storage.naming import (
     SOURCE_ALIO,
+    SOURCE_MOE,
     SOURCE_MOHW,
     SOURCE_MOLIT,
     SOURCE_OPEN_GO_KR,
@@ -94,6 +95,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "cso_sub_clause",
         ],
     },
+    SOURCE_MOLIT: {
+        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
+        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
+        # 항상 존재했다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "subject_category",
+        ],
+        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
+        # (mohw와 동일한 성격의 공지형 게시판).
+        "never_from_source": [
+            "unit_task",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
     SOURCE_ALIO: {
         # 실사(2026-07-09, 검색 API 직접 호출)로 확인: 검색 결과 한 행이 첨부파일
         # 한 건과 1:1이라 이 필드들은 항상 채워진다 — body_file_path도 예외 없이
@@ -130,23 +157,33 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
-=========
-            "subject_category",
+            "start_date",
+            "end_date",
         ],
-        # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
-        # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
-        # "문서 공개 판단에 걸린 시일"로 본다. 이 소스엔 단위업무/분류체계/
-        # 수행기관/비공개사유 개념 자체가 없다.
+    },
+    SOURCE_MOE: {
+        # 실사(2026-07-13, 목록 113건 + 상세 6건 샘플)로 확인: 이 필드들은 항상
+        # 실제 값이 있었다. molit과 달리 이 게시판엔 "분류" 개념이 없다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+        ],
+        # mohw와 같은 성격의 공지형 게시판 — 단위업무/분류체계/목차/수행기관/비공개근거/
+        # 시작·종료일 개념 자체가 없다.
         "never_from_source": [
             "unit_task",
             "subject_category",
-            "content_summary",
+            "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
             "start_date",
             "end_date",
->>>>>>>>> Temporary merge branch 2
         ],
     },
 }
