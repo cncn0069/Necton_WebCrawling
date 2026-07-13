@@ -61,6 +61,44 @@ SAMPLE_LIST_HTML = """
 </div>
 """
 
+# 페이지 안에 행이 3개인 목록 샘플. 실사에서 실제로 발견한 함정을 그대로 반영:
+# 각 <tr>가 </tr>로 닫히지 않은 채 바로 다음 <tr>가 이어진다(원문 HTML 결함) —
+# html.parser가 이를 형제가 아니라 중첩 구조로 복구해버려, 순진하게 "tbody tr"를
+# 순회하면 같은 게시물이 중복으로 잡힌다(실제로 collect_moe.py 첫 실행에서 발견).
+SAMPLE_LIST_HTML_THREE_ROWS_UNCLOSED_TR = """
+<div data-table="" data-type="list">
+  <table>
+    <tbody>
+      <tr>
+        <td class="no">3</td>
+        <td class="title left"><a href="#" onclick="javascript:goView('344', '3003', '0', null, 'W', '1', 'N', '');" title="세 번째 문서">세 번째 문서</a></td>
+        <td>부서A</td>
+        <td>2026-03-03</td>
+        <td>3</td>
+      <tr>
+      <tr>
+        <td class="no">2</td>
+        <td class="title left"><a href="#" onclick="javascript:goView('344', '2002', '0', null, 'C', '1', 'N', '');" title="두 번째 문서">두 번째 문서</a></td>
+        <td>부서B</td>
+        <td>2026-02-02</td>
+        <td>2</td>
+      <tr>
+      <tr>
+        <td class="no">1</td>
+        <td class="title left"><a href="#" onclick="javascript:goView('344', '1001', '0', null, 'W', '1', 'N', '');" title="첫 번째 문서">첫 번째 문서</a></td>
+        <td>부서C</td>
+        <td>2026-01-01</td>
+        <td>1</td>
+      <tr>
+    </tbody>
+  </table>
+</div>
+"""
+
+SAMPLE_LIST_HTML_EMPTY = """
+<div data-table="" data-type="list"><table><tbody></tbody></table></div>
+"""
+
 # boardSeq=106652 상세페이지 — 첨부파일 2개(실제 응답 구조 그대로 축약, 2026-07-13 캡처).
 # 담당부서 셀에 전화번호가 <br><small>로 같이 들어있는 구조를 그대로 반영.
 SAMPLE_DETAIL_HTML_MULTI_FILE = """
@@ -211,6 +249,32 @@ def test_fetch_list_extracts_status_yn_alongside_board_seq(monkeypatch):
     assert items[0]["_status_yn"] == "W"
     assert items[1]["_board_seq"] == "60268"
     assert items[1]["_status_yn"] == "C"
+
+
+def test_fetch_list_does_not_duplicate_rows_from_unclosed_tr_nesting(monkeypatch):
+    """핵심 함정 회귀 테스트: 실제 목록 HTML은 <tr>를 닫지 않아 html.parser가 행을
+    중첩 구조로 복구한다 — "tbody tr"로 순진하게 순회하면 같은 게시물이 중복으로
+    잡힌다(collect_moe.py 실사이트 첫 실행에서 실제로 발견한 버그). max_items 없이
+    페이지 전체를 소진해도 boardSeq가 중복되면 안 되고, 형제 셀(부서/날짜)도 각
+    행에 맞게 정확히 붙어야 한다."""
+    calls: list[int] = []
+
+    def _fake_list(page: int) -> str:
+        calls.append(page)
+        return SAMPLE_LIST_HTML_THREE_ROWS_UNCLOSED_TR if page == 1 else SAMPLE_LIST_HTML_EMPTY
+
+    monkeypatch.setattr(moe, "_fetch_list_html", _fake_list)
+    adapter = MoeAdapter()
+    items = list(adapter.fetch_list())
+
+    board_seqs = [item["_board_seq"] for item in items]
+    assert board_seqs == ["3003", "2002", "1001"]
+    assert len(set(board_seqs)) == 3
+    assert items[0]["_department_list"] == "부서A"
+    assert items[0]["_list_date"] == "2026-03-03"
+    assert items[2]["_department_list"] == "부서C"
+    assert items[2]["_list_date"] == "2026-01-01"
+    assert calls == [1, 2]
 
 
 def test_fetch_list_skip_skips_without_extra_requests(monkeypatch):

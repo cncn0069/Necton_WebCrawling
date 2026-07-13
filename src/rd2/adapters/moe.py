@@ -17,6 +17,15 @@ RD-2 O트랙 신규 출처. 실제 사이트 조사(httpx/curl 직접 요청, 20
   확인) — 항상 1로 고정한다. 반면 statusYN은 목록에서 파싱한 값을 그대로 넘겨야 한다.
 - 목록 종료 조건은 molit과 동일: 다음 페이지에 행이 0개면 멈춘다(실사 시점 13페이지
   요청 시 0건 확인).
+- **실측 중 발견한 파싱 함정**: 목록 행의 `<tr>`가 `</tr>`로 닫히지 않은 채 바로 다음
+  `<tr>`가 이어진다(원문 HTML 자체의 결함, 실사로 확인). `html.parser`는 이걸 형제가
+  아니라 중첩(nested) 구조로 복구해버려서, `soup.select("tbody tr")`로 행을 순회하면
+  같은 게시물이 중첩 깊이만큼 중복으로 잡힌다(실제로 collect_moe.py 첫 실행에서
+  같은 문서가 연속으로 "stored" 다음 "dup-skip"으로 찍히는 걸로 발견함). 그래서 이
+  어댑터는 `<tr>`를 순회하지 않고, 문서당 정확히 하나만 존재하는 `goView` 앵커를
+  `list_table.select('a[onclick*="goView"]')`로 직접 선택한 뒤 `find_parent("td")`/
+  `find_next_siblings("td")`로 형제 셀을 찾는다 — 이 방식은 바깥 `<tr>` 중첩 구조가
+  어떻든 영향받지 않는다.
 - 상세 페이지의 담당부서 셀에는 전화번호가 같이 들어있다
   (`교원양성연수과<br><small>(044-203-6496)</small>`) — molit에서 담당자 실명/전화번호를
   수집 대상에서 뺀 것과 같은 원칙으로, 이 어댑터도 셀의 첫 텍스트 노드(부서명)만 취하고
@@ -161,16 +170,19 @@ class MoeAdapter(SourceAdapter):
             _throttle()
             soup = BeautifulSoup(html, "html.parser")
             list_table = soup.select_one('div[data-table][data-type="list"] table')
-            rows = list_table.select("tbody tr") if list_table else []
+            # 실제 목록 HTML은 각 행의 <tr>를 닫지 않는다(</tr> 없이 바로 다음 <tr>가
+            # 옴, 실사 2026-07-13 원문 그대로) — html.parser가 이걸 형제가 아니라
+            # 중첩(nested) 구조로 복구해버려 `tbody tr`로 셀렉트하면 같은 행이 여러
+            # 번(중첩 깊이만큼) 중복으로 잡힌다. 대신 goView 앵커(문서당 정확히 하나만
+            # 존재하는 실제 DOM 노드)를 직접 선택하고, 거기서 `find_parent`/
+            # `find_next_siblings`로 형제 td를 찾으면 바깥 tr 중첩 구조와 무관하게
+            # 안전하다.
+            anchors = list_table.select('a[onclick*="goView"]') if list_table else []
 
             found_row = False
-            for row in rows:
-                title_cell = row.select_one("td.title")
-                link = title_cell.find("a") if title_cell else None
-                if not link or not link.get("onclick"):
-                    continue
-
-                match = _GOVIEW_RE.search(link["onclick"])
+            for link in anchors:
+                onclick = link.get("onclick") or ""
+                match = _GOVIEW_RE.search(onclick)
                 if not match:
                     continue
 
@@ -179,7 +191,8 @@ class MoeAdapter(SourceAdapter):
                 if seen <= skip:
                     continue
 
-                tds = row.find_all("td")
+                title_td = link.find_parent("td")
+                sibling_tds = title_td.find_next_siblings("td") if title_td else []
                 board_seq = match.group("seq")
                 yield {
                     "_board_seq": board_seq,
@@ -190,8 +203,8 @@ class MoeAdapter(SourceAdapter):
                         f"&searchType=null&statusYN={match.group('status')}&page=1"
                         f"&s=moe&m={MENU_ID}&opType=N"
                     ),
-                    "_department_list": tds[2].get_text(strip=True) if len(tds) > 2 else None,
-                    "_list_date": tds[3].get_text(strip=True) if len(tds) > 3 else None,
+                    "_department_list": sibling_tds[0].get_text(strip=True) if len(sibling_tds) > 0 else None,
+                    "_list_date": sibling_tds[1].get_text(strip=True) if len(sibling_tds) > 1 else None,
                 }
                 yielded += 1
                 if max_items is not None and yielded >= max_items:
