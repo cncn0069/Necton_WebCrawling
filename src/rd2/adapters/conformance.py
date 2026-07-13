@@ -18,6 +18,7 @@ from __future__ import annotations
 from rd2.schema.models import Document
 from rd2.storage.naming import (
     SOURCE_ALIO,
+    SOURCE_MOE,
     SOURCE_MOHW,
     SOURCE_MOLIT,
     SOURCE_OPEN_GO_KR,
@@ -96,6 +97,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "cso_sub_clause",
         ],
     },
+    SOURCE_MOLIT: {
+        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
+        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
+        # 항상 존재했다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "subject_category",
+        ],
+        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
+        # (mohw와 동일한 성격의 공지형 게시판).
+        "never_from_source": [
+            "unit_task",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
     SOURCE_ALIO: {
         # 실사(2026-07-09, 검색 API 직접 호출)로 확인: 검색 결과 한 행이 첨부파일
         # 한 건과 1:1이라 이 필드들은 항상 채워진다 — body_file_path도 예외 없이
@@ -132,26 +159,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
+            "start_date",
+            "end_date",
         ],
     },
-    SOURCE_MOLIT: {
-        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
-        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
-        # 항상 존재했다.
+    SOURCE_MOE: {
+        # 최초 실사(2026-07-13, 목록 113건 + 상세 6건 샘플)로는 department도
+        # always_filled로 보였으나, 실제 전수 크롤링(같은 날, 113건 전체)으로 확인해보니
+        # boardSeq=52286(2014년도 예산 및 기금운용계획 개요 게시물)은 담당부서 <td>가
+        # 원본 HTML 자체에서 빈 채로 등록돼 있었다(어댑터 파싱 버그 아님, 원문 확인
+        # 완료) — mohw의 start_date/end_date와 같은 성격이라 department는
+        # always_filled에서 뺐다. molit과 달리 이 게시판엔 "분류" 개념이 없다.
         "always_filled": [
             "title",
             "ordering_agency",
-            "department",
             "production_date",
             "disclosure_status",
             "cso_classification",
             "doc_type",
-            "subject_category",
         ],
-        # 이 게시판엔 단위업무/목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다
-        # (mohw와 동일한 성격의 공지형 게시판).
+        # mohw와 같은 성격의 공지형 게시판 — 단위업무/분류체계/목차/수행기관/비공개근거/
+        # 시작·종료일 개념 자체가 없다. department는 여기 넣지 않는다 — "전혀 없는
+        # 개념"이 아니라 대부분(56건 중 55건) 채워지는 조건부 필드라서(위 참고),
+        # never_from_source(원천적으로 개념이 없다는 뜻)에 넣으면 오해를 유발한다.
         "never_from_source": [
             "unit_task",
+            "subject_category",
             "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
