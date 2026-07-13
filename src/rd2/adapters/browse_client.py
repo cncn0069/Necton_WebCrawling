@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 _BROWSE_DIR = Path.home() / ".claude" / "skills" / "gstack" / "browse" / "dist"
@@ -135,6 +136,245 @@ def fetch_rendered_detail_html(url: str) -> str:
     _run_browse("wait", "--networkidle", timeout=_NETWORKIDLE_TIMEOUT)
     raw = _run_browse("html", timeout=_HTML_CAPTURE_TIMEOUT)
     return _strip_untrusted_wrapper(raw)
+
+
+ORGINL_LIST_URL = "https://www.open.go.kr/othicInfo/infoList/orginlInfoList.do"
+
+
+def fetch_orginl_list_page(*, start_date: str, end_date: str, view_page: int, row_page: int) -> dict:
+    """"원문정보"(orginlInfoList) 목록 AJAX — open_go_kr.py의 fetch_list_page와 완전히
+    같은 패턴(같은 사이트, 같은 봇탐지 우회 방식)이지만 대상 게시판이 다르다.
+    "정보목록"(infoList)과 달리 이 게시판은 실제 첨부파일(ORGNAL_YN="Y")이 있는
+    문서가 대부분이다(2026-07-13 실사, 100% 히트한 샘플도 있었음)."""
+    _run_browse("goto", ORGINL_LIST_URL, timeout=_GOTO_TIMEOUT)
+    body = (
+        f"kwd=&preKwds=&reSrchFlag=off&othbcSeCd=&insttSeCd=&eduYn=N"
+        f"&startDate={start_date}&endDate={end_date}&insttCdNm=&insttCd="
+        f"&searchMainYn=&viewPage={view_page}&rowPage={row_page}&sort=s"
+        f"&url=%2FothicInfo%2FinfoList%2ForginlInfoList.ajax&callBackFn=searchFn_callBack"
+    )
+    js_expr = (
+        "fetch('/othicInfo/infoList/orginlInfoList.ajax', {"
+        "method: 'POST',"
+        "headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', "
+        "'X-Requested-With': 'XMLHttpRequest'},"
+        f"body: {json.dumps(body)}"
+        "}).then(r => r.text())"
+    )
+    raw = _run_browse("js", js_expr, timeout=_JS_FETCH_TIMEOUT)
+    raw = _strip_untrusted_wrapper(raw.strip())
+    return json.loads(raw)
+
+
+_ORGINL_DETAIL_ENDPOINT = "https://www.open.go.kr/othicInfo/infoList/infoListDetl.do"
+_ORIGIN_DTL_VO_POLL_TIMEOUT = 8.0
+
+
+def fetch_orginl_detail_data(*, prdn_nstt_regist_no: str, prdn_dt: str, nst_se_cd: str) -> dict:
+    """원문정보 상세페이지의 `openCateSearchVO`(fileId/dlsrCdNm 등 전부 포함)를 가져온다.
+
+    2026-07-13 실사로 확인: 이 페이지는 서버가 `var result = {...}`로 직접 렌더링해둘
+    때도 있고 클라이언트 JS(`$(document).ready` → `initFunction()`)가 채울 때까지
+    기다려야 할 때도 있어(관측된 원인 불명 — 매 요청 결과가 달랐음) `originDtlVO`
+    전역이 채워질 때까지 폴링해야 안전하다. httpx 단독으로는 이 값이 있을 때도
+    없을 때도 있어 신뢰 못 함(정적 HTML 파싱 대신 JS 전역을 읽는 이유)."""
+    url = (
+        f"{_ORGINL_DETAIL_ENDPOINT}?prdnNstRgstNo={prdn_nstt_regist_no}"
+        f"&prdnDt={prdn_dt}&nstSeCd={nst_se_cd}"
+    )
+    _run_browse("goto", url, timeout=_GOTO_TIMEOUT)
+    _run_browse("wait", "--networkidle", timeout=_NETWORKIDLE_TIMEOUT)
+    poll_js = (
+        "(() => new Promise((resolve) => {"
+        "const start = Date.now();"
+        "const check = () => {"
+        "if (typeof originDtlVO !== 'undefined' && originDtlVO && originDtlVO.fileList) "
+        "return resolve('OK');"
+        f"if (Date.now() - start > {int(_ORIGIN_DTL_VO_POLL_TIMEOUT * 1000)}) return resolve('TIMEOUT');"
+        "setTimeout(check, 150);"
+        "};"
+        "check();"
+        "}))()"
+    )
+    poll_result = _run_browse("js", poll_js, timeout=_ORIGIN_DTL_VO_POLL_TIMEOUT + 2.0).strip()
+    if "OK" not in poll_result:
+        raise RuntimeError(f"originDtlVO 대기 타임아웃({url})")
+    raw = _run_browse("js", "JSON.stringify(originDtlVO)", timeout=_QUICK_JS_TIMEOUT)
+    return json.loads(_unwrap_js_string(raw))
+
+
+def fetch_orginl_file_bytes(*, oc: dict, file_id: str, esb_file_name: str, is_pdf: str) -> tuple[bytes, str]:
+    """원문정보 상세페이지에서 파일 하나를 실제로 다운로드한다.
+
+    2026-07-13 실사로 확인된 실제 wonmun 체인(페이지 인라인 JS 소스 직접 읽음,
+    TODOS.md "원문정보(orginlInfoList) 어댑터 + 파일 다운로드 체인" 항목 참고):
+
+        wonmunFileRequest.ajax → wonmunFileFilter.ajax(PII 필터, 항상 호출)
+        → wonmunChangePdf.ajax(isPdf=="Y"일 때만) → wonmunFileDownload.down(실제 바이트)
+
+    실사 중 발견한 두 가지 함정:
+    1. `is_pdf`는 "이미 PDF 파일이냐"가 아니라 "PDF로 변환해서 받을지"를 뜻하는
+       사용자 선택값이다 — 원본이 이미 .pdf/.hwp든 상관없이 상세페이지 버튼이
+       "PDF 변환"이면 "Y", "pdf다운로드"(이미 PDF라 변환 불필요)면 "N". 잘못
+       고정값을 넣으면(예: 항상 "Y") wonmunChangePdf.ajax가 404를 반환한다
+       (실사로 직접 재현·확인 — 있지도 않은 변환 작업을 요청하는 셈이라서).
+       호출부에서 파일 확장자가 .pdf면 "N", 아니면 "Y"로 판정해서 넘길 것.
+    2. 이 4단계는 브라우저 세션 밖(순수 httpx, 쿠키만 복사)에서 재현을 시도하면
+       간헐적으로 "제공기관의 시스템 점검 등으로... 열람이 잠시 불가합니다"라는
+       에러로 실패한다(2026-07-13 실사로 재현) — 원인 미상(세션/타이밍 의존으로
+       추정, Codex 아웃사이드보이스 #9 "httpx 쿠키 브릿지는 숨은 결합"이 실제
+       재현됨). 그래서 이 함수는 httpx가 아니라 브라우저 세션 안에서 fetch()로
+       전 구간을 실행한다 — PRISM의 fetch_prism_file_bytes()와 동일한 이유·패턴.
+
+    oc: 상세페이지의 `var result = {...}`(또는 해당 AJAX 응답)의
+        `openCateSearchVO`에 해당하는 dict — docNo/nstCd/oppSeCd/chrgDeptCd/
+        chrgDeptNm/infoSj/chgrNmpn/prcsNstNm/nstClNm/prsrvPdCd/nstSeCd 필요.
+
+    반환값: (파일 바이트, content-type 문자열).
+
+    구현 노트(2026-07-13): 이 4단계를 하나의 큰 async JS 블록으로 묶어
+    한 번의 `browse js` 호출로 실행했더니 — 네트워크 로그로는 4단계 전부
+    실제 성공(진짜 파일 다운로드까지 확인)하는데도 Python으로 반환값이
+    비어 와서 파싱에 실패하는 문제가 실사로 재현됐다(원인 미상 — CLI의
+    js 실행 자체 타임아웃과 promise 완료 시점의 레이스로 추정, 여러 번
+    재현). 단계별로 별도 `browse js` 호출로 쪼개니(아래 구현) 안정적으로
+    반환값을 받았다 — PRISM의 fetch_prism_file_bytes()처럼 짧은 단일
+    요청 하나짜리 js 호출은 문제없었다는 점과 일치."""
+
+    def _post(url: str, params: dict, *, timeout: float = _JS_FETCH_TIMEOUT) -> dict:
+        js_expr = (
+            f"fetch({json.dumps(url)}, {{method:'POST', headers:{{"
+            "'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',"
+            "'X-Requested-With':'XMLHttpRequest'}, "
+            f"body: {json.dumps('&'.join(f'{k}={_js_urlencode(v)}' for k, v in params.items()))}"
+            "}).then(r => r.text())"
+        )
+        raw = _run_browse("js", js_expr, timeout=timeout)
+        return json.loads(_strip_untrusted_wrapper(raw.strip()))["result"]
+
+    def _post_polled(url: str, params: dict, *, max_wait: float = _FILE_BYTES_TIMEOUT) -> dict:
+        """느린 서버측 작업(PDF 변환 등)용 — browse CLI의 `js` 커맨드 자체에
+        내부 실행 제한시간이 있어(정확한 값 불명, 실사로 확인: 90초짜리 Python
+        subprocess timeout을 줘도 그보다 먼저 죽음, 2026-07-13) 응답을 한 번의
+        `js` 호출로 기다리면 느린 변환에서 타임아웃난다. 대신 fetch를
+        `window.__rd2WonmunResult`에 결과를 채워 넣는 fire-and-forget으로
+        쏘고, 짧은 폴링 `js` 호출을 반복해서 결과가 채워질 때까지 기다린다."""
+        start_js = (
+            "(() => { window.__rd2WonmunResult = undefined;"
+            f"fetch({json.dumps(url)}, {{method:'POST', headers:{{"
+            "'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',"
+            "'X-Requested-With':'XMLHttpRequest'}, "
+            f"body: {json.dumps('&'.join(f'{k}={_js_urlencode(v)}' for k, v in params.items()))}"
+            "}).then(r => r.text()).then(t => { window.__rd2WonmunResult = t; })"
+            ".catch(e => { window.__rd2WonmunResult = JSON.stringify({error: String(e)}); });"
+            "return 'STARTED'; })()"
+        )
+        _run_browse("js", start_js, timeout=_QUICK_JS_TIMEOUT)
+
+        elapsed = 0.0
+        poll_interval = 2.0
+        while elapsed < max_wait:
+            raw = _run_browse(
+                "js",
+                "(() => typeof window.__rd2WonmunResult !== 'undefined' "
+                "? window.__rd2WonmunResult : '__PENDING__')()",
+                timeout=_QUICK_JS_TIMEOUT,
+            )
+            unwrapped = _unwrap_js_string(raw.strip())
+            if unwrapped != "__PENDING__":
+                return json.loads(unwrapped)["result"]
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        raise RuntimeError(f"wonmun 폴링 타임아웃({max_wait}초 초과): {url}")
+
+    r1 = _post(
+        "/util/wonmunUtils/wonmunFileRequest.ajax",
+        {
+            "fileId": file_id, "esbFileName": esb_file_name, "docId": oc.get("docNo", ""),
+            "ctDate": oc.get("prdnDt", ""), "orgCd": oc.get("nstCd", ""),
+            "prdnNstRgstNo": oc.get("prdnNstRgstNo", ""), "oppSeCd": oc.get("oppSeCd", ""),
+            "isPdf": is_pdf, "chrgDeptNm": oc.get("chrgDeptNm", ""),
+        },
+    )
+    if str(r1.get("error_code")) not in ("0", "00"):
+        raise RuntimeError(f"wonmun STEP1(파일요청) 실패: {r1.get('error_msg')!r}")
+
+    r2 = _post(
+        "/util/wonmunUtils/wonmunFileFilter.ajax",
+        {
+            "prdnNstRgstNo": oc.get("prdnNstRgstNo", ""), "prdnDt": oc.get("prdnDt", ""),
+            "esbFilePath": r1["esbFilePath"], "esbFileName": r1["esbFileName"],
+            "fileName": r1["fileName"], "fileId": file_id,
+            "orglPrdnNstCd": r1.get("orglPrdnNstCd", ""), "nstCd": oc.get("nstCd", ""),
+            "orgCd": oc.get("nstCd", ""), "orgSeCd": oc.get("nstSeCd", ""),
+            "infoSj": oc.get("infoSj", ""), "chgrNmpn": oc.get("chgrNmpn", ""),
+            "orgNm": oc.get("prcsNstNm", ""), "chrgDeptCd": oc.get("chrgDeptCd", ""),
+            "chrgDeptNm": oc.get("chrgDeptNm", ""), "nstClNm": oc.get("nstClNm", ""),
+            "prsrvPdCd": oc.get("prsrvPdCd", ""), "docId": oc.get("docNo", ""),
+            "isPdf": r1["isPdf"], "step": "step2",
+            "closegvrnYn": r1.get("closegvrnYn") or "N", "ndnfFiltrRndabtYn": "N",
+            "rceptInsttCd": oc.get("nstCd", ""), "rceptInsttCdNm": oc.get("prcsNstNm", ""),
+            "mngrTelno": r1.get("mngrTelno", ""),
+        },
+    )
+    if str(r2.get("error_code")) not in ("0", "00"):
+        raise RuntimeError(f"wonmun STEP2(개인정보필터) 실패: {r2.get('error_msg')!r}")
+
+    r3 = r2
+    if r2.get("isPdf") == "Y":
+        # 변환 자체가 서버에서 실제 렌더링 작업이라 파일 요청/필터 단계보다 훨씬
+        # 오래 걸릴 수 있다 — 실사로 재현: .xls 파일 변환이 30초를 넘겨 quarantine된
+        # 사례가 있었고(2026-07-13), Python 쪽 timeout을 90초로 늘려도 browse CLI
+        # 자체의 (제어 불가능한) 내부 실행 제한시간이 먼저 걸려 여전히 실패했다
+        # (2026-07-13 재실사) — 그래서 단순 timeout 상향이 아니라 fire-and-poll
+        # 방식(_post_polled)으로 바꿈.
+        r3 = _post_polled(
+            "/util/wonmunUtils/wonmunChangePdf.ajax",
+            {
+                "esbFilePath": r2["esbFilePath"], "esbFileName": r2["esbFileName"],
+                "fileName": r2["fileName"], "isPdf": r2["isPdf"], "docId": oc.get("docNo", ""),
+                "ctDate": oc.get("prdnDt", ""), "orgCd": oc.get("nstCd", ""),
+                "prdnNstRgstNo": oc.get("prdnNstRgstNo", ""), "oppSeCd": oc.get("oppSeCd", ""),
+                "fileId": file_id, "orglPrdnNstCd": r2.get("orglPrdnNstCd", ""),
+                "nstCd": oc.get("nstCd", ""),
+            },
+        )
+        if str(r3.get("error_code")) not in ("0", "00"):
+            raise RuntimeError(f"wonmun STEP3(PDF변환) 실패: {r3.get('error_msg')!r}")
+
+    dl_params = {
+        "esbFilePath": r3["esbFilePath"], "esbFileName": r3["esbFileName"],
+        "fileName": r3["fileName"], "isPdf": r3["isPdf"],
+        "prdnNstRgstNo": oc.get("prdnNstRgstNo", ""), "prdnDt": oc.get("prdnDt", ""),
+        "fileId": file_id, "gubun": "esbFilePath",
+    }
+    dl_body = "&".join(f"{k}={_js_urlencode(v)}" for k, v in dl_params.items())
+    dl_js = (
+        "fetch('/util/wonmunUtils/wonmunFileDownload.down', {method:'POST', headers:{"
+        "'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}, "
+        f"body: {json.dumps(dl_body)}"
+        "}).then(r => {"
+        "const contentType = r.headers.get('content-type') || '';"
+        "return r.arrayBuffer().then(buf => {"
+        "const bytes = new Uint8Array(buf);"
+        "let binary = '';"
+        "const chunk = 8192;"
+        "for (let i = 0; i < bytes.length; i += chunk) {"
+        "binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));"
+        "}"
+        "return JSON.stringify({contentType: contentType, b64: btoa(binary)});"
+        "});"
+        "})"
+    )
+    raw = _run_browse("js", dl_js, timeout=_FILE_BYTES_TIMEOUT)
+    result = json.loads(_unwrap_js_string(raw))
+    return base64.b64decode(result["b64"]), result.get("contentType", "")
+
+
+def _js_urlencode(value: object) -> str:
+    from urllib.parse import quote
+
+    return quote(str(value if value is not None else ""), safe="")
 
 
 PRISM_LIST_URL = "https://www.prism.go.kr/homepage/asmt/list"

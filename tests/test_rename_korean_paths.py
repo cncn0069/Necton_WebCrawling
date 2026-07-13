@@ -17,10 +17,12 @@ from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_PRISM
 @pytest.fixture(autouse=True)
 def _use_test_database(monkeypatch):
     """_migrate_db/_validate는 rename_korean_paths.py 안에서 인자 없이 DocumentStore()를
-    호출해 .env의 MARIADB_DATABASE를 그대로 본다 — 그게 rd2_dev(운영 데이터)를 가리키므로,
-    env를 rd2_test로 덮어써서 이 테스트 파일의 모든 DocumentStore() 호출(테스트 헬퍼+
-    스크립트 함수 양쪽 다)이 같은 테스트 DB를 보게 강제한다. 이걸 빼먹으면 테스트가
-    실수로 운영 DB를 UPDATE할 수 있다(실제로 한 번 이렇게 걸렸음)."""
+    호출해 .env의 MARIADB_DATABASE를 그대로 본다 — 그게 rd2_dump(실 작업 데이터)를
+    가리키므로, env를 rd2_test로 덮어써서 이 테스트 파일의 모든 DocumentStore() 호출
+    (테스트 헬퍼+스크립트 함수 양쪽 다)이 같은 테스트 DB를 보게 강제한다. 이걸
+    빼먹으면 테스트가 실수로 실 작업 DB를 TRUNCATE/UPDATE할 수 있다(2026-07-09,
+    2026-07-13 두 번 실제로 이렇게 걸렸음 — 후자는 rd2_test를 실 작업 DB와 그대로
+    공유하고 있어서 발생, .env 분리로 재발 방지)."""
     monkeypatch.setenv("MARIADB_DATABASE", "rd2_test")
     store = DocumentStore()
     try:

@@ -12,7 +12,10 @@ def store():
     db = DocumentStore(database="rd2_test")
     # 매 테스트가 빈 테이블에서 시작하도록 정리 — 로컬 MariaDB rd2_test는
     # 세션 내내 살아있는 DB라 tmp_path 방식(테스트마다 새 파일)과 달리
-    # 명시적으로 비워줘야 한다.
+    # 명시적으로 비워줘야 한다. rd2_test는 실 작업 DB(rd2_dump)와 완전히
+    # 분리된 전용 테스트 DB — 절대 실 데이터가 있는 DB를 가리키면 안 된다
+    # (2026-07-13: 예전에 둘이 같은 DB를 공유해 TRUNCATE가 실 데이터를
+    # 지워버린 사고가 있었음).
     for table in ("documents", "quarantine", "pending_downloads"):
         with db._conn.cursor() as cur:
             cur.execute(f"TRUNCATE TABLE {table}")
