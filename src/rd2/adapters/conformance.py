@@ -21,6 +21,7 @@ from rd2.storage.naming import (
     SOURCE_MOHW,
     SOURCE_MOLIT,
     SOURCE_OPEN_GO_KR,
+    SOURCE_ORGINL_INFO,
     SOURCE_PRISM,
 )
 
@@ -155,6 +156,32 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
+    SOURCE_ORGINL_INFO: {
+        # 실사(2026-07-13, wonmun 다운로드 체인 리버스엔지니어링 중 5건 실제
+        # 다운로드 성공 — 공개 3건 + 부분공개 1건)로 확인. fetch_list()가
+        # ORGNAL_YN != "Y"인 항목을 이미 걸러내므로(이 게시판에 들어온 이상
+        # 첨부파일이 있다는 뜻) body_file_path는 여기선 always_filled로 봐도
+        # 되지만, 다운로드 자체가 실패(quarantine)할 수 있는 소스라 일부러
+        # 조건부로 남겨둔다 — 다운로드 실패는 파싱 버그가 아니라 정상적인
+        # 운영 실패 모드라서 always_filled 위반으로 시끄럽게 만들고 싶지 않음.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "doc_type",
+        ],
+        # 정보목록(open_go_kr)과 동일한 성격의 게시판 — 단위업무/목차/수행기관/
+        # 비공개근거 조항 개념 자체가 없다.
+        "never_from_source": [
+            "table_of_contents",
+            "performing_agency",
             "cso_sub_clause",
             "start_date",
             "end_date",

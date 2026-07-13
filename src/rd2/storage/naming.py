@@ -14,6 +14,7 @@ SOURCE_MOHW = "mohw"  # 보건복지부 — scripts/collect_mohw.py 이름과 �
 SOURCE_OPEN_GO_KR = "open_go_kr"  # 정보공개포털 — scripts/collect_open_go_kr.py 이름과 통일
 SOURCE_ALIO = "alio"  # ALIO 공공기관 경영정보 공개시스템 — scripts/collect_alio.py 이름과 통일
 SOURCE_MOLIT = "molit"  # 국토교통부 정책정보 게시판 — scripts/collect_molit.py 이름과 통일
+SOURCE_ORGINL_INFO = "orginl_info"  # 정보공개포털 "원문정보" 게시판 — open_go_kr과 별개(첨부파일 있음)
 
 # --- doc_type 코드 ---
 DOC_TYPE_RESEARCH_REPORT = "research_report"  # 연구보고서 (PRISM)
