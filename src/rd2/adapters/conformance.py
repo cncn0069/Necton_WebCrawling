@@ -130,25 +130,8 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
-        ],
-    },
-    SOURCE_MOLIT: {
-        # 실사(2026-07-09, 상세 10건 샘플, id=4891~4901)로 확인: 이 필드들은
-        # 항상 실제 값이 있었다. subject_category(분류)는 mohw와 달리 이 게시판엔
-        # 항상 존재했다.
-        "always_filled": [
-            "title",
-            "ordering_agency",
-            "department",
-            "production_date",
-            "disclosure_status",
-            "cso_classification",
-            "doc_type",
-            "body_file_path",
-            "body_text",
-            "table_of_contents",
-            "start_date",
-            "end_date",
+=========
+            "subject_category",
         ],
         # doc.html의 기준일→start_date, 제출일→end_date로 매핑한다(2026-07-09
         # 사용자 결정) — 감사가 다루는 시점과 실제 공개된 시점 사이의 간격을
@@ -161,6 +144,9 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
+            "start_date",
+            "end_date",
+>>>>>>>>> Temporary merge branch 2
         ],
     },
 }

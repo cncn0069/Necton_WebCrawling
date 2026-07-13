@@ -12,7 +12,7 @@
 
 ```
 fetch_list()  →  parse_detail()  →  to_schema()  →  Document  →  DocumentStore.upsert()
-(목록 순회)      (상세페이지 조회)    (통합 스키마로 변환)  (Pydantic 검증)   (SQLite 저장)
+(목록 순회)      (상세페이지 조회)    (통합 스키마로 변환)  (Pydantic 검증)   (MariaDB 저장)
 ```
 
 - **`fetch_list()`**: 목록 페이지(또는 API)를 순회하며 각 아이템의 원시 dict를 yield한다.
@@ -20,8 +20,10 @@ fetch_list()  →  parse_detail()  →  to_schema()  →  Document  →  Documen
   여부 근거, 첨부파일 등).
 - **`to_schema(enriched_item)`**: 보강된 dict를 16개 핵심 필드를 가진 통합 `Document`
   (Pydantic 모델, `src/rd2/schema/models.py`)로 변환한다.
-- **`DocumentStore`**(`src/rd2/storage/db.py`)가 `Document`를 SQLite `documents` 테이블에
-  upsert한다. `dedup_key`(source+source_url) 유니크 인덱스로 중복을 막고, 스키마 검증에
+- **`DocumentStore`**(`src/rd2/storage/db.py`)가 `Document`를 MariaDB `documents` 테이블에
+  upsert한다(접속정보는 `.env`의 `MARIADB_*`, 로컬 개발은 localhost, 배포 환경은 RDS
+  엔드포인트를 가리키도록 `.env`만 바꾸면 됨 — 2026-07-09 SQLite→MariaDB 전환).
+  `dedup_key`(source+source_url) 유니크 인덱스로 중복을 막고, 스키마 검증에
   실패한 레코드는 버리지 않고 `quarantine` 테이블에 격리한다.
 
 각 소스는 실제 사이트가 헤드리스 브라우저(`gstack browse` 서브프로세스, `src/rd2/adapters/
@@ -47,7 +49,7 @@ src/rd2/adapters/    출처별 어댑터 (base.py=공통 인터페이스, browse
                      open_go_kr.py/prism.py=사이트별 구현, conformance.py=필드 완전성 검증,
                      retry.py=재시도 헬퍼)
 src/rd2/schema/      Document Pydantic 모델 (16개 핵심 필드 + source/doc_type)
-src/rd2/storage/     db.py=SQLite 저장/마이그레이션, files.py=본문파일 저장 규칙
+src/rd2/storage/     db.py=MariaDB 저장/마이그레이션, files.py=본문파일 저장 규칙
                      (data/{source}/{doc_type}/{id}_{파일명}), naming.py=source/doc_type
                      영어 코드 정의(단일 진실 공급원 — 자세한 내용은 DOC_TYPES.md)
 src/rd2/generators/  C/S 트랙 합성 문서 생성(LLM 기반, 실제 수집과 별개 파이프라인)
@@ -58,8 +60,9 @@ tests/               34~36개 테스트 — 대부분 실제 사이트 실사로
 
 ## 체크포인트/재개
 
-`scripts/collect_prism.py` 등 실행 스크립트는 처리한 건수를 `<db경로>.prism_checkpoint.json`
-에 매 건 직후 저장한다. 장시간 크롤링 중 죽어도(sqlite 잠금, 네트워크 오류 등) 다음 실행이
+`scripts/collect_prism.py` 등 실행 스크립트는 처리한 건수를 `rd2.db.prism_checkpoint.json`
+(고정 파일명 — DB가 MariaDB로 바뀐 뒤에도 SQLite 시절 이름을 그대로 유지, 연속성 때문)
+에 매 건 직후 저장한다. 장시간 크롤링 중 죽어도(네트워크 오류 등) 다음 실행이
 같은 위치에서 이어간다 — `--skip`으로 수동 지정하거나 생략하면 체크포인트를 자동 사용한다.
 
 ## 알려진 한계 (Known Limitations)
