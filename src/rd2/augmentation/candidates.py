@@ -35,7 +35,10 @@ _CLAUSE_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 _CLAUSE_6_KEYWORDS = ["담당자", "문의", "연락처", "담당", "성명", "작성자", "책임자"]
-_CLAUSE_6_MAX_LEN = 60  # 자리표시 성격의 짧은 span만 후보로 삼음
+_CLAUSE_6_SHORT_MAX_LEN = 20  # 단독 직책/라벨 문구(예: "홍보담당관")로 간주할 최대 길이
+_CLAUSE_6_LABEL_MAX_LEN = 40  # "라벨: 값" 패턴은 조금 더 길어도 허용
+# "담당자 :", "문의:" 처럼 라벨 뒤에 콜론이 오는 명확한 자리표시 패턴만 인정.
+_CLAUSE_6_LABEL_PATTERN = re.compile(r"(담당자|문의|연락처|작성자|책임자|성명)\s*[:：]")
 
 _MAX_CANDIDATES_PER_DOC = 20  # 문서 하나가 후보 풀을 독점하지 않게 하는 상한
 
@@ -47,9 +50,16 @@ def _matches_clause_5_or_7_or_8(text: str, clause_no: str) -> bool:
 
 
 def _matches_clause_6(text: str) -> bool:
-    if len(text) > _CLAUSE_6_MAX_LEN:
-        return False
-    return any(kw in text for kw in _CLAUSE_6_KEYWORDS)
+    # 실측(2026-07-16)으로 발견된 문제: "담당자" 같은 키워드가 예산 항목 설명
+    # 문장 중간에 우연히 낀 경우(예: "원격교육 업무담당자 역량강화과정 운영비")까지
+    # 후보로 잡혀서, 치환하면 문장 전체가 맥락 없이 "이름+번호"로 날아가 버렸다.
+    # → "라벨: 값" 형태로 명확히 자리표시인 경우, 또는 아주 짧은 단독 직책/라벨
+    # 문구인 경우만 후보로 인정한다(예산 설명문에 우연히 섞인 긴 문장은 제외).
+    if _CLAUSE_6_LABEL_PATTERN.search(text) and len(text) <= _CLAUSE_6_LABEL_MAX_LEN:
+        return True
+    if len(text) <= _CLAUSE_6_SHORT_MAX_LEN and any(kw in text for kw in _CLAUSE_6_KEYWORDS):
+        return True
+    return False
 
 
 def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[str, Any]]:
