@@ -18,7 +18,11 @@ from __future__ import annotations
 from rd2.schema.models import Document
 from rd2.storage.naming import (
     SOURCE_ALIO,
+    SOURCE_KOREA_KR,
+    SOURCE_ME,
     SOURCE_MOE,
+    SOURCE_MOEL,
+    SOURCE_MOEL_POLICY,
     SOURCE_MOHW,
     SOURCE_MOLIT,
     SOURCE_OPEN_GO_KR,
@@ -183,6 +187,123 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
         # 시작·종료일 개념 자체가 없다. department는 여기 넣지 않는다 — "전혀 없는
         # 개념"이 아니라 대부분(56건 중 55건) 채워지는 조건부 필드라서(위 참고),
         # never_from_source(원천적으로 개념이 없다는 뜻)에 넣으면 오해를 유발한다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
+    SOURCE_KOREA_KR: {
+        # 실사(2026-07-13, korea.kr 정책브리핑 보도자료)로 확인: 목록 페이지에
+        # title/body_text/date/agency가 전부 항상 존재한다(정부가 능동 배포하는
+        # 보도자료라 moe와 같은 성격 — 빈 값이 있으면 파싱 버그로 간주). department는
+        # 신뢰할 수 있는 정적 소스가 없어(상세페이지 "담당자안내"가 팝업 JS) 아예
+        # 수집 대상에서 뺐다 — moe의 "가끔 원본이 비워둠" 조건부 필드와 다른 성격.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "body_text",
+        ],
+        # 보도자료 게시판이라 단위업무/분류체계/목차/수행기관/비공개근거/
+        # 시작·종료일 개념 자체가 없다(moe와 동일한 성격). department도 이 어댑터는
+        # 애초에 채우지 않기로 설계했으므로 여기 포함한다.
+        "never_from_source": [
+            "department",
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
+    SOURCE_ME: {
+        # 실사(2026-07-14, me.go.kr 행정규칙 고시·훈령·예규)로 확인: 목록+상세
+        # 페이지에 title/department/date/doc_type이 전부 항상 존재한다(정부가
+        # 공식 제정·공포한 행정규칙이라 빈 값이면 파싱 버그로 간주).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+        ],
+        # 이 어댑터는 open_go_kr의 official_document와 같은 성격의 메타데이터
+        # 전용 어댑터다 — 본문 전문은 law.go.kr의 인증 API(OC 키 필요)로만 열람
+        # 가능해 body_text/body_file_path를 아예 수집 대상에서 뺐다(2026-07-14
+        # 결정). department는 목록의 "소관부서명"을 ordering_agency로 이미
+        # 쓰고 있어 별도 부서 필드가 없다.
+        "never_from_source": [
+            "department",
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+            "body_text",
+            "body_file_path",
+        ],
+    },
+    SOURCE_MOEL: {
+        # 실사(2026-07-14, moel.go.kr 훈령·예규·고시)로 확인: title/department/
+        # date/doc_type/body_text가 상세페이지에 전부 항상 존재한다(정부가 공식
+        # 제정·공포한 행정규칙이라 빈 값이면 파싱 버그로 간주). me.py와 달리 본문
+        # 전문을 실제로 제공하는 소스라 body_text를 always_filled에 넣는다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "body_text",
+        ],
+        # me.py와 동일한 성격의 행정규칙 게시판 — 단위업무/분류체계/목차/수행기관/
+        # 비공개근거/시작·종료일 개념 자체가 없다. body_file_path는 첨부파일이
+        # 없는 문서도 있어(조건부 필드) 여기 넣지 않는다.
+        "never_from_source": [
+            "unit_task",
+            "subject_category",
+            "table_of_contents",
+            "performing_agency",
+            "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
+    SOURCE_MOEL_POLICY: {
+        # 실사(2026-07-14, moel.go.kr 정책자료실)로 확인: title/department/date/
+        # doc_type/body_text가 상세페이지에 전부 항상 존재한다.
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+            "body_text",
+        ],
+        # moel과 동일한 성격의 정책자료 게시판(행정규칙 아님) — 단위업무/분류체계/
+        # 목차/수행기관/비공개근거/시작·종료일 개념 자체가 없다. body_file_path는
+        # 첨부파일이 없는 문서도 있어(조건부 필드) 여기 넣지 않는다.
         "never_from_source": [
             "unit_task",
             "subject_category",
