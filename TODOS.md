@@ -1,5 +1,52 @@
 # TODOS
 
+### [P0/긴급] open_go_kr 크롤링 중단 — robots.txt 전체 차단, 대체 소스 필요
+
+**What:** `open.go.kr`(정보공개포털)의 `robots.txt`가 `Disallow: /` (루트 `/` 딱 하나만 `Allow`)로 **사이트 전체 자동 크롤링을 명시적으로 금지**하고 있음을 2026-07-13 확인(원문: `User-agent: *` / `Disallow: /` / `Allow : /$`). open_go_kr 자동 수집을 **중단**하고, 대체 소스를 찾거나 정책 확인 전까지 재개하지 않기로 결정.
+
+**PRISM은 무혐의로 정정(2026-07-13):** 처음엔 PRISM의 `robots.txt` 요청도 WAF 차단 응답("비정상적인 활동으로 확인되어...")을 반환해 같이 의심했으나, 원인은 `curl`의 기본 User-Agent를 WAF가 걸러낸 것뿐이었다 — 정상 브라우저 User-Agent로 재요청하니 `User-agent: *` / `Disallow:` (빈 값 = 전체 허용)가 정상 반환됨. PRISM은 robots.txt 기준 문제 없고, 로컬에서 이미 수집한 6,680건도 정책상 문제 없었던 것으로 확인. PRISM 수집은 재개 가능(단, EC2에서의 "Target crashed" 렌더링 이슈는 별개로 미해결 — 로컬에서 계속 진행).
+
+**Why:** `TODOS.md`에 이미 "EC2 상시 크롤링 전 robots.txt/이용약관/속도제한 점검"이 미완료로 남아있었는데, 오늘 EC2 배포 중 open_go_kr이 EC2 클라우드 IP를 소프트 차단(그럴듯한 "접속지연" 메시지로 위장)하는 걸 발견했고, 원인을 추적하다 robots.txt 자체가 전체 차단임을 확인했다. `수집 계획v1.1.md`(2026-07-06)에 따르면 나라장터·국가기록원·국가법령정보센터·공공데이터포털·알리오 5개 출처는 "공식 API가 있어 봇탐지 문제가 없다"는 이유로 우선순위를 앞에 뒀고, 정보공개포털은 그 목록에 없다 — 애초부터 공식 API가 없어 브라우저 자동화로 우회해왔다는 뜻. robots.txt 위반은 IP를 EC2에서 로컬로 바꾼다고 해결되지 않는 문제라 인프라 대응이 아니라 대체 소스/정책 판단이 필요하다.
+
+**대체 소스 조사 결과(2026-07-13, WebSearch):**
+- `data.go.kr`(공공데이터포털)에 "사전정보공개" API를 등록한 기관은 **국토교통부 딱 하나뿐**. open_go_kr이 제공하던 "전 기관 통합 조회"를 대체할 방법이 data.go.kr엔 없음 — 기관별로 파편화되어 있고 대부분 기관은 API 자체가 없음.
+- open_go_kr 자체가 「공공기관의 정보공개에 관한 법률」상 법정 공식 창구이지만, 시민 개별 열람/청구용 웹 포털이지 대량 수집용 API가 아님. "정보공개청구"라는 공식 청구 절차는 있으나 건별 처리라 대량 학습데이터 구축에는 부적합.
+- PRISM 쪽은 `행정안전부_정책연구 과제정보` API(data.go.kr, 무료/자동승인/실시간)가 유력한 후보로 발견됨 — 다만 과제명·수행기관·연구기간·연구개요 등 메타데이터만 확인됐고, RD-2가 실제 필요로 하는 공개여부·비공개 법적근거·본문파일 다운로드까지 지원하는지는 Swagger 명세서 직접 확인 필요(미완료).
+
+**Context:** 다음 확인 필요:
+1. open_go_kr을 대체할 정보공개 관련 데이터 소스 추가 조사(기관별 개별 정보공개 API, 또는 이 프로젝트의 법적 근거 확인 후 공식 청구 절차 활용 여부)
+2. 이 프로젝트(RD-2)가 어떤 법적 근거·계약으로 정부 공개 데이터를 수집하고 있는지(용역/연구 목적인지, 정보공개법상 별도 예외가 있는지) — 프로젝트를 발주한 쪽에 확인 필요
+3. `행정안전부_정책연구 과제정보` API의 Swagger 명세서 확인(PRISM 대체/보완 가능성)
+4. 위 확인 전까지 open_go_kr 자동 수집 스크립트 실행 금지(PRISM은 재개 가능)
+
+**Effort:** 알 수 없음(정책 확인은 코딩 작업이 아님, 대체 소스 조사는 진행 중)
+**Priority:** P0 — 다른 모든 O트랙 작업(Playwright 마이그레이션 등)보다 우선
+**Depends on:** 프로젝트 발주자/책임자의 법적·정책 확인, 대체 소스 추가 조사
+
+### gstack browse → Python Playwright 네이티브 마이그레이션
+
+**What:** `src/rd2/adapters/browse_client.py`(695줄, subprocess로 gstack `browse` CLI 호출)를 Python `playwright` 패키지로 직접 브라우저를 조종하는 방식으로 재작성.
+
+**Why:** gstack browse는 Claude Code 대화 세션에서 대화형으로 쓰도록 설계된 도구라, SSH 세션이 끝나면 백그라운드 데몬이 같이 죽는 문제가 있었다(2026-07-13 EC2 배포 중 발견 — PRISM 목록 조회가 매번 `about:blank`로 리셋되며 0건으로 끝남). `loginctl enable-linger rd2`로 임시 우회했지만, 24시간 무인 systemd 서비스에 대화형 도구를 프로덕션 의존성으로 앉힌 근본 구조는 남아있다. Python 네이티브 Playwright를 쓰면 브라우저 컨텍스트를 크롤러 프로세스 자신이 들고 있어 이 문제가 설계상 사라진다(boring by default).
+
+**Context:** `browse_client.py`는 PRISM(행 클릭 시뮬레이션, 페이지네이션, `_install_prism_download_click_hooks` 다운로드 인터셉트 JS 훅)과 정보공개포털/원문정보(AJAX 폴링, POST 파일 다운로드) 두 소스의 봇탐지 우회 로직을 담고 있다 — 전부 실사로 여러 날에 걸쳐 맞춘 코드라 재작성 시 전부 재검증 필요(2026-07-13 plan-eng-review에서 시간 압박 속 즉시 재작성은 보류하기로 결정, linger 우회로 진행).
+
+**Effort:** L (695줄 재작성 + 두 어댑터 전체 재검증)
+**Priority:** P2
+**Depends on:** 없음 — 별도 PR로 충분한 시간을 들여 진행할 것
+
+### Chromium `--no-sandbox` → AppArmor 프로파일로 전환
+
+**What:** `GSTACK_CHROMIUM_NO_SANDBOX=1`(EC2 `.env`)로 Chromium 샌드박스를 꺼둔 상태 — Ubuntu 24.04의 AppArmor userns 제한 때문에 샌드박스가 즉시 크래시(`No usable sandbox!`)해서 임시로 우회한 것. 이를 AppArmor 프로파일 작성으로 대체해 샌드박스를 켠 채 운영하도록 전환.
+
+**Why:** 방문 대상이 정보공개포털·PRISM 등 신뢰하는 정부 사이트뿐이라 당장 실제 악용 리스크는 낮지만, 보안 기본원칙(심층 방어)을 하나 포기한 채 장기 운영하는 상태다(2026-07-13 plan-eng-review에서 지금은 속도 우선으로 `--no-sandbox` 유지, TODO로 기록하기로 결정).
+
+**Context:** Chromium 공식 문서(https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md)가 AppArmor 프로파일 작성을 권장 해법으로 안내. `deploy/rd2-crawler.service`, `/opt/rd2/.env`의 `GSTACK_CHROMIUM_NO_SANDBOX` 관련.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** 위 Playwright 마이그레이션과 함께 처리하면 중복 작업 줄어듦(둘 다 Chromium 실행 방식을 건드림)
+
 ### [완료] 정보공개포털 body_text 오염 3번째 변종 발견·수정 ("열람이 제한되어 있습니다")
 
 **What:** `_NO_BODY_MARKER`(단일 문자열 "청구신청")를 `_NO_BODY_MARKERS`(튜플: "청구신청"/"열람이 불가능"/"열람이 제한")로 확장. 기존 rd2.db에 이미 저장된 오염 행 2건(body_text에 "본 문서는 2026.07.07까지 열람이 제한되어 있습니다..." 안내문이 실제 본문처럼 들어가 있던 것)을 NULL로 백필.
