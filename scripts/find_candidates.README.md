@@ -30,7 +30,9 @@
      python scripts/extract_pdf_text.py --source all     # data/*.pdf → data/extracted/
      python scripts/annotate_documents.py --source all   # data/extracted/ → data/annotated/
      ```
-     (`--source`는 `molit`/`mohw`/`moe`/`PRISM` 중 하나로 좁혀서 파일럿 실행도 가능)
+     (`--source`는 고정된 목록이 아니다 — `data/{폴더명}/`에 PDF를 두고 그 폴더명을
+     그대로 주면 된다. 예: 새 지자체 문서를 넣었다면 `data/new_agency/`에 두고
+     `--source new_agency`. 특정 소스로 좁혀서 파일럿 실행하고 싶을 때도 이렇게 쓴다)
 
 이 스크립트 자체는 DB나 `.env`, OpenAI API 키가 필요 없다 — 로컬 파일만 읽고 쓴다.
 

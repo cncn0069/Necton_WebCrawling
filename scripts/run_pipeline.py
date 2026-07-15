@@ -39,7 +39,12 @@ def main() -> None:
     parser.add_argument(
         "--from-scratch", action="store_true", help="추출·주석 단계부터 전부 실행(기본은 data/annotated/가 이미 있다고 보고 스킵)"
     )
-    parser.add_argument("--source", default="all", help="--from-scratch일 때만 사용 (molit/mohw/moe/PRISM/all)")
+    parser.add_argument(
+        "--source",
+        default="all",
+        help='--from-scratch일 때만 사용. data/{source}/ 폴더명 아무거나 가능(고정 목록 아님) — '
+        '"all"이면 존재하는 출처 폴더 전부.',
+    )
     args = parser.parse_args()
 
     if args.from_scratch:

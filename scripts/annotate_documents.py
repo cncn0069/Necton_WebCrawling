@@ -3,7 +3,10 @@
 
 사용 예:
     python scripts/annotate_documents.py --source moe --limit 8   # 파일럿
-    python scripts/annotate_documents.py --source all              # 전체
+    python scripts/annotate_documents.py --source all              # data/extracted/ 아래 전부
+
+--source는 고정된 목록이 아니다 — extract_pdf_text.py가 만든 data/extracted/{폴더명}/이
+그대로 --source 값이 된다.
 """
 
 from __future__ import annotations
@@ -23,7 +26,13 @@ _DATA_ROOT = _REPO_ROOT / "data"
 _EXTRACTED_ROOT = _DATA_ROOT / "extracted"
 _ANNOTATED_ROOT = _DATA_ROOT / "annotated"
 
-_SOURCES = ["molit", "mohw", "moe", "PRISM"]
+def _discover_sources() -> list[str]:
+    """data/extracted/ 아래 실제 존재하는 출처 폴더를 동적으로 찾는다(고정 목록
+    대신 — extract_pdf_text.py와 동일한 이유, 새 부처/지자체 폴더가 코드 수정
+    없이 바로 인식돼야 함)."""
+    if not _EXTRACTED_ROOT.exists():
+        return []
+    return sorted(p.name for p in _EXTRACTED_ROOT.iterdir() if p.is_dir() and not p.name.startswith("."))
 
 
 def _iter_extracted_files(source: str | None):
@@ -55,12 +64,16 @@ def _process_one(extracted_path: Path, *, force: bool) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", choices=[*_SOURCES, "all"], default="all")
+    parser.add_argument(
+        "--source",
+        default="all",
+        help='data/extracted/{source}/ 폴더명. "all"이면 존재하는 출처 폴더 전부 처리.',
+    )
     parser.add_argument("--limit", type=int, default=None, help="소스당 처리할 최대 파일 수 (파일럿용)")
     parser.add_argument("--force", action="store_true", help="이미 처리된 파일도 재실행")
     args = parser.parse_args()
 
-    sources = _SOURCES if args.source == "all" else [args.source]
+    sources = _discover_sources() if args.source == "all" else [args.source]
     counts = {"skipped": 0, "ok": 0}
 
     for source in sources:
