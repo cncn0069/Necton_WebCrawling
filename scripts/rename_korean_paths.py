@@ -5,9 +5,9 @@ RDS로 옮기기 전에, 지금까지 한글로 저장돼 온 출처명·문서�
 
 1. data/ 아래 물리적 폴더(출처명/문서유형명)를 먼저 rename한다.
 2. DocumentStore(.env의 MariaDB 접속정보 재사용)를 통해 documents 테이블의
-   source/doc_type/body_file_path/other_file_paths 컬럼과 payload_json 백업을
-   함께 갱신한다 — payload_json은 json.loads/dumps로 파싱해서 해당 키만
-   바꾸고 다른 한글 텍스트(제목/본문 등)는 건드리지 않는다.
+   source/doc_type/body_file_path/other_file_paths 컬럼을 갱신한다
+   (payload_json 백업 컬럼은 2026-07-15 스키마 정리로 제거됨 — 컬럼이
+   유일한 SSOT).
 3. 실행 전 mysqldump로 DB를 자동 백업한다(<database>.bak-{timestamp}.sql). data/ 폴더는
    rename이 원자적 연산이라 별도 백업 없이도 실패 시 그대로 존재한다.
 4. 두 단계 모두 "이미 영어면 건드리지 않는다"로 구현되어 있어 재실행해도
@@ -22,7 +22,6 @@ RDS로 옮기기 전에, 지금까지 한글로 저장돼 온 출처명·문서�
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -101,12 +100,11 @@ def _migrate_db(*, dry_run: bool) -> list[str]:
     try:
         with store._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, source, doc_type, body_file_path, other_file_paths, payload_json "
-                "FROM documents"
+                "SELECT id, source, doc_type, body_file_path, other_file_paths FROM documents"
             )
             rows = cur.fetchall()
 
-        for row_id, source, doc_type, body_file_path, other_file_paths_raw, payload_json in rows:
+        for row_id, source, doc_type, body_file_path, other_file_paths_raw in rows:
             new_source = LEGACY_SOURCE_MAP.get(source, source)
             new_doc_type = LEGACY_DOC_TYPE_MAP.get(doc_type, doc_type)
             new_body_file_path = (
@@ -116,18 +114,6 @@ def _migrate_db(*, dry_run: bool) -> list[str]:
                 other_file_paths_raw.split("|") if other_file_paths_raw else []
             )
             new_other_file_paths = [_translate_path_str(p) for p in other_file_paths]
-
-            payload = json.loads(payload_json)
-            if payload.get("source") in LEGACY_SOURCE_MAP:
-                payload["source"] = LEGACY_SOURCE_MAP[payload["source"]]
-            if payload.get("doc_type") in LEGACY_DOC_TYPE_MAP:
-                payload["doc_type"] = LEGACY_DOC_TYPE_MAP[payload["doc_type"]]
-            if payload.get("body_file_path"):
-                payload["body_file_path"] = _translate_path_str(payload["body_file_path"])
-            if payload.get("other_file_paths"):
-                payload["other_file_paths"] = [
-                    _translate_path_str(p) for p in payload["other_file_paths"]
-                ]
 
             unchanged = (
                 new_source == source
@@ -147,13 +133,12 @@ def _migrate_db(*, dry_run: bool) -> list[str]:
                 with store._conn.cursor() as cur:
                     cur.execute(
                         "UPDATE documents SET source = %s, doc_type = %s, body_file_path = %s, "
-                        "other_file_paths = %s, payload_json = %s WHERE id = %s",
+                        "other_file_paths = %s WHERE id = %s",
                         (
                             new_source,
                             new_doc_type,
                             new_body_file_path,
                             _encode_for_storage(new_other_file_paths),
-                            json.dumps(payload, ensure_ascii=False),
                             row_id,
                         ),
                     )
