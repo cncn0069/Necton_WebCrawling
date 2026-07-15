@@ -1,10 +1,12 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from rd2.adapters import alio
 from rd2.adapters.alio import AlioAdapter
 from rd2.schema.models import CsoClassification, DisclosureStatus
-from rd2.storage.naming import DOC_TYPE_AUDIT_RESULT, SOURCE_ALIO
+from rd2.storage.naming import DOC_TYPE_AUDIT_RESULT, DOC_TYPE_DIRECTOR_ACTIVITY, SOURCE_ALIO
 
 # 실제 사이트(alio.go.kr) /search/findTotalSearch.json 응답 구조를 그대로 축약한
 # 샘플(2026-07-09 httpx 직접 요청으로 실사 확인 — commonMap/searchList 구조).
@@ -92,6 +94,93 @@ SAMPLE_TOC_HTML = """
 <li><a href="#toc-122" title="38-2. 내부&middot;외부 감사결과">38-2. 내부&middot;외부 감사결과</a></li>
 <li><a href="#toc-123" title="내부&middot;외부감사 결과">내부&middot;외부감사 결과</a></li>
 </ul>
+</div>
+"""
+
+
+# 실제 사이트(alio.go.kr) q="개별 비상임이사 활동내용"&section=attach 응답을 그대로
+# 축약한 샘플(2026-07-15 httpx 직접 요청으로 실사 확인). 감사결과와 달리
+# REPORT_FORM_NA는 section=attach 행에서 항상 null이라(실사 확인) 포함하지
+# 않는다 — TITLE(하이라이트 태그 포함)이 매칭 검증에 쓰이는 필드다.
+SAMPLE_PAGE_DIRECTOR_ACTIVITY = {
+    "status": "success",
+    "data": {
+        "commonMap": {"TOTAL_COUNT_attach": "3490", "SECTION_NAME_attach": "attach"},
+        "searchList": [
+            {
+                "SECTION_NAME": "attach",
+                "DISCLOSURE_NO": "2026071503215451",
+                "SUBMISSION_NO": "2026071410445697",
+                "FILE_NO": "101",
+                "IDATE": "2026.07.15",
+                "TITLE": "<b>개별</b> <b>비상임이사</b> <b>활동내용</b>",
+                "APBA_NA": "항공안전기술원",
+            },
+        ],
+    },
+}
+
+# 실제 사이트(alio.go.kr) doc.html을 그대로 축약한 샘플(2026-07-15 httpx 직접
+# 요청으로 실사 확인 — DISCLOSURE_NO=2026071503215451). 감사결과의 doc.html과
+# 달리 "제목" 라벨-값 쌍 자체가 없다(회차/개최일/안건내용/활동현황 표 구조라
+# 다르다) — 그래서 이 콘텐츠 유형은 title이 검색 API의 TITLE로 유지된다
+# (parse_detail()의 "doc_fields.get('title')이 있을 때만 대체" 로직이 자연스럽게
+# 처리한다, 별도 분기 불필요).
+SAMPLE_DOC_HTML_DIRECTOR_ACTIVITY = """
+<div id="doc-">
+<p class="cover-title">
+<a name="toc-122" class="toc" href="#toc-122" title="30-2. 개별 비상임이사 활동내용">30-2. 개별 비상임이사 활동내용</a>
+</p>
+<table class="nb" width="600">
+<tbody>
+<tr>
+<td height="30" width="600" align="RIGHT" valign="TOP">항공안전기술원</td>
+</tr>
+</tbody>
+</table>
+<p class="SECTION-1">
+<a name="toc-123" class="toc" href="#toc-123" title="개별 비상임이사 활동내용">개별 비상임이사 활동내용</a>
+</p>
+<table border="1" width="791">
+<thead>
+<tr>
+<th height="30" width="151" align="CENTER" valign="MIDDLE">회차</th>
+<th height="30" width="150" align="CENTER" valign="MIDDLE">개최일</th>
+<th height="30" width="294" align="CENTER" valign="MIDDLE">안건내용</th>
+<th height="30" width="196" align="CENTER" valign="MIDDLE">활동현황</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td height="76" width="151" align="CENTER" valign="MIDDLE">3회차</td>
+<td height="76" width="150" align="CENTER" valign="MIDDLE">2026년 07월 01일</td>
+<td height="76" width="294" align="CENTER" valign="MIDDLE">「직장 내 괴롭힘」 결과 보고<br/>제2026-1차 임시이사회 결과 보고<br/>「보수규정」 개정(안) 승인의 건</td>
+<td height="76" width="196" align="CENTER" valign="MIDDLE">
+<a href="javascript:report_attach_down('(공시) 2026년 비상임이사 활동내역 현황 3회차.xlsx')">(공시) 2026년 비상임이사 활동내역 현황 3회차.xlsx</a>
+</td>
+</tr>
+</tbody>
+</table>
+<table border="1" width="599">
+<tbody>
+<tr>
+<td height="30" width="150" align="CENTER" valign="MIDDLE">기준일</td>
+<td height="30" width="150" align="CENTER" valign="MIDDLE">2026년 07월 01일</td>
+<td height="30" width="150" align="CENTER" valign="TOP">제출일</td>
+<td height="30" width="149" align="CENTER" valign="MIDDLE">2026년 07월 14일</td>
+</tr>
+</tbody>
+</table>
+<table border="1" width="601">
+<thead>
+<tr><th height="31" width="105" align="CENTER" valign="MIDDLE">구분</th><th height="31" width="120" align="CENTER" valign="MIDDLE">담당자명</th><th height="31" width="237" align="CENTER" valign="MIDDLE">부서명</th><th height="31" width="139" align="CENTER" valign="MIDDLE">전화번호</th></tr>
+</thead>
+<tbody>
+<tr><td height="30" width="105" align="CENTER" valign="MIDDLE">작성자</td><td height="30" width="120" align="CENTER" valign="MIDDLE">신민균</td><td height="30" width="237" align="CENTER" valign="MIDDLE">기획전략실</td><td height="30" width="139" align="CENTER" valign="MIDDLE">032-727-5602</td></tr>
+<tr><td height="30" width="105" align="CENTER" valign="MIDDLE">감독자</td><td height="30" width="120" align="CENTER" valign="MIDDLE">이엘리사</td><td height="30" width="237" align="CENTER" valign="MIDDLE">기획전략실</td><td height="30" width="139" align="CENTER" valign="MIDDLE">032-727-5610</td></tr>
+<tr><td height="30" width="105" align="CENTER" valign="MIDDLE">확인자</td><td height="30" width="120" align="CENTER" valign="MIDDLE">임재현</td><td height="30" width="237" align="CENTER" valign="MIDDLE">감사실</td><td height="30" width="139" align="CENTER" valign="MIDDLE">032-727-5521</td></tr>
+</tbody>
+</table>
 </div>
 """
 
@@ -188,8 +277,103 @@ def test_parse_detail_and_to_schema_maps_open_track(monkeypatch, tmp_path):
     assert doc.body_file_path == str(
         Path(SOURCE_ALIO)
         / DOC_TYPE_AUDIT_RESULT
+        / "1-500"
         / "2026070903206963_101_2026년도 종합감사결과(260626).pdf"
     )
+
+
+def test_parse_detail_and_to_schema_maps_director_activity(monkeypatch, tmp_path):
+    """query/doc_type 파라미터화(2026-07-15)가 실제로 두 호출부(save_body_file,
+    Document 생성) 모두에 self.doc_type을 흘려보내는지 검증한다 — 하나만
+    검증하면 나머지가 여전히 DOC_TYPE_AUDIT_RESULT를 하드코딩해도 테스트가
+    통과할 수 있다(plan-eng-review 지적)."""
+    downloaded: list[tuple[str, str, str]] = []
+
+    def _fake_download(disclosure_no: str, file_no: str, submission_no: str) -> tuple[bytes, str]:
+        downloaded.append((disclosure_no, file_no, submission_no))
+        return b"xlsx-bytes", "(공시) 2026년 비상임이사 활동내역 현황 3회차.xlsx"
+
+    monkeypatch.setattr(alio, "_download_file", _fake_download)
+    monkeypatch.setattr(alio, "_fetch_doc_html", lambda disclosure_no: SAMPLE_DOC_HTML_DIRECTOR_ACTIVITY)
+    monkeypatch.setattr(alio, "_fetch_toc_html", lambda disclosure_no: None)
+
+    adapter = AlioAdapter(
+        query="개별 비상임이사 활동내용",
+        doc_type=DOC_TYPE_DIRECTOR_ACTIVITY,
+        files_root=tmp_path,
+    )
+    raw_item = {
+        "_title": "개별 비상임이사 활동내용",  # _clean_title이 이미 하이라이트 태그 제거한 상태
+        "_agency": "항공안전기술원",
+        "_idate": "2026.07.15",
+        "_disclosure_no": "2026071503215451",
+        "_submission_no": "2026071410445697",
+        "_file_no": "101",
+    }
+    detail = adapter.parse_detail(raw_item)
+    doc = adapter.to_schema(detail)
+
+    assert downloaded == [("2026071503215451", "101", "2026071410445697")]
+    # doc_type이 Document 레코드(DB 컬럼)에 흘러간다 — 하드코딩된 AUDIT_RESULT가
+    # 아니라 self.doc_type이어야 한다.
+    assert doc.doc_type == DOC_TYPE_DIRECTOR_ACTIVITY
+    # doc_type이 파일 저장 경로(save_body_file 호출부)에도 흘러간다 —
+    # 두 호출부 중 하나만 고치고 다른 하나를 놓치는 실수를 여기서 잡는다.
+    assert doc.body_file_path == str(
+        Path(SOURCE_ALIO)
+        / DOC_TYPE_DIRECTOR_ACTIVITY
+        / "1-500"
+        / "2026071503215451_101_(공시) 2026년 비상임이사 활동내역 현황 3회차.xlsx"
+    )
+    # doc.html에 "제목" 라벨-값 쌍이 없는 콘텐츠 유형이라(회차/개최일/안건내용
+    # 표 구조) title이 검색 API의 TITLE로 유지된다 — 감사결과처럼 doc.html의
+    # 실제 보고서명으로 대체되지 않는다(이 콘텐츠 유형의 실제 사이트 구조,
+    # 2026-07-15 실사 확인).
+    assert doc.title == "개별 비상임이사 활동내용"
+    assert doc.department == "기획전략실"
+    assert doc.start_date == date(2026, 7, 1)
+    assert doc.end_date == date(2026, 7, 14)
+    assert "3회차" in doc.body_text
+    assert "직장 내 괴롭힘" in doc.body_text
+    assert doc.disclosure_status == DisclosureStatus.OPEN
+    assert doc.cso_classification == CsoClassification.O
+
+
+def test_parse_detail_quarantines_when_title_does_not_match_query(tmp_path):
+    """alio.go.kr의 q 파라미터는 느슨한 텍스트 검색이라 무관한 문서가 섞일 수
+    있다 — TITLE이 self.query를 포함하지 않으면 quarantine(예외)돼야 한다
+    (plan-eng-review outside voice 지적, REPORT_FORM_NA는 section=attach
+    행에서 항상 null이라 TITLE로 검증)."""
+    adapter = AlioAdapter(
+        query="개별 비상임이사 활동내용",
+        doc_type=DOC_TYPE_DIRECTOR_ACTIVITY,
+        files_root=tmp_path,
+    )
+    raw_item = {
+        "_title": "지역산업 종합정보시스템 구축 사업",  # 실제 노이즈 매치 사례(2026-07-15 실사 확인)
+        "_agency": "한국지역난방공사",
+        "_idate": "2026.07.15",
+        "_disclosure_no": "2026070803206250",
+        "_submission_no": "2026070710436257",
+        "_file_no": "3060531",
+    }
+    with pytest.raises(ValueError, match="검색어 불일치"):
+        adapter.parse_detail(raw_item)
+
+
+def test_parse_detail_accepts_title_containing_query_as_substring(monkeypatch, tmp_path):
+    """기존 감사결과 어댑터의 TITLE도 query와 정확히 일치하지 않고(예:
+    "내부·외부 감사결과" vs "감사결과") 부분포함 관계다 — exact match였다면
+    이 검증 로직 자체가 기존 5,622건 수집 경로를 전부 quarantine시켰을 것."""
+    monkeypatch.setattr(alio, "_fetch_doc_html", lambda disclosure_no: None)
+    monkeypatch.setattr(alio, "_fetch_toc_html", lambda disclosure_no: None)
+
+    adapter = AlioAdapter(query="감사결과", files_root=tmp_path)
+    # "내부·외부 <b>감사결과</b>" 를 _clean_title로 정리한 값 — query와 정확히
+    # 일치하지 않지만 부분포함 관계라 quarantine되면 안 된다.
+    raw_item = {**_raw_item(), "_title": "내부·외부 감사결과"}
+    detail = adapter.parse_detail(raw_item, download_files=False)  # 예외가 나면 이 줄에서 실패
+    assert detail["_title"] == "내부·외부 감사결과"
 
 
 def test_source_url_stays_unique_across_files_sharing_one_disclosure(monkeypatch, tmp_path):

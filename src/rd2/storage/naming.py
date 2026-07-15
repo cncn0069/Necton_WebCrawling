@@ -14,7 +14,12 @@ SOURCE_MOHW = "mohw"  # 보건복지부 — scripts/collect_mohw.py 이름과 �
 SOURCE_OPEN_GO_KR = "open_go_kr"  # 정보공개포털 — scripts/collect_open_go_kr.py 이름과 통일
 SOURCE_ALIO = "alio"  # ALIO 공공기관 경영정보 공개시스템 — scripts/collect_alio.py 이름과 통일
 SOURCE_MOLIT = "molit"  # 국토교통부 정책정보 게시판 — scripts/collect_molit.py 이름과 통일
+SOURCE_ORGINL_INFO = "orginl_info"  # 정보공개포털 "원문정보" 게시판 — open_go_kr과 별개(첨부파일 있음)
 SOURCE_MOE = "moe"  # 교육부 재정·예산 정보 게시판 — scripts/collect_moe.py 이름과 통일
+SOURCE_KOREA_KR = "korea_kr"  # 대한민국 정책브리핑(korea.kr) 보도자료 — 전 부처 통합, scripts/collect_korea_kr.py 이름과 통일
+SOURCE_ME = "me"  # 기후에너지환경부(me.go.kr) 행정규칙(고시·훈령·예규) — 법제처 국가법령정보센터 연계, scripts/collect_me.py 이름과 통일
+SOURCE_MOEL = "moel"  # 고용노동부(moel.go.kr) 훈령·예규·고시 — me와 doc_type 공유(본문+첨부파일 포함), scripts/collect_moel.py 이름과 통일
+SOURCE_MOEL_POLICY = "moel_policy"  # 고용노동부(moel.go.kr) 정책자료실 — moel과 별개 게시판(행정규칙 아님), scripts/collect_moel_policy.py 이름과 통일
 
 # --- doc_type 코드 ---
 DOC_TYPE_RESEARCH_REPORT = "research_report"  # 연구보고서 (PRISM)
@@ -22,13 +27,14 @@ DOC_TYPE_BID_NOTICE = "bid_notice"  # 입찰공고 (mohw 기본값)
 DOC_TYPE_PRE_SPEC_NOTICE = "pre_spec_notice"  # 사전규격공개 (mohw)
 DOC_TYPE_BID_RENOTICE = "bid_renotice"  # 입찰재공고 (mohw)
 DOC_TYPE_PUBLIC_OFFERING = "public_offering"  # 공모 (mohw)
-DOC_TYPE_NOTICE = "notice"  # 공고 — 위 키워드에 안 걸리는 mohw 최종 폴백
+DOC_TYPE_NOTICE = "notice"  # 공고 — mohw/moel_policy 공유, 두 출처 모두 키워드 미매칭 시 최종 폴백
 DOC_TYPE_OFFICIAL_DOCUMENT = "official_document"  # 공문 (open_go_kr, 메타데이터 전용)
 DOC_TYPE_POLICY_MATERIAL = "policy_material"  # 정책정보 (molit 기본값)
 DOC_TYPE_MEETING_MINUTES = "meeting_minutes"  # 회의록 (molit, 제목 키워드로 분리)
 DOC_TYPE_BUDGET_MATERIAL = "budget_material"  # 예산·결산자료 (moe 기본값, 단일 유형 — 2026-07-13 결정 참고)
 DOC_TYPE_SYNTHETIC_DOCUMENT = "synthetic_document"  # 합성문서 (synthetic-llm, 메타데이터 전용)
-DOC_TYPE_AUDIT_RESULT = "audit_result"  # 감사결과 (alio 고정값 — 검색어 자체가 "감사결과")
+DOC_TYPE_AUDIT_RESULT = "audit_result"  # 감사결과 (alio 기본값 — query="감사결과")
+DOC_TYPE_DIRECTOR_ACTIVITY = "director_activity"  # 비상임이사 활동내용 (alio, query="개별 비상임이사 활동내용")
 DOC_TYPE_REPORT = "report"  # 보고서/결과보고 (open_go_kr, 제목 키워드로 분리)
 DOC_TYPE_PERSONNEL = "personnel"  # 인사발령 (open_go_kr, 제목 키워드로 분리)
 DOC_TYPE_APPROVAL = "approval"  # 승인/승인요청 (open_go_kr, 제목 키워드로 분리)
@@ -36,6 +42,13 @@ DOC_TYPE_REPLY_NOTIFICATION = "reply_notification"  # 회신/통보 (open_go_kr,
 DOC_TYPE_BUDGET_EXECUTION = "budget_execution"  # 지급/지출/품의 등 예산집행 (open_go_kr, 최다 비중 52%)
 DOC_TYPE_PLAN = "plan"  # 계획(안) (open_go_kr, 제목 키워드로 분리)
 DOC_TYPE_BUSINESS_TRIP = "business_trip"  # 출장 (open_go_kr, 제목 키워드로 분리)
+DOC_TYPE_PRESS_RELEASE = "press_release"  # 보도자료 (korea_kr 고정값 — 이 출처는 문서유형이 하나뿐)
+DOC_TYPE_NOTIFICATION = "notification"  # 고시 (me/moel 공유, 상세페이지의 "행정규칙종류"/"유형" 필드값 기반 분류)
+DOC_TYPE_DIRECTIVE = "directive"  # 훈령 (me/moel 공유, 상세페이지의 "행정규칙종류"/"유형" 필드값 기반 분류)
+DOC_TYPE_REGULATION = "regulation"  # 예규 (me/moel 공유, 상세페이지의 "행정규칙종류"/"유형" 필드값 기반 분류)
+DOC_TYPE_STATUS_REPORT = "status_report"  # 현황·통계보고 (moel_policy, 제목 키워드로 분리 — "현황"/"보고서")
+DOC_TYPE_GUIDE = "guide"  # 가이드·매뉴얼·지침 (moel_policy, 제목 키워드로 분리)
+DOC_TYPE_INTERPRETATION_COMPILATION = "interpretation_compilation"  # 질의회시집 (moel_policy, 제목에 "질의회시집" 포함)
 
 # 마이그레이션 스크립트가 순회할 한글→영어 딕셔너리.
 # 어댑터/conformance.py는 위 개별 상수를 직접 참조하고, 값 치환이 필요한

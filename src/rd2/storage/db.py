@@ -22,35 +22,40 @@ from dotenv import load_dotenv
 from rd2.schema.models import Document
 
 # RD-2 v1.1 필수 메타정보 16개 필드 + source/doc_type —
-# payload_json 안에만 있으면 department/production_date 등으로 SQL 필터링·정렬이
-# 불가능하므로 실제 컬럼으로 승격한다. payload_json은 전체 문서 백업/향후 확장용으로 유지.
+# department/production_date 등으로 SQL 필터링·정렬이 가능하도록 전부 실제
+# 컬럼으로 존재한다(payload_json 백업 컬럼은 2026-07-15 스키마 정리로 제거 —
+# 컬럼과 JSON 두 곳을 매번 동기화해야 하는 이중 SSOT 문제가 있었음. 대신
+# 컬럼이 유일한 SSOT가 됨. 트레이드오프: 앞으로 필드가 추가되면 과거 행은
+# payload_json에서 역추출해 백필할 수 없고 NULL로 남는다).
 # source/doc_type은 2026-07-07 오전 office-hours에서 "16개 필드 한정" 결정에 따라
 # 한 차례 컬럼에서 제거됐다가, 같은 날 오후 후속 office-hours에서 본문파일을
 # 출처별/문서종류별 폴더로 정리하는 요구가 생기며 다시 컬럼으로 복원됨(design doc:
 # 안정현-design-20260707-115203.md 참고) — 단순 조회 편의가 아니라 파일 저장 경로를
 # 결정하는 입력값이 됐기 때문. is_synthetic/source_url은 이번 요청과 무관해 계속 제외.
 #
-# body_text만 LONGTEXT — MariaDB TEXT는 64KB 한계라(SQLite TEXT는 무제한이었음),
-# molit 회의록처럼 긴 원문이 쌓이면 넘길 수 있어 여유있게 잡음. 나머지 메타필드는
-# 전부 짧은 값이라 TEXT(64KB)로 충분.
+# 타입은 실제 컬럼 값 길이 실측(2026-07-15, 12,707건 기준)에 여유를 두고 정함.
+# body_text/content_summary/non_disclosure_reason/body_file_path/other_file_paths/
+# table_of_contents는 길어질 수 있는 값이라 TEXT/LONGTEXT 유지. 날짜 필드는
+# Document 모델에서 이미 date 타입으로 검증되어(전 어댑터가 strptime으로 파싱)
+# TEXT로 둘 이유가 없어 DATE로.
 _EXTRA_COLUMNS: list[tuple[str, str]] = [
-    ("title", "TEXT"),
-    ("ordering_agency", "TEXT"),
-    ("department", "TEXT"),
-    ("unit_task", "TEXT"),
-    ("production_date", "TEXT"),
-    ("disclosure_status", "TEXT"),
-    ("subject_category", "TEXT"),
+    ("title", "VARCHAR(255)"),
+    ("ordering_agency", "VARCHAR(255)"),
+    ("department", "VARCHAR(255)"),
+    ("unit_task", "VARCHAR(255)"),
+    ("production_date", "DATE"),
+    ("disclosure_status", "VARCHAR(10)"),
+    ("subject_category", "VARCHAR(100)"),
     ("content_summary", "TEXT"),
     ("body_text", "LONGTEXT"),
     ("body_file_path", "TEXT"),
     ("non_disclosure_reason", "TEXT"),
-    ("cso_sub_clause", "TEXT"),
-    ("performing_agency", "TEXT"),
-    ("start_date", "TEXT"),
-    ("end_date", "TEXT"),
-    ("source", "TEXT"),
-    ("doc_type", "TEXT"),
+    ("cso_sub_clause", "VARCHAR(20)"),
+    ("performing_agency", "VARCHAR(100)"),
+    ("start_date", "DATE"),
+    ("end_date", "DATE"),
+    ("source", "VARCHAR(50)"),
+    ("doc_type", "VARCHAR(50)"),
     ("other_file_paths", "TEXT"),
     ("table_of_contents", "TEXT"),
 ]
@@ -60,17 +65,25 @@ def _encode_for_storage(value: object) -> object:
     join한 문자열로 인코딩해서 저장한다. "|"는 파일시스템 금지문자라 각 경로 안에
     나올 수 없으므로(안정현-design-20260707-115203.md의 sanitize 규칙 참고) 구분자로
     안전하다 — 예전엔 json.dumps를 썼는데, 그러면 파일명 자체에 들어있는 쉼표와 리스트
-    구분용 쉼표가 섞여 사람이 눈으로/스프레드시트로 훑어볼 때 헷갈렸다.
-    payload_json에는 원래 list 그대로 남으므로 이 인코딩은 documents 컬럼 표시용일 뿐이다."""
+    구분용 쉼표가 섞여 사람이 눈으로/스프레드시트로 훑어볼 때 헷갈렸다."""
     if isinstance(value, list):
         return "|".join(value)
     return value
 
+# Document 모델에서 디폴트 없는 필수 필드(schema/models.py)인데 DB 컬럼은 지금까지
+# nullable이었던 것들 — ADD COLUMN 단계(구버전 DB에 컬럼 자체가 없을 때)는 계속
+# nullable로 추가한다(기존 행에 채울 값이 없는데 NOT NULL+DEFAULT 없이 ALTER하면
+# 실패하므로, payload_json 백업도 없어져 역추출 백필도 불가능). 컬럼이 이미 있는
+# 상태에서만 별도로 NOT NULL로 좁힌다(_migrate_not_null_constraints). 로컬(12,707건)·
+# RDS(34,086건) 양쪽 다 NULL 값 0건 실측 확인(2026-07-15) 후 추가.
+_NOT_NULL_COLUMNS: list[str] = ["ordering_agency", "disclosure_status"]
+
 # 과거 스키마에 있었지만 RD-2 v1.1 필수 필드 목록에 없어 컬럼에서 제거된 것들.
-# payload_json에는 계속 남아있으므로 데이터 손실은 없다. abstract는 body_text와
-# 설명이 중복돼(둘 다 "초록"을 가리킴, 2026-07-07 수집계획 리뷰로 발견) 필드 자체를
-# Document 모델에서 제거함 — 기존 DB에 남은 컬럼도 이걸로 정리된다.
-_DEPRECATED_COLUMNS: list[str] = ["is_synthetic", "source_url", "abstract"]
+# abstract는 body_text와 설명이 중복돼(둘 다 "초록"을 가리킴, 2026-07-07 수집계획
+# 리뷰로 발견) 필드 자체를 Document 모델에서 제거함 — 기존 DB에 남은 컬럼도 이걸로
+# 정리된다. payload_json은 2026-07-15 스키마 정리로 제거 — 개별 컬럼이 유일한
+# SSOT가 됨(제거 전 백업: dump_pre_schema_migration_*.sql.gz).
+_DEPRECATED_COLUMNS: list[str] = ["is_synthetic", "source_url", "abstract", "payload_json"]
 
 # dedup_key(source::source_url)에 유니크 인덱스를 걸어야 해서 VARCHAR로 길이 제한이
 # 필요하다(TEXT는 InnoDB가 인덱스를 못 만듦). utf8mb4에서 InnoDB 인덱스 최대 길이가
@@ -81,14 +94,15 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
     id INT PRIMARY KEY AUTO_INCREMENT,
     dedup_key VARCHAR(""" + str(_DEDUP_KEY_MAXLEN) + """) NOT NULL,
-    payload_json LONGTEXT NOT NULL,
     cso_classification VARCHAR(16) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP""" + "".join(
-    f",\n    {name} {sqltype}" for name, sqltype in _EXTRA_COLUMNS
+    f",\n    {name} {sqltype}" + (" NOT NULL" if name in _NOT_NULL_COLUMNS else "")
+    for name, sqltype in _EXTRA_COLUMNS
 ) + """
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_dedup_key ON documents(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_documents_cso_classification ON documents(cso_classification);
 
 CREATE TABLE IF NOT EXISTS quarantine (
     id INT PRIMARY KEY AUTO_INCREMENT,
@@ -143,8 +157,11 @@ class DocumentStore:
         )
         self._execute_script(_SCHEMA)
         self._conn.commit()
-        self._migrate_and_backfill()
+        self._add_missing_columns()
         self._drop_deprecated_columns()
+        self._migrate_column_types()
+        self._migrate_not_null_constraints()
+        self._migrate_constraints()
 
     def _execute_script(self, script: str) -> None:
         """pymysql은 sqlite3.executescript 같은 다중 statement 실행기가 없어
@@ -174,9 +191,10 @@ class DocumentStore:
             )
             return {row[0] for row in cur.fetchall()}
 
-    def _migrate_and_backfill(self) -> None:
-        """구 스키마(payload_json 컬럼만 있던 DB)를 열었을 때, 누락된 컬럼을
-        추가하고 기존 행의 payload_json에서 값을 채운다."""
+    def _add_missing_columns(self) -> None:
+        """구 스키마(일부 RD-2 컬럼이 없던 DB)를 열었을 때 누락된 컬럼을 추가한다.
+        새로 추가된 컬럼의 기존 행 값은 NULL로 남는다 — payload_json 백업 컬럼을
+        2026-07-15에 제거하면서 과거 행을 역추출로 백필하는 안전망도 함께 없어짐."""
         existing = self._existing_columns("documents")
         missing = [(name, sqltype) for name, sqltype in _EXTRA_COLUMNS if name not in existing]
         if not missing:
@@ -186,27 +204,99 @@ class DocumentStore:
                 cur.execute(f"ALTER TABLE documents ADD COLUMN {name} {sqltype}")
         self._conn.commit()
 
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT id, payload_json FROM documents")
-            rows = cur.fetchall()
-        with self._conn.cursor() as cur:
-            for row_id, payload_json in rows:
-                payload = json.loads(payload_json)
-                values = [_encode_for_storage(payload.get(name)) for name, _ in missing]
-                set_clause = ", ".join(f"{name} = %s" for name, _ in missing)
-                cur.execute(
-                    f"UPDATE documents SET {set_clause} WHERE id = %s", (*values, row_id)
-                )
-        self._conn.commit()
-
     def _drop_deprecated_columns(self) -> None:
-        """RD-2 v1.1 필수 필드 목록에 없는 컬럼(source/is_synthetic/source_url/doc_type)을
-        기존 DB에서 제거한다. payload_json에 값이 남아있으므로 데이터 손실은 없다."""
+        """RD-2 v1.1 필수 필드 목록에 없는 컬럼(source/is_synthetic/source_url/doc_type)과
+        payload_json(2026-07-15 제거, 컬럼이 유일한 SSOT가 됨)을 기존 DB에서 없앤다."""
         existing = self._existing_columns("documents")
         with self._conn.cursor() as cur:
             for name in _DEPRECATED_COLUMNS:
                 if name in existing:
                     cur.execute(f"ALTER TABLE documents DROP COLUMN {name}")
+        self._conn.commit()
+
+    def _migrate_column_types(self) -> None:
+        """구버전 DB(_EXTRA_COLUMNS가 전부 TEXT였던 시절)를 열었을 때 DATE/VARCHAR로
+        타입을 맞춘다. 날짜 컬럼은 항상 ISO 문자열(YYYY-MM-DD)이거나 NULL이었음을
+        실측 확인했고, 짧은 필드도 실측 최대 길이 안에 여유있게 VARCHAR 길이를
+        잡았으므로(2026-07-15, RDS 34,086건 기준 재검증) MariaDB의 암묵 변환으로
+        안전하게 MODIFY 가능하다. 길이만 바뀐 경우(예: VARCHAR(100)→VARCHAR(255))도
+        data_type만 보면 "varchar==varchar"라 스킵되므로 길이까지 비교한다."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, data_type, character_maximum_length "
+                "FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'documents'",
+                (self.database,),
+            )
+            current_types = {row[0]: (row[1].lower(), row[2]) for row in cur.fetchall()}
+            for name, sqltype in _EXTRA_COLUMNS:
+                current = current_types.get(name)
+                if current is None:
+                    continue
+                current_base, current_len = current
+                target_base = sqltype.split("(")[0].lower()
+                target_len = (
+                    int(sqltype.split("(")[1].rstrip(")")) if "(" in sqltype else None
+                )
+                if current_base != target_base or (
+                    target_base == "varchar" and current_len != target_len
+                ):
+                    cur.execute(f"ALTER TABLE documents MODIFY COLUMN {name} {sqltype}")
+        self._conn.commit()
+
+    def _migrate_not_null_constraints(self) -> None:
+        """_NOT_NULL_COLUMNS를 NOT NULL로 좁힌다. 기존 행에 NULL이 하나라도 있으면
+        MariaDB가 MODIFY 자체를 거부하므로(안전장치 겸용) 먼저 확인하고, NULL이
+        있으면 조용히 스킵한다 — payload_json 백업이 없어 역추출 백필이 불가능한
+        구버전 DB를 열었을 때 이 메서드가 예외로 죽지 않게 하기 위함."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'documents'",
+                (self.database,),
+            )
+            nullability = dict(cur.fetchall())
+            sqltypes = dict(_EXTRA_COLUMNS)
+            for name in _NOT_NULL_COLUMNS:
+                if nullability.get(name) != "YES":
+                    continue
+                cur.execute(f"SELECT COUNT(*) FROM documents WHERE {name} IS NULL")
+                if cur.fetchone()[0] > 0:
+                    continue
+                cur.execute(
+                    f"ALTER TABLE documents MODIFY COLUMN {name} {sqltypes[name]} NOT NULL"
+                )
+        self._conn.commit()
+
+    def _migrate_constraints(self) -> None:
+        """cso_classification/disclosure_status에 DB 레벨 CHECK 제약을 건다 —
+        이 앱을 거치지 않은 직접 INSERT/UPDATE도 잘못된 값을 못 넣도록. 수집
+        스크립트가 시작할 때마다 도는 count_by_doc_type(source)이
+        WHERE source = ... GROUP BY doc_type 패턴이라 (source, doc_type) 복합
+        인덱스도 함께 건다(2026-07-15 실측: RDS 34,086건, 상시 크롤링 서비스로
+        계속 증가 중)."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT constraint_name FROM information_schema.table_constraints "
+                "WHERE table_schema = %s AND table_name = 'documents' "
+                "AND constraint_type = 'CHECK'",
+                (self.database,),
+            )
+            existing_checks = {row[0] for row in cur.fetchall()}
+            if "chk_documents_cso_classification" not in existing_checks:
+                cur.execute(
+                    "ALTER TABLE documents ADD CONSTRAINT chk_documents_cso_classification "
+                    "CHECK (cso_classification IN ('O', 'C', 'S'))"
+                )
+            if "chk_documents_disclosure_status" not in existing_checks:
+                cur.execute(
+                    "ALTER TABLE documents ADD CONSTRAINT chk_documents_disclosure_status "
+                    "CHECK (disclosure_status IN ('공개', '부분공개', '비공개'))"
+                )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_source_doc_type "
+                "ON documents(source, doc_type)"
+            )
         self._conn.commit()
 
     def upsert(self, doc: Document) -> bool:
@@ -216,23 +306,17 @@ class DocumentStore:
         전체 테이블 스캔이 아니다 (성능 리뷰 #1 반영).
         """
         key = _dedup_key(doc.source, doc.source_url)
-        # mode="json"으로 dump하면 date는 ISO 문자열, enum은 .value로 직렬화되어
-        # payload_json과 개별 컬럼 값이 항상 동일한 표현을 갖는다.
+        # mode="json"으로 dump하면 date는 ISO 문자열, enum은 .value로 직렬화된다.
         dump = doc.model_dump(mode="json")
         extra_columns = [name for name, _ in _EXTRA_COLUMNS]
         extra_values = [_encode_for_storage(dump.get(name)) for name in extra_columns]
-        columns = ["dedup_key", "payload_json", "cso_classification", *extra_columns]
+        columns = ["dedup_key", "cso_classification", *extra_columns]
         placeholders = ", ".join("%s" for _ in columns)
         try:
             with self._conn.cursor() as cur:
                 cur.execute(
                     f"INSERT INTO documents ({', '.join(columns)}) VALUES ({placeholders})",
-                    (
-                        key,
-                        doc.model_dump_json(),
-                        doc.cso_classification.value,
-                        *extra_values,
-                    ),
+                    (key, doc.cso_classification.value, *extra_values),
                 )
             self._conn.commit()
             return True
@@ -300,28 +384,12 @@ class DocumentStore:
     def update_files(
         self, dedup_key: str, body_file_path: str | None, other_file_paths: list[str]
     ) -> None:
-        """백필 패스가 나중에 받아온 파일 경로를 기존 행에 반영한다. payload_json도
-        같이 갱신해야 컬럼과 백업 JSON이 어긋나지 않는다."""
+        """백필 패스가 나중에 받아온 파일 경로를 기존 행에 반영한다."""
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT payload_json FROM documents WHERE dedup_key = %s", (dedup_key,)
-            )
-            row = cur.fetchone()
-        if row is None:
-            return
-        payload = json.loads(row[0])
-        payload["body_file_path"] = body_file_path
-        payload["other_file_paths"] = other_file_paths
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "UPDATE documents SET body_file_path = %s, other_file_paths = %s, "
-                "payload_json = %s WHERE dedup_key = %s",
-                (
-                    body_file_path,
-                    _encode_for_storage(other_file_paths),
-                    json.dumps(payload, ensure_ascii=False),
-                    dedup_key,
-                ),
+                "UPDATE documents SET body_file_path = %s, other_file_paths = %s "
+                "WHERE dedup_key = %s",
+                (body_file_path, _encode_for_storage(other_file_paths), dedup_key),
             )
         self._conn.commit()
 
@@ -344,6 +412,16 @@ class DocumentStore:
             else:
                 cur.execute("SELECT COUNT(*) FROM documents")
             return cur.fetchone()[0]
+
+    def count_by_doc_type(self, source: str) -> dict[str, int]:
+        """source별 doc_type 분포 — 수집 스크립트가 doc_type당 상한(cap)을 걸 때
+        기존에 이미 쌓인 건수부터 이어서 세기 위해 필요하다."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT doc_type, COUNT(*) FROM documents WHERE source = %s GROUP BY doc_type",
+                (source,),
+            )
+            return dict(cur.fetchall())
 
     def count_quarantine(self) -> int:
         with self._conn.cursor() as cur:

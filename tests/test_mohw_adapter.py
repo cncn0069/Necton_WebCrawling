@@ -151,10 +151,10 @@ def test_parse_detail_and_to_schema_maps_open_track(monkeypatch, tmp_path):
     assert len(downloaded_urls) == 2
     # 제목과 가장 비슷한 파일명("모집 공고.pdf")이 대표 파일로 선정돼야 한다.
     assert doc.body_file_path == str(
-        Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1485628_전자바우처 통합카드사업자 모집 공고.pdf"
+        Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1-500" / "1485628_전자바우처 통합카드사업자 모집 공고.pdf"
     )
     assert doc.other_file_paths == [
-        str(Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1485628_입찰공고서(전자바우처 통합카드사업).hwpx")
+        str(Path(SOURCE_MOHW) / DOC_TYPE_BID_NOTICE / "1-500" / "1485628_입찰공고서(전자바우처 통합카드사업).hwpx")
     ]
 
 
@@ -234,5 +234,5 @@ def test_download_and_save_files_uses_inferred_doc_type_not_hardcoded_bid_notice
         body_file_path, _ = adapter._download_and_save_files(
             f"list-{i}", title, [{"filename": "file.pdf", "href": f"https://example.com/{i}"}]
         )
-        assert body_file_path == str(Path(SOURCE_MOHW) / expected_doc_type / f"list-{i}_file.pdf")
-        assert (tmp_path / SOURCE_MOHW / expected_doc_type / f"list-{i}_file.pdf").exists()
+        assert body_file_path == str(Path(SOURCE_MOHW) / expected_doc_type / "1-500" / f"list-{i}_file.pdf")
+        assert (tmp_path / SOURCE_MOHW / expected_doc_type / "1-500" / f"list-{i}_file.pdf").exists()

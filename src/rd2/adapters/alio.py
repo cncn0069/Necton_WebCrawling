@@ -42,10 +42,15 @@ RD-2 O트랙 신규 출처. 실제 사이트 조사(httpx 직접 요청, 2026-07
   행 = Document 한 건)를 그대로 유지하므로, 상세페이지 자체는 DISCLOSURE_NO
   단위라도 fileNo를 덧붙여 한 공시에 첨부파일이 여러 개인 경우(실사 확인: 최대
   3개)에도 dedup_key가 겹치지 않게 한다.
-- 이 어댑터는 검색어 하나(기본 "감사결과") 범위로 수집을 한정한다 — PRISM처럼
-  이 소스는 검색어당 문서 유형이 고정되므로 doc_type도 고정값(DOC_TYPE_AUDIT_RESULT)
-  으로 둔다. 다른 검색어로 다른 문서유형을 수집하려면 이 어댑터를 복사하거나
-  query 인자와 doc_type을 함께 파라미터화해야 한다(현재는 미지원).
+- 검색어당 문서 유형이 고정되므로(예: "감사결과"→audit_result, "개별 비상임이사
+  활동내용"→director_activity) `query`와 `doc_type`을 함께 생성자 인자로 받는다
+  (2026-07-15 파라미터화 — 두 콘텐츠 유형이 section=attach 행 구조를 그대로
+  공유함을 확인한 뒤 어댑터 자체를 확장했다, 별도 모듈 불필요). alio.go.kr의
+  `q` 파라미터는 정확한 필터가 아니라 느슨한 텍스트 검색이라(실사 확인: `q=활동내역`
+  같은 느슨한 단어는 무관한 문서까지 섞인다) 반드시 정확한 REPORT_FORM_NA 값을
+  검색어로 써야 한다. `fetch_list()`가 각 행의 REPORT_FORM_NA를 보존하고
+  `parse_detail()`이 생성자에 전달된 query와 대조해 불일치 시 quarantine 처리한다
+  (30건 표본 검증만으로는 전체 수천 건의 순수성을 보장할 수 없다는 판단).
 - ALIO는 전부 공개된 경영공시 자료라 비공개·부분공개 개념이 없다 —
   disclosure_status/cso_classification은 항상 OPEN/O.
 """
@@ -217,9 +222,15 @@ def _download_file(disclosure_no: str, file_no: str, submission_no: str) -> tupl
 class AlioAdapter(SourceAdapter):
     source_name = SOURCE_ALIO
 
-    def __init__(self, files_root: Path | None = None, query: str = DEFAULT_QUERY):
+    def __init__(
+        self,
+        files_root: Path | None = None,
+        query: str = DEFAULT_QUERY,
+        doc_type: str = DOC_TYPE_AUDIT_RESULT,
+    ):
         self.files_root = files_root or DEFAULT_FILES_ROOT
         self.query = query
+        self.doc_type = doc_type
 
     def fetch_list(
         self,
@@ -262,7 +273,25 @@ class AlioAdapter(SourceAdapter):
 
     def parse_detail(self, raw_item: dict, *, download_files: bool = True) -> dict:
         """게시글 상세 조각(doc.html/toc.html)을 조회해 진짜 보고서명/작성부서/
-        제출일/본문/목차를 채우고, 첨부파일 본체를 다운로드한다."""
+        제출일/본문/목차를 채우고, 첨부파일 본체를 다운로드한다.
+
+        alio.go.kr의 `q` 파라미터는 정확한 필터가 아니라 느슨한 텍스트 검색이라,
+        검색 결과 행 중 실제로는 무관한 문서(다른 REPORT_FORM_NA)가 섞여 나올 수
+        있다(실사 확인: q=활동내역 같은 느슨한 검색어는 무관 문서 수천 건을
+        섞는다 — 모듈 독스트링 참고). 검색 결과 목록에 REPORT_FORM_NA 필드
+        자체가 없어(section=attach 행은 항상 null, 실사 확인) TITLE(하이라이트
+        태그 제거 후)로 매칭을 검증한다 — self.query를 부분문자열로 포함하지
+        않으면 무관한 문서로 보고 quarantine 처리한다(예외를 던져 호출부의
+        quarantine 로직을 태운다). exact match가 아니라 부분포함 검사인 이유는
+        기존 감사결과 어댑터의 TITLE도 "내부·외부 감사결과"처럼 query와 정확히
+        일치하지 않고 포함 관계이기 때문 — exact match면 기존 5,622건 수집
+        경로가 전부 quarantine된다."""
+        if self.query not in raw_item["_title"]:
+            raise ValueError(
+                f"검색어 불일치 — TITLE {raw_item['_title']!r}에 검색어 "
+                f"{self.query!r}가 포함되지 않음 (느슨한 검색으로 섞인 무관 문서 의심)"
+            )
+
         detail = dict(raw_item)
         disclosure_no = raw_item["_disclosure_no"]
 
@@ -299,7 +328,7 @@ class AlioAdapter(SourceAdapter):
         path = save_body_file(
             self.files_root,
             self.source_name,
-            DOC_TYPE_AUDIT_RESULT,
+            self.doc_type,
             identifier,
             filename,
             raw_bytes,
@@ -344,6 +373,6 @@ class AlioAdapter(SourceAdapter):
             cso_classification=CsoClassification.O,
             source=self.source_name,
             source_url=source_url,
-            doc_type=DOC_TYPE_AUDIT_RESULT,
+            doc_type=self.doc_type,
             is_synthetic=False,
         )

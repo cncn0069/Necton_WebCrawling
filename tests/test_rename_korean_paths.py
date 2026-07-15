@@ -1,4 +1,3 @@
-import json
 import sys
 from pathlib import Path
 
@@ -17,10 +16,12 @@ from rd2.storage.naming import DOC_TYPE_RESEARCH_REPORT, SOURCE_PRISM
 @pytest.fixture(autouse=True)
 def _use_test_database(monkeypatch):
     """_migrate_db/_validate는 rename_korean_paths.py 안에서 인자 없이 DocumentStore()를
-    호출해 .env의 MARIADB_DATABASE를 그대로 본다 — 그게 rd2_dev(운영 데이터)를 가리키므로,
-    env를 rd2_test로 덮어써서 이 테스트 파일의 모든 DocumentStore() 호출(테스트 헬퍼+
-    스크립트 함수 양쪽 다)이 같은 테스트 DB를 보게 강제한다. 이걸 빼먹으면 테스트가
-    실수로 운영 DB를 UPDATE할 수 있다(실제로 한 번 이렇게 걸렸음)."""
+    호출해 .env의 MARIADB_DATABASE를 그대로 본다 — 그게 rd2_dump(실 작업 데이터)를
+    가리키므로, env를 rd2_test로 덮어써서 이 테스트 파일의 모든 DocumentStore() 호출
+    (테스트 헬퍼+스크립트 함수 양쪽 다)이 같은 테스트 DB를 보게 강제한다. 이걸
+    빼먹으면 테스트가 실수로 실 작업 DB를 TRUNCATE/UPDATE할 수 있다(2026-07-09,
+    2026-07-13 두 번 실제로 이렇게 걸렸음 — 후자는 rd2_test를 실 작업 DB와 그대로
+    공유하고 있어서 발생, .env 분리로 재발 방지)."""
     monkeypatch.setenv("MARIADB_DATABASE", "rd2_test")
     store = DocumentStore()
     try:
@@ -35,29 +36,21 @@ def _use_test_database(monkeypatch):
 def _seed_db(*, source: str, doc_type: str, body_file_path: str | None) -> None:
     store = DocumentStore()
     try:
-        payload = {
-            "title": "테스트 문서",
-            "ordering_agency": "테스트기관",
-            "source": source,
-            "doc_type": doc_type,
-            "body_file_path": body_file_path,
-            "other_file_paths": [],
-            "cso_classification": "O",
-            "disclosure_status": "공개",
-            "is_synthetic": False,
-        }
         with store._conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO documents (dedup_key, payload_json, cso_classification, source, "
-                "doc_type, body_file_path, other_file_paths) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO documents (dedup_key, cso_classification, title, "
+                "ordering_agency, source, doc_type, body_file_path, other_file_paths, "
+                "disclosure_status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     f"{source}::https://example.com/1",
-                    json.dumps(payload, ensure_ascii=False),
                     "O",
+                    "테스트 문서",
+                    "테스트기관",
                     source,
                     doc_type,
                     body_file_path,
                     "",
+                    "공개",
                 ),
             )
         store._conn.commit()
@@ -125,7 +118,7 @@ def test_rename_folders_dry_run_makes_no_changes(tmp_path):
     assert not (data_root / "PRISM" / "research_report").exists()
 
 
-def test_migrate_db_updates_column_and_payload_json_together():
+def test_migrate_db_updates_columns():
     _seed_db(
         source="보건복지부",
         doc_type="입찰공고",
@@ -135,8 +128,8 @@ def test_migrate_db_updates_column_and_payload_json_together():
     changes = _migrate_db(dry_run=False)
     assert len(changes) == 1
 
-    source, doc_type, body_file_path, payload_json = _fetch_one(
-        "SELECT source, doc_type, body_file_path, payload_json FROM documents"
+    source, doc_type, body_file_path = _fetch_one(
+        "SELECT source, doc_type, body_file_path FROM documents"
     )
 
     expected_path = str(Path("mohw") / "bid_notice" / "1_file.pdf")
@@ -144,12 +137,9 @@ def test_migrate_db_updates_column_and_payload_json_together():
     assert doc_type == "bid_notice"
     assert body_file_path == expected_path
 
-    payload = json.loads(payload_json)
-    assert payload["source"] == "mohw"
-    assert payload["doc_type"] == "bid_notice"
-    assert payload["body_file_path"] == expected_path
-    # payload_json의 다른 한글 텍스트(제목 등)는 이 마이그레이션이 건드리면 안 된다.
-    assert payload["title"] == "테스트 문서"
+    # 한글 텍스트(제목 등)는 이 마이그레이션이 건드리면 안 된다.
+    title = _fetch_one("SELECT title FROM documents")[0]
+    assert title == "테스트 문서"
 
 
 def test_migrate_db_is_idempotent():
