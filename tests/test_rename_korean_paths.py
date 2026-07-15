@@ -1,4 +1,3 @@
-import json
 import sys
 from pathlib import Path
 
@@ -37,29 +36,21 @@ def _use_test_database(monkeypatch):
 def _seed_db(*, source: str, doc_type: str, body_file_path: str | None) -> None:
     store = DocumentStore()
     try:
-        payload = {
-            "title": "테스트 문서",
-            "ordering_agency": "테스트기관",
-            "source": source,
-            "doc_type": doc_type,
-            "body_file_path": body_file_path,
-            "other_file_paths": [],
-            "cso_classification": "O",
-            "disclosure_status": "공개",
-            "is_synthetic": False,
-        }
         with store._conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO documents (dedup_key, payload_json, cso_classification, source, "
-                "doc_type, body_file_path, other_file_paths) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO documents (dedup_key, cso_classification, title, "
+                "ordering_agency, source, doc_type, body_file_path, other_file_paths, "
+                "disclosure_status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     f"{source}::https://example.com/1",
-                    json.dumps(payload, ensure_ascii=False),
                     "O",
+                    "테스트 문서",
+                    "테스트기관",
                     source,
                     doc_type,
                     body_file_path,
                     "",
+                    "공개",
                 ),
             )
         store._conn.commit()
@@ -127,7 +118,7 @@ def test_rename_folders_dry_run_makes_no_changes(tmp_path):
     assert not (data_root / "PRISM" / "research_report").exists()
 
 
-def test_migrate_db_updates_column_and_payload_json_together():
+def test_migrate_db_updates_columns():
     _seed_db(
         source="보건복지부",
         doc_type="입찰공고",
@@ -137,8 +128,8 @@ def test_migrate_db_updates_column_and_payload_json_together():
     changes = _migrate_db(dry_run=False)
     assert len(changes) == 1
 
-    source, doc_type, body_file_path, payload_json = _fetch_one(
-        "SELECT source, doc_type, body_file_path, payload_json FROM documents"
+    source, doc_type, body_file_path = _fetch_one(
+        "SELECT source, doc_type, body_file_path FROM documents"
     )
 
     expected_path = str(Path("mohw") / "bid_notice" / "1_file.pdf")
@@ -146,12 +137,9 @@ def test_migrate_db_updates_column_and_payload_json_together():
     assert doc_type == "bid_notice"
     assert body_file_path == expected_path
 
-    payload = json.loads(payload_json)
-    assert payload["source"] == "mohw"
-    assert payload["doc_type"] == "bid_notice"
-    assert payload["body_file_path"] == expected_path
-    # payload_json의 다른 한글 텍스트(제목 등)는 이 마이그레이션이 건드리면 안 된다.
-    assert payload["title"] == "테스트 문서"
+    # 한글 텍스트(제목 등)는 이 마이그레이션이 건드리면 안 된다.
+    title = _fetch_one("SELECT title FROM documents")[0]
+    assert title == "테스트 문서"
 
 
 def test_migrate_db_is_idempotent():
