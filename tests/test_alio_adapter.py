@@ -277,6 +277,7 @@ def test_parse_detail_and_to_schema_maps_open_track(monkeypatch, tmp_path):
     assert doc.body_file_path == str(
         Path(SOURCE_ALIO)
         / DOC_TYPE_AUDIT_RESULT
+        / "1-500"
         / "2026070903206963_101_2026년도 종합감사결과(260626).pdf"
     )
 
@@ -321,6 +322,7 @@ def test_parse_detail_and_to_schema_maps_director_activity(monkeypatch, tmp_path
     assert doc.body_file_path == str(
         Path(SOURCE_ALIO)
         / DOC_TYPE_DIRECTOR_ACTIVITY
+        / "1-500"
         / "2026071503215451_101_(공시) 2026년 비상임이사 활동내역 현황 3회차.xlsx"
     )
     # doc.html에 "제목" 라벨-값 쌍이 없는 콘텐츠 유형이라(회차/개최일/안건내용

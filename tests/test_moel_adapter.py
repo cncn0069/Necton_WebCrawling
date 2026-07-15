@@ -167,7 +167,7 @@ def test_parse_detail_and_to_schema_with_file_excludes_contact_info(monkeypatch,
     # 다운로드/바로보기 두 링크가 같은 파일을 가리켜 dedup 후 1개만 다운로드돼야 함.
     assert len(downloaded) == 1
     assert doc.body_file_path == str(
-        Path(SOURCE_MOEL) / DOC_TYPE_NOTIFICATION / "20260100003_건설공사의 노무비율 고시(제2025-119호).hwp"
+        Path(SOURCE_MOEL) / DOC_TYPE_NOTIFICATION / "1-500" / "20260100003_건설공사의 노무비율 고시(제2025-119호).hwp"
     )
     assert doc.other_file_paths == []
 

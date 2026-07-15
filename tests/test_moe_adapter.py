@@ -328,10 +328,10 @@ def test_parse_detail_and_to_schema_multi_file(monkeypatch, tmp_path):
     # 두 파일 다 제목과 관련 있어 대표 선정이 결정적으로 갈리진 않지만, 공용
     # 유틸리티의 실측 동작을 그대로 회귀 테스트로 고정한다.
     assert doc.body_file_path == str(
-        Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "106652_2026년도 사업운영계획 및 예산.pdf"
+        Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "1-500" / "106652_2026년도 사업운영계획 및 예산.pdf"
     )
     assert doc.other_file_paths == [
-        str(Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "106652_2025년도 기금결산보고서.pdf")
+        str(Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "1-500" / "106652_2025년도 기금결산보고서.pdf")
     ]
     # 담당부서 셀에 같이 있던 전화번호는 department/body_text 어디에도 남으면 안 된다.
     assert "044-203-6496" not in (doc.department or "")
@@ -359,7 +359,7 @@ def test_parse_detail_recovers_filename_from_broken_path_like_name(monkeypatch, 
     detail = adapter.parse_detail(raw)
     doc = adapter.to_schema(detail)
 
-    assert doc.body_file_path == str(Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "12452_2008.zip")
+    assert doc.body_file_path == str(Path(SOURCE_MOE) / DOC_TYPE_BUDGET_MATERIAL / "1-500" / "12452_2008.zip")
 
 
 def test_parse_detail_without_attachments_has_no_files(monkeypatch, tmp_path):
