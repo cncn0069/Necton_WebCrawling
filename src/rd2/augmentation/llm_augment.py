@@ -166,7 +166,7 @@ def augment_document(
     clause_no: str,
     *,
     client: OpenAI | None = None,
-    model: str = "gpt-5.6-sol",
+    model: str = "gpt-5.4",
 ) -> list[dict[str, Any]]:
     """문서 1개의 후보 span 목록을 LLM에 보내 일부를 치환한 결과를 반환한다.
 

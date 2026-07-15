@@ -84,7 +84,7 @@ def augment_administrative_status(
     category_key: str,
     *,
     client: OpenAI | None = None,
-    model: str = "gpt-5.6-sol",
+    model: str = "gpt-5.4",
 ) -> list[dict[str, Any]]:
     """문서 컨텍스트 span 목록을 LLM에 보내 '행정처리' 상태를 나타내는 문구로
     일부를 치환한 결과를 반환한다.
