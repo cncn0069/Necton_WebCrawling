@@ -14,6 +14,15 @@
 4. run_llm_augment.py     data/candidates/         → data/augmented/llm/  (← 이 문서)
 ```
 
+**4단계를 매번 따로 실행하기 번거로우면 `scripts/run_pipeline.py`가 3~4번(필요하면
+1~2번까지)을 한 번에 이어서 실행해준다** — 아래 각 스크립트를 개별로 돌리는 법도
+알아두면 디버깅할 때 유용하니 이 문서에는 그대로 남겨두지만, 평소에는 그냥
+`run_pipeline.py`를 쓰면 된다:
+```bash
+python scripts/run_pipeline.py --clause 5 --limit 1 --dry-run   # 프롬프트만 확인
+python scripts/run_pipeline.py --clause 5 --limit 3             # 실제 3건 치환(과금)
+```
+
 ## 사전 준비
 
 1. 최상위 [`README.md`](../README.md)의 설치 절차(venv+`requirements.txt`) 완료.

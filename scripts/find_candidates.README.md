@@ -9,6 +9,10 @@
 탐지 로직 본체는 `src/rd2/augmentation/candidates.py`에 있고, 이 스크립트는 그 로직을
 `data/annotated/` 전체에 적용해 파일로 저장하는 CLI 래퍼다.
 
+이 스크립트 + `run_llm_augment.py`를 매번 따로 실행하기 번거로우면
+`python scripts/run_pipeline.py --clause N ...` 하나로 이어서 실행할 수 있다 —
+자세한 건 [`run_llm_augment.README.md`](./run_llm_augment.README.md) 참고.
+
 ## 사전 준비 (EC2 포함 어느 환경이든 공통)
 
 1. 저장소 clone 후 의존성 설치 (자세한 건 최상위 [`README.md`](../README.md) 참고):
