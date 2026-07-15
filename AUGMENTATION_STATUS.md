@@ -144,9 +144,66 @@ span을 비슷한 길이로 치환"** 뿐이다. 문제는 5~8호와 달리 "행
 자연스럽게 녹아들어야 하는 유형은 donor span을 못 찾으면 이번 방식으로는
 어려울 수 있음(다음 설계 단계에서 유형별로 재검토 필요).
 
-**다음 단계(미착수)**: 정형 필드 후보 탐지 로직 설계(`candidates.py`에 6호
-"라벨: 값" 패턴과 유사한 방식으로 추가할지, 별도 모듈로 뺄지 결정 필요) — 아직
-착수 전.
+### 구현 완료 (2026-07-16, 방향 A 폐기 후 세 번째 방향으로 구현)
+
+방향 A(정형 필드 regex 탐지)도 실측 후 폐기했다 — 매치율이 코퍼스의 1.0%뿐이고
+"기안"/"결재" 키워드 오탐(경기안성/승강기안전공단/연결재무제표 등)이 심했다.
+최종 채택한 방향: **regex 후보탐지 자체를 없애고, 문서 앞부분 span을 통째로
+LLM에 보내 알아서 고르게 한다** — "애초에 regex가 필요했던 이유는 문서당 span이
+수천 개라 전부 못 보내서였지 LLM이 못 찾아서가 아니다"라는 사용자 제안을 그대로
+구현.
+
+- `src/rd2/augmentation/administrative_status_data.py`: 8개 카테고리 정의
+  (`pending_disclosure_date`/`draft`/`internal_review`/`pending_review_committee`/
+  `interagency_coordination`/`deidentification_in_progress`/`pending_disposal`/
+  `complaint_in_progress`). **법정 조항(`clause_no`/`CLAUSES`)과 완전히 분리된
+  별도 타입**(`AdministrativeStatusDefinition`) — "clause" 필드/이름을 재사용하면
+  5~8호와 헷갈린다는 걸 이미 한 번 겪어서(위 "잘못 구현했다가" 참고) 처음부터
+  분리함.
+- `src/rd2/augmentation/administrative_status.py`: `build_document_context()`가
+  candidates.py의 regex 매칭 없이 문서 앞부분 span을 페이지 순서대로 최대
+  `max_spans`(기본 50)개까지 그대로 가져온다(boilerplate 포함 — 문서번호·
+  시행일자 같은 정형 필드가 반복 헤더로 분류된 경우가 많아서). 1페이지 고정이
+  아니라 span이 쌓일 때까지 다음 페이지로 계속 넘어가는 방식 — annotated 문서
+  60개 샘플 기준 45%가 1페이지에 텍스트 span이 아예 없어서(스캔 이미지 표지
+  추정) 1페이지 고정은 안 맞았음. `augment_administrative_status()`는
+  `llm_augment.py`의 `_RESPONSE_SCHEMA`/`_passes_validation`을 그대로 import해
+  재사용(중복 정의 안 함), selection에 `"category"` 필드(★ `"clause"` 아님).
+- `scripts/run_admin_status_augment.py`: `run_llm_augment.py`와 같은 CLI
+  골격이지만 입력이 `data/candidates/*.jsonl`이 아니라 `data/annotated/`를
+  직접 순회. 출력은 `{doc}_admin_{category}.json`(5~8호의 `_clauseN.json`과
+  구분).
+- `tests/test_administrative_status.py`: 10건(컨텍스트 빌더의 빈 페이지 스킵/
+  max_spans 상한/boilerplate 포함, augment 함수의 환각·길이비 필터링, category
+  필드 검증 등).
+- **부수 발견·수정**: 오늘 `develop` 병합으로 `documents` 테이블의
+  `production_date` 컬럼이 TEXT→DATE로 바뀌면서, `DocumentStore.
+  get_by_body_file_path()`가 반환하는 `origin_document`를 그대로
+  `json.dumps()`하면 `TypeError: Object of type date is not JSON serializable`
+  로 크래시하는 회귀가 생겨 있었다(`run_llm_augment.py`도 동일하게 영향받음 —
+  이번 파일럿 실행 중 실측으로 발견). `get_by_body_file_path()`에서
+  `production_date`를 `str()`로 변환해 반환하도록 `src/rd2/storage/db.py` 수정.
+
+### 파일럿 테스트 결과 (2026-07-16, 3개 카테고리 × moe/budget_material 2~3문서)
+
+- `pending_disclosure_date`: 3문서 중 1건 채택("공통요구자료"[문서분류 표기]
+  → "공개시점 미도래") — 나머지 2건은 재시도 시 LLM이 아무것도 안 고름(정상,
+  "억지로 고르지 말라" 지시가 잘 작동). 채택된 건은 자연스러움.
+- `draft`: 3문서 다 채택. 2건은 자연스러움("별책"→"초안", 문서분류 표기→
+  "검토용 초안"). **1건은 품질 이슈**: "(교육부)"(기관명 표기)를 "(검토초안)"
+  으로 바꿔 기관명 자체가 사라짐 — 5~8호 파일럿에서도 나온 것과 같은 종류의
+  LLM 노이즈("총괄립장관" 등 어색한 조어)로 간주, 코드로 막기 어려움.
+- `internal_review`: 2문서 중 1건 채택("2024. 3."[날짜 표기] → "부서 협의중"),
+  1건은 정상 스킵.
+
+전반적으로 컨텍스트 기반 방식이 의도대로 작동함 — 정형 필드(날짜·문서분류
+표기)를 스스로 찾아 자연스럽게 치환하고, 적당한 자리가 없으면 억지로 고르지
+않음. `draft`의 기관명 치환 1건 정도가 유일한 노이즈.
+
+**다음 단계(미착수)**: 파일럿 결과가 양호해 규모 확장 가능 — 나머지 5개
+카테고리(`pending_review_committee`/`interagency_coordination`/
+`deidentification_in_progress`/`pending_disposal`/`complaint_in_progress`)도
+파일럿 필요, moe 외 mohw/molit 문서로도 확대 검증 필요.
 
 ## 주요 설계 결정 요약 (질문 나올 만한 것들)
 

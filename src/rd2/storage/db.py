@@ -373,11 +373,16 @@ class DocumentStore:
             row = cur.fetchone()
         if row is None:
             return None
+        # production_date는 DB 컬럼이 DATE 타입이라 PyMySQL이 datetime.date로
+        # 돌려준다 — 호출부(run_llm_augment.py 등)가 이 dict를 그대로
+        # json.dumps하므로 str로 미리 변환해둔다(안 그러면 "Object of type date
+        # is not JSON serializable"로 실측 2026-07-16 크래시 확인됨).
+        production_date = row[3]
         return {
             "title": row[0],
             "ordering_agency": row[1],
             "department": row[2],
-            "production_date": row[3],
+            "production_date": str(production_date) if production_date is not None else None,
             "cso_classification": row[4],
         }
 
