@@ -164,9 +164,11 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "performing_agency",
             "non_disclosure_reason",
             "cso_sub_clause",
-            "start_date",
-            "end_date",
         ],
+        # start_date/end_date는 여기 넣지 않는다 — always_filled(위)에 이미
+        # 있다. 둘 다에 넣었던 건 자기모순이었다(2026-07-15 plan-eng-review
+        # outside voice 지적 — assert_conformance()가 never_from_source를
+        # 검사하지 않아 런타임 버그는 아니었지만, 계약 자체가 잘못됨).
     },
     SOURCE_MOE: {
         # 최초 실사(2026-07-13, 목록 113건 + 상세 6건 샘플)로는 department도

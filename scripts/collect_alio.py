@@ -18,6 +18,7 @@ ensure_src_on_path()
 from rd2.adapters.alio import DEFAULT_QUERY, AlioAdapter  # noqa: E402
 from rd2.adapters.conformance import assert_conformance  # noqa: E402
 from rd2.storage.db import DocumentStore  # noqa: E402
+from rd2.storage.naming import DOC_TYPE_AUDIT_RESULT  # noqa: E402
 
 
 def _load_checkpoint(path: Path) -> int:
@@ -39,14 +40,23 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("count", type=int, nargs="?", default=5, help="수집할 건수 (기본: 5)")
     parser.add_argument("--query", default=DEFAULT_QUERY, help=f"검색어 (기본: {DEFAULT_QUERY!r})")
-    parser.add_argument("--db", default="rd2.db", help="저장할 DB 파일 경로 (기본: rd2.db)")
+    parser.add_argument(
+        "--doc-type", default=DOC_TYPE_AUDIT_RESULT,
+        help=f"문서유형 코드 (기본: {DOC_TYPE_AUDIT_RESULT!r}) — --query와 짝을 맞춰야 함",
+    )
+    parser.add_argument(
+        "--database", default=None,
+        help="MariaDB 데이터베이스 이름 (기본: .env의 MARIADB_DATABASE, 보통 운영 DB인 "
+             "rd2_dump). 검증용 수집은 --database rd2_test처럼 명시적으로 분리할 것 — "
+             "생략하면 운영 DB에 그대로 쓰인다.",
+    )
     parser.add_argument(
         "--skip", type=int, default=None,
         help="목록 앞에서 건너뛸 건수. 생략하면 체크포인트 파일의 이어할 위치를 사용",
     )
     parser.add_argument(
         "--checkpoint", default=None,
-        help="진행 상황 저장 파일 경로 (기본: <db 경로>.alio_checkpoint.json)",
+        help="진행 상황 저장 파일 경로 (기본: rd2.db.alio_checkpoint.json 계열)",
     )
     parser.add_argument(
         "--reset-checkpoint", action="store_true",
@@ -55,10 +65,21 @@ def main() -> None:
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
-    db_path = repo_root / args.db
-    checkpoint_path = (
-        Path(args.checkpoint) if args.checkpoint else db_path.with_suffix(db_path.suffix + ".alio_checkpoint.json")
-    )
+    # 체크포인트 파일명은 SQLite 시절 그대로 유지한다(다른 collect_*.py와 동일
+    # 관례 — DocumentStore가 MariaDB 전용으로 바뀐 뒤에도 파일명은 안 바꿈).
+    # doc_type을 파일명에 포함시켜 query/doc_type 조합별로 분리한다(plan-eng-review
+    # outside voice 지적, 2026-07-15) — 분리 안 하면 같은 체크포인트로 다른
+    # 검색어를 수집할 때 이전 검색어의 체크포인트 위치를 그대로 읽어, 새 검색어
+    # 결과 대부분을 건너뛰고 에러 없이 조용히 0건 처리로 끝날 수 있다. 기본값
+    # (audit_result)은 기존 체크포인트 파일명을 그대로 유지한다 — 이미 운영 중인
+    # 감사결과 수집(5,622건)의 진행 위치를 새 파일명 규칙 때문에 잃어버리면
+    # 처음부터 다시 수집하게 된다.
+    if args.checkpoint:
+        checkpoint_path = Path(args.checkpoint)
+    elif args.doc_type == DOC_TYPE_AUDIT_RESULT:
+        checkpoint_path = repo_root / "rd2.db.alio_checkpoint.json"
+    else:
+        checkpoint_path = repo_root / f"rd2.db.alio_{args.doc_type}_checkpoint.json"
 
     if args.reset_checkpoint:
         base_skip = args.skip or 0
@@ -71,13 +92,15 @@ def main() -> None:
     print(f"Checkpoint file: {checkpoint_path}")
     print(f"Starting from position: {base_skip}")
 
-    adapter = AlioAdapter(query=args.query)
+    adapter = AlioAdapter(query=args.query, doc_type=args.doc_type)
 
     collected = 0
     quarantined = 0
     processed_position = base_skip
     docs = []
-    with DocumentStore(db_path) as store:
+    db_kwargs = {"database": args.database} if args.database else {}
+    with DocumentStore(**db_kwargs) as store:
+        print(f"Target database: {store.database!r}")
         try:
             for raw_item in adapter.fetch_list(skip=base_skip, max_items=args.count):
                 try:
@@ -96,7 +119,7 @@ def main() -> None:
                 collected += 1
                 print(f"[{'stored' if stored else 'dup-skip'}] {doc.title!r}")
                 print(f"    agency={doc.ordering_agency!r} production_date={doc.production_date}")
-                print(f"    body_file_path={doc.body_file_path!r}")
+                print(f"    doc_type={doc.doc_type!r} body_file_path={doc.body_file_path!r}")
 
                 processed_position += 1
                 _save_checkpoint(checkpoint_path, processed_position)

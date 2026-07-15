@@ -193,6 +193,7 @@ def test_parse_detail_and_to_schema_with_file_excludes_contact_info(monkeypatch,
     assert doc.body_file_path == str(
         Path(SOURCE_MOEL_POLICY)
         / DOC_TYPE_INTERPRETATION_COMPILATION
+        / "1-500"
         / "20260700329_중대재해처벌법 중대산업재해 질의회시집(26년6월)_배포.pdf"
     )
     assert doc.other_file_paths == []

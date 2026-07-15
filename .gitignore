@@ -11,7 +11,7 @@ data/
 *.egg-info/
 *.prism_checkpoint.json
 *.mohw_checkpoint.json
-*.alio_checkpoint.json
+*.alio_*checkpoint.json
 *.molit_checkpoint.json
 *.orginl_info*checkpoint.json
 *.moe_checkpoint.json
