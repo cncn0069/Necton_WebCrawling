@@ -208,6 +208,7 @@ def augment_document(
             {
                 "span_id": span_id,
                 "page_no": candidates_by_id[span_id].get("page_no"),
+                "clause": clause_no,  # 파일명(_clauseN)에만 의존하지 않고 selection 자체로도 조항을 알 수 있게
                 "original": original,
                 "synthetic": synthetic,
                 "transformation": sel.get("transformation", ""),
