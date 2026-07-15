@@ -361,6 +361,26 @@ class DocumentStore:
             row = cur.fetchone()
         return row[0] if row else None
 
+    def get_by_body_file_path(self, body_file_path: str) -> dict | None:
+        """증강 파이프라인이 원본 O트랙 문서의 메타데이터(제목/기관/생산일자 등)를
+        찾아 참고용으로 붙일 때 쓴다 — body_file_path는 files_root 기준 상대경로."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, ordering_agency, department, production_date, "
+                "cso_classification FROM documents WHERE body_file_path = %s",
+                (body_file_path,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "title": row[0],
+            "ordering_agency": row[1],
+            "department": row[2],
+            "production_date": row[3],
+            "cso_classification": row[4],
+        }
+
     def update_files(
         self, dedup_key: str, body_file_path: str | None, other_file_paths: list[str]
     ) -> None:

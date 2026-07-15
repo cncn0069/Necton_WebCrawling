@@ -7,6 +7,7 @@ beautifulsoup4==4.15.0
 python-dotenv==1.2.2
 openai==2.44.0
 PyMySQL==1.2.0
+pymupdf==1.28.0
 
 # --- 개발/테스트 전용(운영 배포 시 생략 가능) ---
 pytest==9.1.1
