@@ -188,12 +188,14 @@ def test_parse_detail_and_to_schema_multi_file_dedupes_view_and_download_links(m
     assert doc.body_file_path == str(
         Path(SOURCE_KOREA_KR)
         / DOC_TYPE_PRESS_RELEASE
+        / "1-500"
         / "156770659_2026-2027절기 코로나19 백신 484만 도즈 조달계약 체결.pdf"
     )
     assert doc.other_file_paths == [
         str(
             Path(SOURCE_KOREA_KR)
             / DOC_TYPE_PRESS_RELEASE
+            / "1-500"
             / "156770659_2026-2027절기 코로나19 백신 484만 도즈 조달계약 체결.hwpx"
         )
     ]

@@ -261,7 +261,7 @@ def test_parse_detail_and_to_schema_single_file(monkeypatch, tmp_path):
     assert doc.non_disclosure_reason is None  # OPEN이라 검증 통과해야 함
     assert len(downloaded) == 1
     assert doc.body_file_path == str(
-        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL
+        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "1-500"
         / "4901_2차로형 회전교차로 설치 및 개선 가이드라인_(배포용).pdf"
     )
     assert doc.other_file_paths == []
@@ -312,11 +312,11 @@ def test_parse_detail_multi_file_picks_primary_by_title_similarity(monkeypatch, 
     doc = adapter.to_schema(detail)
 
     assert doc.body_file_path == str(
-        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL
+        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "1-500"
         / "4892_1_신안산선 5-2공구 터널붕괴사고 사고조사보고서.pdf"
     )
     assert doc.other_file_paths == [
-        str(Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL
+        str(Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "1-500"
             / "4892_부록-1_경기광명 신안산선 터널붕괴사고 원인규명을 위한 구조해석_최종보고서.pdf")
     ]
 
@@ -366,7 +366,7 @@ def test_parse_detail_recovers_filename_when_source_html_truncates_it(monkeypatc
     doc = adapter.to_schema(detail)
 
     assert doc.body_file_path == str(
-        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "4899_20260701_131225_903.pdf"
+        Path(SOURCE_MOLIT) / DOC_TYPE_POLICY_MATERIAL / "1-500" / "4899_20260701_131225_903.pdf"
     )
     assert doc.body_file_path.endswith(".pdf")
 
@@ -395,7 +395,7 @@ def test_meeting_minutes_get_separate_doc_type_and_directory(monkeypatch, tmp_pa
 
     assert doc.doc_type == DOC_TYPE_MEETING_MINUTES
     assert doc.body_file_path == str(
-        Path(SOURCE_MOLIT) / DOC_TYPE_MEETING_MINUTES
+        Path(SOURCE_MOLIT) / DOC_TYPE_MEETING_MINUTES / "1-500"
         / "5001_2026년 제3차 도로정책심의위원회 회의록.pdf"
     )
     assert (tmp_path / SOURCE_MOLIT / DOC_TYPE_MEETING_MINUTES).is_dir()
