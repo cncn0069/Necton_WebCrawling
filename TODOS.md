@@ -1,5 +1,20 @@
 # TODOS
 
+### ALIO director_activity(개별 비상임이사 활동내용) downstream 처리 검증 — 채택 확정 후
+
+**What:** `AlioAdapter`에 `doc_type=DOC_TYPE_DIRECTOR_ACTIVITY`를 파라미터화해 추가하는 작업(2026-07-15 office-hours/plan-eng-review, 안정현-feat-open-go-kr-alternative-sources-design-20260715-103445.md)에서 plan-eng-review의 outside voice(Codex)가 지적했으나 이번 소량 검증(10~20건) 스코프 밖으로 명시적으로 미룬 3가지:
+1. 첨부파일 확장자가 xlsx인 경우가 섞여 있음(감사결과는 PDF 위주) — downstream 추출/렌더링 흐름(`src/rd2/extractors/`, `src/rd2/generators/pdf_render.py`)이 xlsx를 실제로 처리할 수 있는지 확인 안 됨.
+2. `src/rd2/generators/pdf_render.py:208`의 `_build_body_flowables()`는 `DOC_TYPE_AUDIT_RESULT`만 특수 렌더링(감사결과 전용 구조)한다 — 새 `DOC_TYPE_DIRECTOR_ACTIVITY`가 C/S 합성 파이프라인 최종 산출물에 들어간다면 렌더링 스타일 검증이 필요.
+3. 본문(회차/개최일/안건내용/활동현황 표)을 `_parse_doc_detail()`의 `soup.get_text()` 방식으로 플래튼해서 넣는 게 이 콘텐츠 유형에도 의미 있는 corpus인지 불명확 — "활동내용"의 핵심 정보가 표 구조 자체에 있을 수 있어, 단순 텍스트화 시 정보 손실 우려.
+
+**Why:** 세 항목 모두 director_activity 소스가 실제로 문민주(스펙 담당자) 확인을 거쳐 전량(3,490건) 수집으로 이어질 때만 의미가 있다 — 아직 확인 안 된 수요(Demand Evidence 참고)에 이 검증까지 먼저 하는 건 과잉 투자. 채택이 확정되면 바로 다뤄야 한다.
+
+**Context:** `src/rd2/adapters/alio.py`, `src/rd2/generators/pdf_render.py`, `tests/test_pdf_render.py`(현재 `DOC_TYPE_AUDIT_RESULT`/`DOC_TYPE_OFFICIAL_DOCUMENT` 두 유형만 테스트).
+
+**Effort:** S~M (xlsx 처리 확인은 S, pdf_render.py 스타일 추가는 M)
+**Priority:** P2 — director_activity 전량 수집 채택 확정 시 P1로 상향
+**Depends on:** director_activity 소스 채택 여부 확정(문민주 확인)
+
 ### [P0/긴급] open_go_kr 크롤링 중단 — robots.txt 전체 차단, 대체 소스 필요
 
 **What:** `open.go.kr`(정보공개포털)의 `robots.txt`가 `Disallow: /` (루트 `/` 딱 하나만 `Allow`)로 **사이트 전체 자동 크롤링을 명시적으로 금지**하고 있음을 2026-07-13 확인(원문: `User-agent: *` / `Disallow: /` / `Allow : /$`). open_go_kr 자동 수집을 **중단**하고, 대체 소스를 찾거나 정책 확인 전까지 재개하지 않기로 결정.
