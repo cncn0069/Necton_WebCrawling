@@ -38,8 +38,9 @@ _RESPONSE_SCHEMA = {
                             "span_id": {"type": "integer"},
                             "synthetic": {"type": "string"},
                             "transformation": {"type": "string"},
+                            "reason": {"type": "string"},
                         },
-                        "required": ["span_id", "synthetic", "transformation"],
+                        "required": ["span_id", "synthetic", "transformation", "reason"],
                         "additionalProperties": False,
                     },
                 }
@@ -67,9 +68,25 @@ _SYSTEM_PROMPT_UPGRADE = (
     "각 치환 문구는 원문과 길이가 비슷해야 한다(문서 레이아웃 보존 목적). "
     "실제로 존재하는 기관·인물·사건을 지칭하지 말고 그럴듯한 가상의 내용으로 작성하라. "
     'JSON으로만 응답하라: {"selections": [{"span_id": int, "synthetic": str, '
-    '"transformation": str}]}. transformation 필드는 절대 비워두지 말고 항상 채워라 '
-    '— 영문 스네이크케이스 짧은 카테고리 라벨이다(예: "contract_negotiation_info", '
-    '"pre_disclosure_appraisal", "internal_bid_estimate").'
+    '"transformation": str, "reason": str}]}. transformation 필드는 절대 비워두지 말고 '
+    '항상 채워라 — 영문 스네이크케이스 짧은 카테고리 라벨이다(예: '
+    '"contract_negotiation_info", "pre_disclosure_appraisal", "internal_bid_estimate"). '
+    "reason 필드에는 이 치환이 해당 조항 기준으로 왜 기밀도를 높이는지 사람이 검토할 때 "
+    "바로 이해할 수 있게 한국어 1문장으로 설명하라(예: \"협상 중인 비공개 기준가는 "
+    "낙찰 전 유출되면 입찰 공정성을 해칠 수 있어 5호 내부검토 정보에 해당\")."
+)
+
+_SYSTEM_PROMPT_CLAUSE_7 = (
+    _SYSTEM_PROMPT_UPGRADE
+    + "\n\n**7호(법인·경영상 비밀) 전용 주의사항**: 원본 문서는 정부기관의 예산·결산·"
+    "정책 보고서다. 문서 맥락과 무관한 별개의 가상 민간기업 서사(예: '가상 A사의 "
+    "수주목표', '거래처 B사 매출')를 새로 지어내면 안 된다 — 그런 식으로 소재 자체를 "
+    "바꾸면 원문과 이질감이 커서 실제 문서에 삽입했을 때 부자연스럽다. 대신 그 예산·"
+    "계약 항목이 원래 다루는 공공계약 상대방(수탁기관·낙찰업체·용역업체 등)의 "
+    "관점에서, 아직 공개되지 않은 원가·입찰·협상 정보로 재구성하라. 문서의 주체"
+    "(발주기관)와 대상(그 항목이 가리키는 계약상대방)은 원문 그대로 유지하고, 그 "
+    "안에서만 알 수 있는 영업비밀(원가 구조, 협상 마지노선, 입찰 전략 등)을 채워넣는 "
+    "방식이어야 한다."
 )
 
 _SYSTEM_PROMPT_CLAUSE_6 = (
@@ -93,7 +110,9 @@ _SYSTEM_PROMPT_CLAUSE_6 = (
     '조합(예: "이민준(830512-1234567)", 레이블 없이 압축된 형태)을 써도 된다.\n'
     "치환 문구 길이는 항상 원문과 비슷해야 한다 — 원문보다 몇 배 길어지면 안 된다.\n\n"
     'JSON으로만 응답하라: {"selections": [{"span_id": int, "synthetic": str, '
-    '"transformation": str}]}. transformation은 항상 "fabricated_personal_info"로 고정하라.'
+    '"transformation": str, "reason": str}]}. transformation은 항상 '
+    '"fabricated_personal_info"로 고정하라. reason 필드에는 이 span이 왜 개인정보에 '
+    "해당하는지(예: 주변 맥락과 결합해 특정 개인 식별 가능 여부) 한국어 1문장으로 설명하라."
 )
 
 
@@ -112,7 +131,12 @@ def build_user_prompt(candidates_for_doc: list[dict[str, Any]], clause: ClauseDe
 
 def build_messages(candidates_for_doc: list[dict[str, Any]], clause_no: str) -> list[dict[str, str]]:
     clause = CLAUSES[clause_no]
-    system_prompt = _SYSTEM_PROMPT_CLAUSE_6 if clause_no == "6" else _SYSTEM_PROMPT_UPGRADE
+    if clause_no == "6":
+        system_prompt = _SYSTEM_PROMPT_CLAUSE_6
+    elif clause_no == "7":
+        system_prompt = _SYSTEM_PROMPT_CLAUSE_7
+    else:
+        system_prompt = _SYSTEM_PROMPT_UPGRADE
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": build_user_prompt(candidates_for_doc, clause)},
@@ -142,12 +166,14 @@ def augment_document(
     clause_no: str,
     *,
     client: OpenAI | None = None,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5.6-sol",
 ) -> list[dict[str, Any]]:
     """문서 1개의 후보 span 목록을 LLM에 보내 일부를 치환한 결과를 반환한다.
 
-    반환값: [{span_id, original, synthetic, transformation}] — LLM이 하나도
-    고르지 않았거나 응답이 후보에 없는 span_id만 골랐다면 빈 리스트를 반환한다.
+    반환값: [{span_id, page_no, original, synthetic, transformation, reason}] —
+    LLM이 하나도 고르지 않았거나 응답이 후보에 없는 span_id만 골랐다면 빈 리스트를
+    반환한다. page_no는 candidates jsonl(추출 단계)에 이미 있던 값을 그대로 실어
+    보낸다 — 검토할 때 몇 쪽인지 바로 알 수 있게.
     """
     if not candidates_for_doc:
         return []
@@ -181,9 +207,11 @@ def augment_document(
         results.append(
             {
                 "span_id": span_id,
+                "page_no": candidates_by_id[span_id].get("page_no"),
                 "original": original,
                 "synthetic": synthetic,
                 "transformation": sel.get("transformation", ""),
+                "reason": sel.get("reason", ""),
             }
         )
     return results

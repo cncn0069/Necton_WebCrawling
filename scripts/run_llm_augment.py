@@ -18,6 +18,7 @@ from _common import ensure_src_on_path
 ensure_src_on_path()
 
 from rd2.augmentation.llm_augment import augment_document, build_messages  # noqa: E402
+from rd2.storage.db import DocumentStore  # noqa: E402
 
 _REPO_ROOT = Path(__file__).parent.parent
 _DATA_ROOT = _REPO_ROOT / "data"
@@ -52,6 +53,10 @@ def main() -> None:
     by_doc = _load_candidates_by_doc(args.clause)
     print(f"[{args.clause}호] 후보 있는 문서 {len(by_doc)}개 중 최대 {args.limit}개 처리\n")
 
+    # 원본 O트랙 문서의 실제 메타데이터(제목/기관/생산일자)를 참고용으로 붙이기
+    # 위한 DB 조회 — dry-run은 실제 저장을 안 하니 연결 자체를 안 만든다.
+    store = None if args.dry_run else DocumentStore()
+
     processed = 0
     for source_pdf_path, candidates in by_doc.items():
         if processed >= args.limit:
@@ -80,9 +85,13 @@ def main() -> None:
 
         for s in selections:
             orig_len, syn_len = len(s["original"]), len(s["synthetic"])
-            print(f"  span_id={s['span_id']} [{s['transformation']}]")
+            print(f"  span_id={s['span_id']} page={s['page_no']} [{s['transformation']}]")
             print(f"    원문({orig_len}자): {s['original']!r}")
             print(f"    치환({syn_len}자): {s['synthetic']!r}")
+            print(f"    근거: {s['reason']}")
+
+        body_file_path = str(Path(source_pdf_path).relative_to("data"))
+        origin_document = store.get_by_body_file_path(body_file_path) if store else None
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
@@ -93,6 +102,7 @@ def main() -> None:
                     "doc_type": candidates[0]["doc_type"],
                     "doc_id": candidates[0]["doc_id"],
                     "clause_no": args.clause,
+                    "origin_document": origin_document,
                     "selections": selections,
                 },
                 ensure_ascii=False,
@@ -102,6 +112,9 @@ def main() -> None:
         )
         print(f"  저장: {out_path.relative_to(_REPO_ROOT)}\n")
         processed += 1
+
+    if store:
+        store.close()
 
     print(f"완료: {processed}개 문서 처리")
 
