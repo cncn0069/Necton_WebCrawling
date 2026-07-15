@@ -78,6 +78,16 @@ def _column_type(store: DocumentStore, column: str) -> str:
         return cur.fetchone()[0].lower()
 
 
+def _is_nullable(store: DocumentStore, column: str) -> bool:
+    with store._conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'documents' AND column_name = %s",
+            (store.database, column),
+        )
+        return cur.fetchone()[0] == "YES"
+
+
 def test_add_missing_columns_adds_rd2_columns_as_null():
     """구버전 DB(핵심 컬럼만 있음)를 열면 누락된 RD-2 컬럼이 추가된다. payload_json
     백업이 2026-07-15에 제거된 뒤로는 과거 행을 역추출해 채우는 안전망도 함께
@@ -202,7 +212,7 @@ def test_check_constraint_rejects_invalid_cso_classification():
 
 
 def test_check_constraint_rejects_invalid_disclosure_status():
-    """disclosure_status는 공개/부분공개/비공개만 허용 — NULL은 통과(선택 필드)."""
+    """disclosure_status는 공개/부분공개/비공개만 허용."""
     conn = _raw_connection()
     try:
         _create_old_schema_db(conn)
@@ -220,4 +230,68 @@ def test_check_constraint_rejects_invalid_disclosure_status():
                 )
     finally:
         store._conn.rollback()
+        store.close()
+
+
+def test_migrate_not_null_widens_columns_when_no_nulls_exist():
+    """ordering_agency/disclosure_status는 Document 모델의 필수 필드 — 기존 행에
+    NULL이 하나도 없으면 NOT NULL로 좁혀져야 한다."""
+    conn = _raw_connection()
+    try:
+        _create_old_schema_db(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO documents (dedup_key, payload_json, cso_classification) "
+                "VALUES (%s, %s, %s)",
+                (f"{SOURCE_OPEN_GO_KR}::https://open.go.kr/3", "{}", "O"),
+            )
+    finally:
+        conn.close()
+
+    # 1차: 컬럼이 없는 구DB를 열어 nullable로 컬럼 추가(기존 행은 값이 없어 NULL).
+    store = DocumentStore(database=_TEST_DATABASE)
+    store.close()
+
+    conn = _raw_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE documents SET ordering_agency = %s, disclosure_status = %s "
+                "WHERE dedup_key = %s",
+                ("테스트기관", "공개", f"{SOURCE_OPEN_GO_KR}::https://open.go.kr/3"),
+            )
+    finally:
+        conn.close()
+
+    # 2차: NULL이 없어졌으니 재오픈 시 NOT NULL로 좁혀져야 한다.
+    store = DocumentStore(database=_TEST_DATABASE)
+    try:
+        assert _is_nullable(store, "ordering_agency") is False
+        assert _is_nullable(store, "disclosure_status") is False
+    finally:
+        store.close()
+
+
+def test_migrate_not_null_skips_columns_when_nulls_exist():
+    """기존 행에 NULL이 남아있으면(과거 payload_json 시절 백필 안 된 행 등) NOT NULL
+    MODIFY는 실패하므로 조용히 스킵돼야 한다 — DocumentStore 생성 자체가 죽으면 안 됨."""
+    conn = _raw_connection()
+    try:
+        _create_old_schema_db(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO documents (dedup_key, payload_json, cso_classification) "
+                "VALUES (%s, %s, %s)",
+                (f"{SOURCE_OPEN_GO_KR}::https://open.go.kr/4", "{}", "O"),
+            )
+    finally:
+        conn.close()
+
+    store = DocumentStore(database=_TEST_DATABASE)
+    try:
+        # ordering_agency/disclosure_status가 여전히 NULL인 행이 있으므로 NOT NULL로
+        # 좁혀지지 않아야 한다(예외 없이 nullable로 남음).
+        assert _is_nullable(store, "ordering_agency") is True
+        assert _is_nullable(store, "disclosure_status") is True
+    finally:
         store.close()

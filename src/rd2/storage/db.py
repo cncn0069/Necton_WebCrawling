@@ -70,6 +70,14 @@ def _encode_for_storage(value: object) -> object:
         return "|".join(value)
     return value
 
+# Document 모델에서 디폴트 없는 필수 필드(schema/models.py)인데 DB 컬럼은 지금까지
+# nullable이었던 것들 — ADD COLUMN 단계(구버전 DB에 컬럼 자체가 없을 때)는 계속
+# nullable로 추가한다(기존 행에 채울 값이 없는데 NOT NULL+DEFAULT 없이 ALTER하면
+# 실패하므로, payload_json 백업도 없어져 역추출 백필도 불가능). 컬럼이 이미 있는
+# 상태에서만 별도로 NOT NULL로 좁힌다(_migrate_not_null_constraints). 로컬(12,707건)·
+# RDS(34,086건) 양쪽 다 NULL 값 0건 실측 확인(2026-07-15) 후 추가.
+_NOT_NULL_COLUMNS: list[str] = ["ordering_agency", "disclosure_status"]
+
 # 과거 스키마에 있었지만 RD-2 v1.1 필수 필드 목록에 없어 컬럼에서 제거된 것들.
 # abstract는 body_text와 설명이 중복돼(둘 다 "초록"을 가리킴, 2026-07-07 수집계획
 # 리뷰로 발견) 필드 자체를 Document 모델에서 제거함 — 기존 DB에 남은 컬럼도 이걸로
@@ -88,7 +96,8 @@ CREATE TABLE IF NOT EXISTS documents (
     dedup_key VARCHAR(""" + str(_DEDUP_KEY_MAXLEN) + """) NOT NULL,
     cso_classification VARCHAR(16) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP""" + "".join(
-    f",\n    {name} {sqltype}" for name, sqltype in _EXTRA_COLUMNS
+    f",\n    {name} {sqltype}" + (" NOT NULL" if name in _NOT_NULL_COLUMNS else "")
+    for name, sqltype in _EXTRA_COLUMNS
 ) + """
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -151,6 +160,7 @@ class DocumentStore:
         self._add_missing_columns()
         self._drop_deprecated_columns()
         self._migrate_column_types()
+        self._migrate_not_null_constraints()
         self._migrate_constraints()
 
     def _execute_script(self, script: str) -> None:
@@ -234,13 +244,37 @@ class DocumentStore:
                     cur.execute(f"ALTER TABLE documents MODIFY COLUMN {name} {sqltype}")
         self._conn.commit()
 
+    def _migrate_not_null_constraints(self) -> None:
+        """_NOT_NULL_COLUMNS를 NOT NULL로 좁힌다. 기존 행에 NULL이 하나라도 있으면
+        MariaDB가 MODIFY 자체를 거부하므로(안전장치 겸용) 먼저 확인하고, NULL이
+        있으면 조용히 스킵한다 — payload_json 백업이 없어 역추출 백필이 불가능한
+        구버전 DB를 열었을 때 이 메서드가 예외로 죽지 않게 하기 위함."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, is_nullable FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'documents'",
+                (self.database,),
+            )
+            nullability = dict(cur.fetchall())
+            sqltypes = dict(_EXTRA_COLUMNS)
+            for name in _NOT_NULL_COLUMNS:
+                if nullability.get(name) != "YES":
+                    continue
+                cur.execute(f"SELECT COUNT(*) FROM documents WHERE {name} IS NULL")
+                if cur.fetchone()[0] > 0:
+                    continue
+                cur.execute(
+                    f"ALTER TABLE documents MODIFY COLUMN {name} {sqltypes[name]} NOT NULL"
+                )
+        self._conn.commit()
+
     def _migrate_constraints(self) -> None:
         """cso_classification/disclosure_status에 DB 레벨 CHECK 제약을 건다 —
-        이 앱을 거치지 않은 직접 INSERT/UPDATE도 잘못된 값을 못 넣도록. disclosure_status는
-        컬럼이 NOT NULL이 아니라 CHECK도 NULL은 통과시킨다(SQL 3값 논리). 수집 스크립트가
-        시작할 때마다 도는 count_by_doc_type(source)이 WHERE source = ... GROUP BY doc_type
-        패턴이라 (source, doc_type) 복합 인덱스도 함께 건다(2026-07-15 실측: 12,707건,
-        상시 크롤링 서비스로 계속 증가 중)."""
+        이 앱을 거치지 않은 직접 INSERT/UPDATE도 잘못된 값을 못 넣도록. 수집
+        스크립트가 시작할 때마다 도는 count_by_doc_type(source)이
+        WHERE source = ... GROUP BY doc_type 패턴이라 (source, doc_type) 복합
+        인덱스도 함께 건다(2026-07-15 실측: RDS 34,086건, 상시 크롤링 서비스로
+        계속 증가 중)."""
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT constraint_name FROM information_schema.table_constraints "
