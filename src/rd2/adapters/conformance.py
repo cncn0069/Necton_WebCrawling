@@ -28,6 +28,7 @@ from rd2.storage.naming import (
     SOURCE_OPEN_GO_KR,
     SOURCE_ORGINL_INFO,
     SOURCE_PRISM,
+    SOURCE_SEOUL_OPENGOV,
 )
 
 ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
@@ -312,6 +313,40 @@ ADAPTER_FIELD_CONTRACTS: dict[str, dict[str, list[str]]] = {
             "table_of_contents",
             "performing_agency",
             "non_disclosure_reason",
+            "cso_sub_clause",
+            "start_date",
+            "end_date",
+        ],
+    },
+    SOURCE_SEOUL_OPENGOV: {
+        # 실사(2026-07-16, /sanction 목록 65건 + 상세 1건 + 파일 다운로드 1건)로
+        # 확인: 목록·상세 모두 제목/공개구분/등록일/부서가 항상 있었고, 상세의
+        # "문서 정보" 테이블에 기관명/부서명/생산일자/공개구분이 항상 있었다.
+        # doc_type은 official_document 고정값이라 항상 값이 있다(어댑터 독스트링의
+        # 2026-07-16 사용자 결정 참고). body_file_path는 공개구분에 따라 결재문서본문
+        # 자체가 "비공개 문서"일 수 있어 조건부 필드로 둔다. content_summary(문서번호)와
+        # subject_category(BRM 분류)도 샘플에선 항상 있었지만 표본이 작아
+        # 조건부로 시작한다 — 전수 수집 후 승격 여부 재검토(mohw의
+        # start_date/end_date 교훈: 작은 표본으로 always_filled를 성급히
+        # 선언하지 않는다).
+        "always_filled": [
+            "title",
+            "ordering_agency",
+            "department",
+            "production_date",
+            "disclosure_status",
+            "cso_classification",
+            "doc_type",
+        ],
+        # 결재문서 원문 게시판 — 목차/수행기관/조항근거/시작·종료일 개념 자체가
+        # 없다. body_text는 "문서 보기" 뷰어 변환본(사이트가 개인정보를 ****로
+        # 마스킹한 HTML)에서 수집하는데, 뷰어가 없는 문서(비공개 등)나 변환
+        # 실패가 정상 운영 모드라 조건부 필드로 둔다(2026-07-16 사용자 지적으로
+        # 수집 추가 — 다운로드 가능한 파일은 결재본문뿐이고 실질 내용 첨부는
+        # 대부분 비공개인데, 뷰어 프리뷰가 실제 내용을 상당 부분 담고 있다).
+        "never_from_source": [
+            "table_of_contents",
+            "performing_agency",
             "cso_sub_clause",
             "start_date",
             "end_date",
