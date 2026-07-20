@@ -8,9 +8,17 @@ python-dotenv==1.2.2
 openai==2.44.0
 PyMySQL==1.2.0
 pymupdf==1.28.0
+pdfplumber==0.11.10
+hwp-hwpx-parser==1.0.0
+numpy==2.5.1
+pillow==12.3.0
+opencv-python-headless==5.0.0.93
+Jinja2==3.1.6
+playwright==1.61.0
 
 # --- 개발/테스트 전용(운영 배포 시 생략 가능) ---
 pytest==9.1.1
+reportlab==5.0.0
 
 # --- pip으로 설치되지 않는 별도 의존성(직접 설치 필요) ---
 # gstack browse CLI(헤드리스 브라우저) — src/rd2/adapters/browse_client.py가

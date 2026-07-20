@@ -5,6 +5,10 @@
 
 코드 흐름을 20분 안에 파악하려면 [`ARCHITECTURE.md`](./ARCHITECTURE.md)를 먼저 읽어라.
 AWS EC2 배포 절차는 [`deploy/README.md`](./deploy/README.md)를 참고.
+제9조 1~8호별 C/S 문서 템플릿의 적용 범위와 생성·검수 기준은
+[`TEMPLATE_CHECKLIST.md`](./TEMPLATE_CHECKLIST.md)를 참고.
+전용 템플릿별 검수 PDF와 실제 원본 참조 문서는
+[`TEMPLATE_SOURCE_MAP.md`](./TEMPLATE_SOURCE_MAP.md)에 기록한다.
 
 ## 설치
 
@@ -15,6 +19,7 @@ python3.11 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt   # 검증된 고정 버전 (재현성 우선 — EC2 등 새 환경에서 사용)
 pip install -e .
+python -m playwright install chromium   # HTML 템플릿 PDF 렌더링용 브라우저
 ```
 
 개발 중 최신 호환 버전으로 작업하려면 `requirements.txt` 대신 `pip install -e .`만

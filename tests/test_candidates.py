@@ -3,6 +3,7 @@ from rd2.augmentation.candidates import (
     _MAX_CANDIDATES_PER_DOC,
     _matches_clause_5_or_7_or_8,
     _matches_clause_6,
+    find_administrative_candidates,
     find_candidates,
 )
 
@@ -73,11 +74,11 @@ def test_clause_8_matches_real_estate_keywords():
     assert _matches_clause_5_or_7_or_8("신규 정비구역 지정 검토", "8") is True
 
 
-def _annotated_doc(spans: list[dict]) -> dict:
+def _annotated_doc(spans: list[dict], *, doc_type: str = "budget_material") -> dict:
     return {
         "source_pdf_path": "data/moe/budget_material/test.pdf",
         "source": "moe",
-        "doc_type": "budget_material",
+        "doc_type": doc_type,
         "doc_id": "1",
         "pages": [{"page_no": 1, "spans": spans}],
     }
@@ -88,6 +89,7 @@ def _span(span_id: int, text: str, *, is_boilerplate: bool = False) -> dict:
         "span_id": span_id,
         "text": text,
         "cleaned_text": text,
+        "bbox": [0, 0, 10, 10],
         "is_boilerplate": is_boilerplate,
     }
 
@@ -104,26 +106,76 @@ def test_find_candidates_skips_boilerplate_spans():
 
 
 def test_find_candidates_respects_per_document_cap():
-    # 중복 제거 후에도 상한이 걸리는지 확인해야 하므로 서로 다른 텍스트로 채운다
-    # (전부 같은 텍스트면 중복 제거로 인해 1개만 남아 상한 자체를 못 건드림).
-    doc = _annotated_doc([_span(i, f"입찰 계약 체결 {i}") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
+    doc = _annotated_doc([_span(i, "입찰 계약 체결") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
     candidates = find_candidates(doc, "5")
     assert len(candidates) == _MAX_CANDIDATES_PER_DOC
 
 
-def test_find_candidates_deduplicates_identical_text_within_document():
-    """실측(2026-07-20): 워드아트 그림자 효과·반복되는 표 라벨처럼 같은 문서
-    안에서 완전히 동일한 텍스트가 수십 번 겹쳐 찍히는 경우, annotate.py의
-    반복 탐지(여러 페이지 반복만 잡음)로는 못 거른다 — find_candidates가
-    직접 중복을 제거해야 한다."""
-    doc = _annotated_doc(
-        [_span(i, "국책기관 이전 계약 체결") for i in range(15)]
-        + [_span(100, "전혀 다른 입찰 공고문")]
-    )
-    candidates = find_candidates(doc, "5")
-    assert len(candidates) == 2
-    assert [c["span_id"] for c in candidates] == [0, 100]  # 각 고유 텍스트의 첫 등장만 남음
-
-
 def test_find_candidates_returns_empty_when_no_pages_key():
     assert find_candidates({}, "5") == []
+
+
+def test_administrative_candidates_use_document_form_specific_attachment_rule():
+    doc = _annotated_doc(
+        [_span(1, "붙임 관련 검토자료 1부.")],
+        doc_type="official_document",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert len(candidates) == 1
+    assert candidates[0]["candidate_kind"] == "administrative_status"
+    assert candidates[0]["document_status"] == "첨부미등록"
+    assert candidates[0]["verification_requirement"] == "attachment_inventory"
+
+
+def test_administrative_candidates_detect_petition_progress_only_for_reply_form():
+    reply_doc = _annotated_doc(
+        [_span(1, "민원 사항의 사실관계 확인 중입니다.")],
+        doc_type="reply_notification",
+    )
+    official_doc = _annotated_doc(
+        [_span(1, "민원 사항의 사실관계 확인 중입니다.")],
+        doc_type="official_document",
+    )
+
+    reply_candidates = find_administrative_candidates(reply_doc)
+
+    assert [candidate["document_status"] for candidate in reply_candidates] == ["민원처리중"]
+    assert find_administrative_candidates(official_doc) == []
+
+
+def test_administrative_candidates_treat_notice_draft_signal_as_draft_not_release_schedule():
+    doc = _annotated_doc(
+        [_span(1, "고용노동부고시 일부개정고시안")],
+        doc_type="notification",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert [candidate["document_status"] for candidate in candidates] == ["초안"]
+
+
+def test_administrative_candidates_preserve_multiple_statuses_for_one_span():
+    doc = _annotated_doc(
+        [_span(1, "초안 내부 검토 중으로 결재 중입니다.")],
+        doc_type="approval",
+    )
+
+    statuses = {candidate["document_status"] for candidate in find_administrative_candidates(doc)}
+
+    assert statuses == {"결재진행중", "초안", "내부검토중"}
+
+
+def test_administrative_candidates_skip_boilerplate_and_unknown_document_type():
+    boilerplate_doc = _annotated_doc(
+        [_span(1, "붙임 관련 검토자료", is_boilerplate=True)],
+        doc_type="official_document",
+    )
+    unknown_doc = _annotated_doc(
+        [_span(1, "붙임 관련 검토자료")],
+        doc_type="unclassified_form",
+    )
+
+    assert find_administrative_candidates(boilerplate_doc) == []
+    assert find_administrative_candidates(unknown_doc) == []

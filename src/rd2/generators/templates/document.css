@@ -1,0 +1,26 @@
+@font-face { font-family: "Noto Sans KR"; src: url("../assets/fonts/NotoSansKR-Regular.ttf") format("truetype"); font-weight: 400; }
+@font-face { font-family: "Noto Sans KR"; src: url("../assets/fonts/NotoSansKR-Bold.ttf") format("truetype"); font-weight: 700; }
+@page { size: A4; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; font-family: "Noto Sans KR", sans-serif; font-size: 10.5pt; line-height: 1.52; color: #111; }
+body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.watermark { position: fixed; z-index: -1; inset: calc(-1 * var(--margin-top)) calc(-1 * var(--margin-right)) calc(-1 * var(--margin-bottom)) calc(-1 * var(--margin-left)); width: 210mm; height: 297mm; object-fit: fill; }
+.stamp { position: fixed; bottom: -9mm; left: 50%; transform: translateX(-50%); width: 45mm; height: 17mm; object-fit: contain; }
+.status { color: #b00020; font-size: 9pt; margin-bottom: 3mm; }
+.title { font-size: var(--title-size); text-align: var(--title-align); font-weight: 700; margin: 0 0 4mm; }
+.slogan, .agency-name, .sender { text-align: center; }
+.slogan { font-size: 9pt; } .agency-name { font-size: 20pt; line-height: 1.3; font-weight: 700; margin: 2mm 0 4mm; } .sender { font-size: 13pt; font-weight: 700; margin: 6mm 0 4mm; }
+.rule { border: 0; border-top: .25mm solid #777; margin: 4mm 0; }
+.divider { text-align: center; margin: 2mm 0 3mm; }
+p { margin: 1.2mm 0; } .section { font-weight: 700; margin-top: 4mm; }
+table { border-collapse: collapse; width: 100%; margin: 2mm 0 4mm; break-inside: avoid; }
+th, td { border: .18mm solid #333; padding: 1.5mm 2mm; text-align: center; vertical-align: middle; }
+th { background: #f3f3f3; font-weight: 600; }
+.info-row td { font-size: 8.5pt; }
+.info-kv { width: 75%; } .info-kv td:first-child { width: 25%; background: #f3f3f3; }
+.info-box { border: .35mm solid #111; padding: 3mm; margin: 2mm 0; }
+.info-list p { margin: .5mm 0; } .info-minimal { font-size: 9pt; }
+.approval { margin-top: 5mm; } .approval td { height: 10mm; }
+.official-fields { margin: 0 0 4mm; } .official-fields p { margin: .7mm 0; }
+.footer { font-size: 8.5pt; line-height: 1.4; margin-top: 3mm; }
+.footer-rule { border-top: .25mm solid #111; margin: 1mm 0; }

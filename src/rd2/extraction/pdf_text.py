@@ -1,11 +1,9 @@
-"""PDF에서 문단/줄 단위로 나뉜 텍스트 span을 추출한다.
+"""PDF에서 위치정보(좌표·길이·폰트)를 보존한 텍스트 span을 추출한다.
 
-2026-07-20: 원래는 위치(bbox)·폰트까지 보존해 나중에 레이아웃을 유지한 채
-텍스트를 바꿔치기하는 합성 단계(span 치환 → PDF 재구성)에 쓸 계획이었으나,
-그 트랙 자체가 범위에서 빠지면서(AUGMENTATION_STATUS.md 참고) 좌표는 더 이상
-필요 없다. 다만 좌표 정보는 여전히 **내부적으로는** 쓴다 — `_merge_wrapped_lines`가
-"페이지 폭 때문에 줄바꿈된 문장"과 "표의 서로 다른 셀"을 구분하는 데 bbox가
-필요하기 때문. 최종적으로 저장하는 span에는 그 bbox를 남기지 않고 텍스트만 남긴다.
+이후 단계(기밀도 상승 span 합성)가 원본 레이아웃을 깨지 않고 텍스트를
+바꿔치기할 수 있으려면, 어떤 텍스트가 PDF의 어느 좌표(bbox)에 어떤
+폰트/크기로 있었는지가 span 단위로 남아있어야 한다. 이 모듈은 그 추출만
+담당하고, 무엇을 무엇으로 바꿀지 정하는 합성 로직은 다루지 않는다.
 """
 
 from __future__ import annotations
@@ -99,7 +97,7 @@ def _source_and_doc_type(pdf_path: Path, data_root: Path) -> tuple[str, str]:
 
 
 def extract_pdf_spans(pdf_path: Path, *, data_root: Path) -> dict[str, Any]:
-    """PDF 한 개를 열어 페이지별 텍스트 span(문단/줄 단위) 구조를 만든다.
+    """PDF 한 개를 열어 페이지별 텍스트 span(위치·폰트 포함) 구조를 만든다.
 
     실패(암호화/손상 등)해도 예외를 던지지 않고 "error" 필드가 있는 dict를
     반환한다 — 대량 배치 처리 중 한 파일 때문에 전체가 멈추지 않게 하기 위함.
@@ -149,10 +147,9 @@ def extract_pdf_spans(pdf_path: Path, *, data_root: Path) -> dict[str, Any]:
                 # PyMuPDF는 한 줄(line) 안에서도 폰트 스타일이 바뀌는 지점마다
                 # (자간 보정 등으로 한글은 글자 하나씩 나뉘는 경우가 흔함) span을
                 # 쪼갠다 — 그대로 저장하면 "총 사업비 5억원" 같은 자연스러운 구가
-                # 아니라 글자 단위로 흩어져서 용량도 커지고 문장으로도 못 쓴다.
-                # line 안의 span들을 순서대로 이어 붙여 한 줄을 하나의 span으로
-                # 취급한다. bbox는 _merge_wrapped_lines가 줄바꿈 병합 여부를
-                # 판단하는 데만 쓰고 최종 결과에는 남기지 않는다.
+                # 아니라 글자 단위로 흩어져서 용량도 커지고 나중에 문구를 바꿔치기할
+                # 단위로도 못 쓴다. line 안의 span들을 순서대로 이어 붙여 한 줄을
+                # 하나의 span으로 취급한다(대표 폰트/크기는 첫 span 기준).
                 block_lines: list[dict[str, Any]] = []
                 for line in block.get("lines", []):
                     spans = line.get("spans", [])
@@ -164,22 +161,33 @@ def extract_pdf_spans(pdf_path: Path, *, data_root: Path) -> dict[str, Any]:
                     xs1 = [s["bbox"][2] for s in spans if s.get("bbox")]
                     ys1 = [s["bbox"][3] for s in spans if s.get("bbox")]
                     bbox = [min(xs0), min(ys0), max(xs1), max(ys1)] if spans else list(line.get("bbox", []))
-                    block_lines.append({"text": text, "bbox": bbox})
-
-                for entry in _merge_wrapped_lines(block_lines):
-                    # bbox/font/size/flags/color는 merge 판단에만 쓰고 최종
-                    # 저장 span에는 안 남긴다(재구성 단계가 없어져 필요 없음).
-                    page_spans.append(
+                    first = spans[0] if spans else {}
+                    block_lines.append(
                         {
-                            "span_id": span_id,
-                            "text": entry["text"],
-                            "length": len(entry["text"]),
+                            "text": text,
+                            "bbox": bbox,
+                            "font": first.get("font"),
+                            "size": first.get("size"),
+                            "flags": first.get("flags"),
+                            "color": first.get("color"),
                         }
                     )
-                    span_id += 1
-                    total_chars += len(entry["text"])
 
-            pages.append({"page_no": page_no, "spans": page_spans})
+                for entry in _merge_wrapped_lines(block_lines):
+                    entry["span_id"] = span_id
+                    entry["length"] = len(entry["text"])
+                    page_spans.append(entry)
+                    span_id += 1
+                    total_chars += entry["length"]
+
+            pages.append(
+                {
+                    "page_no": page_no,
+                    "width": page.rect.width,
+                    "height": page.rect.height,
+                    "spans": page_spans,
+                }
+            )
 
         result["num_pages"] = len(pages)
         avg_chars_per_page = total_chars / len(pages) if pages else 0
