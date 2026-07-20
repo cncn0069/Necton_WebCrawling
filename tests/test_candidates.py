@@ -88,7 +88,6 @@ def _span(span_id: int, text: str, *, is_boilerplate: bool = False) -> dict:
         "span_id": span_id,
         "text": text,
         "cleaned_text": text,
-        "bbox": [0, 0, 10, 10],
         "is_boilerplate": is_boilerplate,
     }
 
