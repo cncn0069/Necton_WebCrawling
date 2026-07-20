@@ -20,6 +20,7 @@ SOURCE_KOREA_KR = "korea_kr"  # 대한민국 정책브리핑(korea.kr) 보도자
 SOURCE_ME = "me"  # 기후에너지환경부(me.go.kr) 행정규칙(고시·훈령·예규) — 법제처 국가법령정보센터 연계, scripts/collect_me.py 이름과 통일
 SOURCE_MOEL = "moel"  # 고용노동부(moel.go.kr) 훈령·예규·고시 — me와 doc_type 공유(본문+첨부파일 포함), scripts/collect_moel.py 이름과 통일
 SOURCE_MOEL_POLICY = "moel_policy"  # 고용노동부(moel.go.kr) 정책자료실 — moel과 별개 게시판(행정규칙 아님), scripts/collect_moel_policy.py 이름과 통일
+SOURCE_SEOUL_OPENGOV = "seoul_opengov"  # 서울 정보소통광장(opengov.seoul.go.kr) 결재문서 원문정보(/sanction) — URL의 sanction은 행정처분이 아니라 결재(sanction=결재)라는 뜻, scripts/collect_seoul_opengov.py 이름과 통일
 
 # --- doc_type 코드 ---
 DOC_TYPE_RESEARCH_REPORT = "research_report"  # 연구보고서 (PRISM)
