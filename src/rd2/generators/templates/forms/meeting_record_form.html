@@ -1,0 +1,5 @@
+<div class="meeting-title"><span>{{ production_date[:4] }}년</span><h1>{{ title }}</h1></div>
+<p class="meeting-agency">{{ agency }} {{ department }}</p>
+{% include 'bodies/' ~ body_format ~ '.html' %}
+{% if extra_notice %}<p>{{ extra_notice }}</p>{% endif %}
+<p class="meeting-disclosure">{{ disclosure_label }} · 위원 명단 및 세부 논의내용 비공개</p>

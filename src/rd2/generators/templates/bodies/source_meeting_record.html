@@ -1,0 +1,4 @@
+<p class="meeting-section">□ 회의개요</p><p>ㅇ 일시 : {{ production_date }} 14:00~16:00</p><p>ㅇ 참석 : 위원장(주재), 관계부서 실무위원</p><p>ㅇ 안건 : {{ subject }}</p>
+<p class="meeting-section">□ 안건별 논의</p>
+<table class="meeting-agenda"><tr><th>안건번호</th><td>제{{ agenda_no }}호</td></tr><tr><th>안건명</th><td>{{ subject }}</td></tr><tr><th>논의내용</th><td>{% for p in discussion %}<p>{{ 'ㅇ' if loop.index0 % 2 == 0 else '☞' }} {{ p }}</p>{% endfor %}</td></tr><tr><th>논의결과</th><td>&lt;보류&gt; 추가 자료 검토 후 계속 심의</td></tr></table>
+<p>{{ ending }}</p>

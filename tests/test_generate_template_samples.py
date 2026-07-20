@@ -21,3 +21,30 @@ def test_strict_source_validation_reports_missing_local_corpus(tmp_path, monkeyp
 
     with pytest.raises(RuntimeError, match="원본 참조 파일 없음"):
         samples._verify_samples(require_source_files=True)
+
+
+def test_one_sample_per_template_selects_all_53_templates_once():
+    selected = samples._selected_samples(1)
+
+    assert len(selected) == 53
+    assert len({sample.template_id for sample in selected}) == 53
+
+
+def test_remaining_41_templates_have_real_source_references():
+    dedicated_ids = {sample.template_id for sample in samples.SAMPLES}
+    remaining = [sample for sample in samples._selected_samples(1) if sample.template_id not in dedicated_ids]
+
+    assert len(remaining) == 41
+    assert all(sample.provenance_level == "structural_reference" for sample in remaining)
+    assert all(sample.sources and sample.sources[0].path.startswith("data/") for sample in remaining)
+
+
+def test_relative_output_directory_is_supported(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(samples, "_verify_samples", lambda **kwargs: None)
+    monkeypatch.setattr(samples, "_selected_samples", lambda count: ())
+
+    manifest = samples.generate_samples(Path("relative-output"), samples_per_template=1)
+
+    assert manifest == []
+    assert (tmp_path / "relative-output" / "template_samples_manifest.json").is_file()

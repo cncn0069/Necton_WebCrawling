@@ -1,0 +1,5 @@
+<p>1. 관련: 「{{ subject }}」 검토 지시({{ department }}-{{ doc_no - 17 }}, {{ production_date }})</p>
+<p>2. 관련 사항을 아래와 같이 검토하여 보고합니다.</p>
+<p class="source-subsection">가. 검토 개요</p><p class="source-indent">{{ purpose }}</p>
+<p class="source-subsection">나. 주요 내용</p>{% for p in progress %}<p class="source-indent">{{ loop.index }}) {{ p }}</p>{% endfor %}
+<p>붙임&nbsp;&nbsp;관련 검토자료 1부.&nbsp;&nbsp;{{ ending }}</p>

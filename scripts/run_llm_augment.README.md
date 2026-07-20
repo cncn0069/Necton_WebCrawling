@@ -6,16 +6,17 @@
 스크립트다 — `find_candidates.py`는 "어디를 바꿀 후보인지"만 찾을 뿐, 실제로 무엇으로
 바꿀지는 여기서 LLM이 결정한다.
 
-전체 파이프라인은 3단계다:
+전체 파이프라인은 5단계다:
 ```
 1. extract_pdf_text.py    data/*.pdf              → data/extracted/   (텍스트+위치 추출)
-2. annotate_documents.py  data/extracted/          → data/annotated/  (반복헤더 등 주석)
-3. find_candidates.py     data/annotated/          → data/candidates/ (조항별 후보 탐지)
-4. run_llm_augment.py     data/candidates/         → data/augmented/llm/  (← 이 문서)
+2. extract_structured_documents.py PDF/HWP/HWPX   → data/structured/  (본문+표, OCR/격리 상태)
+3. annotate_documents.py  data/extracted/          → data/annotated/  (반복헤더 등 주석)
+4. find_candidates.py     data/annotated/          → data/candidates/ (조항별 후보 탐지)
+5. run_llm_augment.py     data/candidates/         → data/augmented/llm/  (← 이 문서)
 ```
 
-**4단계를 매번 따로 실행하기 번거로우면 `scripts/run_pipeline.py`가 3~4번(필요하면
-1~2번까지)을 한 번에 이어서 실행해준다** — 아래 각 스크립트를 개별로 돌리는 법도
+**각 단계를 매번 따로 실행하기 번거로우면 `scripts/run_pipeline.py`가 4~5번(필요하면
+1~3번까지)을 한 번에 이어서 실행해준다** — 아래 각 스크립트를 개별로 돌리는 법도
 알아두면 디버깅할 때 유용하니 이 문서에는 그대로 남겨두지만, 평소에는 그냥
 `run_pipeline.py`를 쓰면 된다:
 ```bash

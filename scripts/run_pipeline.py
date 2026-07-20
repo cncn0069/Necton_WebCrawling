@@ -1,7 +1,8 @@
 """추출→주석→후보탐지→LLM치환 파이프라인을 한 번에 실행한다.
 
 기본은 data/annotated/가 이미 있다고 가정하고 후보탐지+LLM치환만 돌린다
-(--from-scratch를 주면 추출·주석 단계부터 전부 실행). 각 단계는
+(--from-scratch를 주면 추출·주석 단계부터 전부 실행). 기존 bbox/font span 추출과
+PDF/HWP/HWPX structured sidecar 추출을 함께 수행한다. 각 단계는
 scripts/extract_pdf_text.py 등 기존 스크립트를 서브프로세스로 그대로
 호출할 뿐이라, 개별 스크립트의 옵션·동작(재실행 시 파일 덮어쓰기 등)이
 그대로 적용된다 — 이 스크립트는 순서대로 이어 부르는 편의 래퍼다.
@@ -48,8 +49,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.from_scratch:
-        _run([_PY, "scripts/extract_pdf_text.py", "--source", args.source])
-        _run([_PY, "scripts/annotate_documents.py", "--source", args.source])
+        extraction_commands = [
+            [_PY, "scripts/extract_pdf_text.py", "--source", args.source],
+            [_PY, "scripts/extract_structured_documents.py", "--source", args.source],
+            [_PY, "scripts/annotate_documents.py", "--source", args.source],
+        ]
+        if args.force:
+            for command in extraction_commands:
+                command.append("--force")
+        for command in extraction_commands:
+            _run(command)
 
     _run([_PY, "scripts/find_candidates.py", "--clause", args.clause])
 

@@ -36,7 +36,7 @@ _LOG_PATH = _EXTRACTED_ROOT / "_extraction_log.jsonl"
 # 디렉터리 — "--source all"로 전체를 훑을 때 이런 폴더까지 "출처"로 오인해 도는 걸
 # 막는다(실측 2026-07-16으로 지자체·타부처 등 출처가 4개로 고정될 수 없다는 게
 # 확인돼, 하드코딩된 소스 목록 대신 data/ 아래 실제 존재하는 폴더를 동적으로 찾음).
-_NON_SOURCE_DIRS = {"extracted", "annotated", "candidates", "augmented"}
+_NON_SOURCE_DIRS = {"extracted", "structured", "annotated", "candidates", "augmented"}
 
 
 def _discover_sources() -> list[str]:

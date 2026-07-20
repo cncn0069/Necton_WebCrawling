@@ -28,6 +28,7 @@ from rd2.storage.naming import (
     DOC_TYPE_MEETING_MINUTES,
     DOC_TYPE_OFFICIAL_DOCUMENT,
     DOC_TYPE_PERSONNEL,
+    DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
@@ -216,6 +217,9 @@ class DocTemplateSpec:
     # 본문 골격: "standard" | "audit_interim" | "personnel_order" | "bid_review"
     #            | "unit_price" | "meeting_pending" | "personnel_eval" | "civil_reply"
     body_format: str = "standard"
+    # 문서 외곽 셸. 정책자료와 회의록은 실제 원본이 표준 시행공문과 다른 독립
+    # 서식을 쓰므로 본문 partial뿐 아니라 상단/하단 구성도 분리한다.
+    form_format: str = "official_form"
     forbidden_phrases: tuple[str, ...] = ()
     description: str = ""
 
@@ -404,8 +408,20 @@ _CLAUSE_BODY_FORMAT = {
     "7": "standard", "8": "standard",
 }
 _DOC_BODY_FORMAT = {
-    DOC_TYPE_AUDIT_RESULT: "audit_interim", DOC_TYPE_BID_NOTICE: "bid_review",
-    DOC_TYPE_PERSONNEL: "personnel_order", DOC_TYPE_REPLY_NOTIFICATION: "civil_reply",
+    DOC_TYPE_AUDIT_RESULT: "audit_interim",
+    DOC_TYPE_BID_NOTICE: "bid_review",
+    DOC_TYPE_PERSONNEL: "personnel_order",
+    DOC_TYPE_OFFICIAL_DOCUMENT: "source_official",
+    DOC_TYPE_POLICY_MATERIAL: "source_policy_brief",
+    DOC_TYPE_REPORT: "source_report",
+    DOC_TYPE_MEETING_MINUTES: "source_meeting_record",
+    DOC_TYPE_PLAN: "source_plan",
+    DOC_TYPE_APPROVAL: "source_approval",
+    DOC_TYPE_REPLY_NOTIFICATION: "source_notification",
+}
+_DOC_FORM_FORMAT = {
+    DOC_TYPE_POLICY_MATERIAL: "policy_brief_form",
+    DOC_TYPE_MEETING_MINUTES: "meeting_record_form",
 }
 def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
     existing = {spec.template_id: spec for spec in TEMPLATES.values()}
@@ -423,6 +439,7 @@ def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
                 approval_signed_count=1 if state is ApprovalState.PENDING else 0,
                 recipient="내부결재", disclosure_label=f"비공개({target.clause_no})",
                 body_format=_DOC_BODY_FORMAT.get(target.doc_type, _CLAUSE_BODY_FORMAT[target.clause_no]),
+                form_format=_DOC_FORM_FORMAT.get(target.doc_type, "official_form"),
                 description=f"{target.subclause_label} 관련 {target.doc_type} 전용 템플릿.",
             )
         else:
