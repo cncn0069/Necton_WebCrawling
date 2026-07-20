@@ -1,0 +1,1 @@
+{% if paragraphs %}<p class="section">1. 개요</p>{% for p in overview %}<p>{{ ganadara[loop.index0] }}. {{ p }}</p>{% endfor %}{% if details %}<p class="section">2. 세부내용</p>{% for p in details %}<p>{{ p }}</p>{% endfor %}{% endif %}<p>끝.</p>{% endif %}

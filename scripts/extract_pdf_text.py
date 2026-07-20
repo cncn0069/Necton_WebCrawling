@@ -1,8 +1,9 @@
-"""data/ 아래 PDF에서 문단/줄 단위 텍스트 span을 추출해
+"""data/ 아래 PDF에서 위치정보(bbox·폰트·길이) 포함 텍스트 span을 추출해
 data/extracted/ 아래 PDF 1개당 JSON 1개로 저장한다.
 
-이후 annotate.py(반복 헤더 표시)·candidates.py(정규식 기반 후보 탐지) 단계가
-이 JSON을 입력으로 받는다 — 이 스크립트는 그 준비 단계인 추출만 담당한다.
+이후 기밀도 상승 span 합성 단계가 이 JSON을 입력으로 받아 "이 span을 어떤
+문구로, 원본 레이아웃을 깨지 않고 바꿔치기할지"를 결정한다 — 이 스크립트는
+그 준비 단계인 추출만 담당한다.
 
 사용 예:
     python scripts/extract_pdf_text.py --source moe --limit 8   # 파일럿

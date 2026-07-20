@@ -1,0 +1,5 @@
+<h1 class="title">{{ row.title or '(제목 없음)' }}</h1>
+{% if status_description %}<div class="status">[행정 처리 상태: {{ row.document_status }}] {{ row.non_disclosure_reason or status_description }}</div>{% endif %}
+{% include 'layouts/' ~ layout.info_style ~ '.html' %}<hr class="rule">
+{% include 'bodies/' ~ generic_body_format ~ '.html' %}
+{% if approval %}{% include 'partials/approval.html' %}{% endif %}

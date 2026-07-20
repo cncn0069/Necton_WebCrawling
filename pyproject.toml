@@ -11,16 +11,31 @@ dependencies = [
     "openai>=1.30",
     "PyMySQL>=1.1",
     "pymupdf>=1.24",
-    "pyhwp>=0.1b15",
-    # pyhwp가 six를 실제로 임포트하면서도 자기 패키지 메타데이터에 의존성으로
-    # 선언하지 않음(실측: pyhwp만 설치하면 ModuleNotFoundError) — 직접 명시.
-    "six>=1.16",
+    "pdfplumber>=0.11",
+    "hwp-hwpx-parser>=1.0",
+    "numpy>=2.0",
+    "Pillow>=10.0",
+    "opencv-python-headless>=4.10",
+    "Jinja2>=3.1",
+    "playwright>=1.45",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "reportlab>=4.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+"rd2.generators" = [
+    "templates/*.html",
+    "templates/*.css",
+    "templates/bodies/*.html",
+    "templates/layouts/*.html",
+    "templates/partials/*.html",
+    "assets/fonts/*.ttf",
+    "assets/fonts/LICENSE",
+]
