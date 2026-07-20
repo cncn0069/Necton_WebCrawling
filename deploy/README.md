@@ -2,7 +2,7 @@
 
 ## 1. 서버 준비
 ```bash
-sudo apt update && sudo apt install -y python3.11 python3.11-venv
+sudo apt update && sudo apt install -y python3.12 python3.12-venv
 sudo useradd -m -s /bin/bash rd2
 sudo mkdir -p /opt/rd2 && sudo chown rd2:rd2 /opt/rd2
 ```
@@ -11,7 +11,7 @@ sudo mkdir -p /opt/rd2 && sudo chown rd2:rd2 /opt/rd2
 ```bash
 # 코드를 /opt/rd2로 복사(scp 또는 git clone)한 뒤:
 cd /opt/rd2
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -e .
 ```

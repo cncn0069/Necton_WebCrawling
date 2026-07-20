@@ -1,6 +1,8 @@
 # 개발 환경에서 검증된 버전으로 고정(pip freeze 기준, 2026-07-08).
 # pyproject.toml의 범위(>=)와 달리, 새 서버(EC2 등)에 처음 설치할 때
 # 로컬과 다른 버전이 깔려 재현 안 되는 문제를 막기 위한 고정 버전 목록이다.
+# numpy==2.5.1이 Python 3.12+ 전용이라 이 파일 전체가 Python 3.12+ 필요
+# (pyproject.toml의 requires-python도 3.12로 맞춰뒀다).
 pydantic==2.13.4
 httpx==0.28.1
 beautifulsoup4==4.15.0
