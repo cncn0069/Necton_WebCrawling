@@ -25,7 +25,9 @@
 from __future__ import annotations
 
 import datetime
+import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
@@ -96,11 +98,32 @@ def _extract_hwpx_paragraphs(hwpx_path: Path) -> list[str]:
     return texts
 
 
+def _find_hwp5_entry_point(name: str) -> str:
+    """hwp5odt/hwp5txt 실행 파일 경로를 찾는다 — PATH에 의존하지 않는다.
+
+    실측(2026-07-20): 대화형 셸에서는 .venv/bin이 PATH에 이미 들어있어
+    `subprocess.Popen(["hwp5odt", ...])`가 잘 되지만, systemd 서비스처럼
+    venv를 활성화(source activate)하지 않고 `.venv/bin/python script.py`를
+    직접 실행하는 배포 방식(EC2 `deploy/rd2-crawler.service` 같은)에서는
+    PATH에 .venv/bin이 없어 이 방식이 실패한다. `sys.executable`(현재
+    파이썬 인터프리터)과 같은 bin 디렉터리에 pip이 설치한 콘솔 스크립트가
+    있으므로 그걸 우선 찾고, 없으면 PATH도 확인한다(예: 시스템 전역 설치).
+    """
+    sibling = Path(sys.executable).parent / name
+    if sibling.exists():
+        return str(sibling)
+    found = shutil.which(name)
+    if found:
+        return found
+    return name  # 못 찾아도 이름 그대로 반환 — 실행 시 자연스럽게 에러로 이어짐
+
+
 def _run_hwp5_cli(
     entry_point: str, hwp_path: Path, out_path: Path, *, timeout: int, extra_args: list[str] | None = None
 ) -> dict[str, Any]:
+    resolved = _find_hwp5_entry_point(entry_point)
     proc = subprocess.Popen(
-        [entry_point, *(extra_args or []), "--output", str(out_path), str(hwp_path)],
+        [resolved, *(extra_args or []), "--output", str(out_path), str(hwp_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

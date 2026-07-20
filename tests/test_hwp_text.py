@@ -37,6 +37,40 @@ class _FakeProc:
         return self.returncode
 
 
+class TestFindHwp5EntryPoint:
+    """EC2 systemd처럼 venv를 활성화하지 않고 `.venv/bin/python script.py`를
+    직접 실행하는 배포에서는 PATH에 .venv/bin이 없어 bare "hwp5odt" 이름만
+    으로는 subprocess가 못 찾는다(실측, 2026-07-20) — sys.executable 옆에서
+    먼저 찾도록 한 로직을 직접 검증."""
+
+    def test_prefers_sibling_of_sys_executable(self, monkeypatch, tmp_path):
+        fake_bin_dir = tmp_path / "venv" / "bin"
+        fake_bin_dir.mkdir(parents=True)
+        fake_tool = fake_bin_dir / "hwp5odt"
+        fake_tool.write_text("#!/bin/sh\n")
+        monkeypatch.setattr(hwp_text.sys, "executable", str(fake_bin_dir / "python"))
+
+        result = hwp_text._find_hwp5_entry_point("hwp5odt")
+
+        assert result == str(fake_tool)
+
+    def test_falls_back_to_path_when_no_sibling(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(hwp_text.sys, "executable", str(tmp_path / "nonexistent" / "python"))
+        monkeypatch.setattr(hwp_text.shutil, "which", lambda name: f"/usr/local/bin/{name}")
+
+        result = hwp_text._find_hwp5_entry_point("hwp5txt")
+
+        assert result == "/usr/local/bin/hwp5txt"
+
+    def test_returns_bare_name_when_not_found_anywhere(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(hwp_text.sys, "executable", str(tmp_path / "nonexistent" / "python"))
+        monkeypatch.setattr(hwp_text.shutil, "which", lambda name: None)
+
+        result = hwp_text._find_hwp5_entry_point("hwp5txt")
+
+        assert result == "hwp5txt"
+
+
 class TestHwpxExtraction:
     def test_real_sample_extracts_nonempty_paragraphs(self):
         assert _REAL_HWPX_SAMPLE.exists(), "실사 픽스처 파일이 없음 — 경로 확인 필요"
@@ -83,7 +117,10 @@ class TestHwpExtractionFallback:
         )
 
         def fake_popen(cmd, **kwargs):
-            assert cmd[0] == "hwp5odt"
+            # PATH가 아니라 sys.executable 옆에서 찾은 절대경로가 와야 한다(EC2
+            # systemd처럼 venv 비활성 상태로 실행돼도 동작하게 하기 위함) —
+            # 그래서 정확한 이름 대신 끝부분만 확인한다.
+            assert cmd[0].endswith("hwp5odt")
             out_path = Path(cmd[cmd.index("--output") + 1])
             return _FakeProc(returncode=0, out_path=out_path, out_content=odt_xml)
 
@@ -101,9 +138,9 @@ class TestHwpExtractionFallback:
         hwp_path.write_bytes(b"stub")
 
         def fake_popen(cmd, **kwargs):
-            if cmd[0] == "hwp5odt":
+            if cmd[0].endswith("hwp5odt"):
                 return _FakeProc(returncode=0, raise_timeout=True)
-            assert cmd[0] == "hwp5txt"
+            assert cmd[0].endswith("hwp5txt")
             out_path = Path(cmd[cmd.index("--output") + 1])
             return _FakeProc(returncode=0, out_path=out_path, out_content="평문 폴백 결과\n\n둘째 줄")
 

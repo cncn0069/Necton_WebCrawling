@@ -1,10 +1,11 @@
-"""추출→주석→후보탐지 파이프라인을 한 번에 실행한다.
+"""추출(PDF+HWP)→주석→후보탐지 파이프라인을 한 번에 실행한다.
 
 기본은 data/annotated/가 이미 있다고 가정하고 후보탐지만 돌린다
 (--from-scratch를 주면 추출·주석 단계부터 전부 실행). 각 단계는
 scripts/extract_pdf_text.py 등 기존 스크립트를 서브프로세스로 그대로
-호출할 뿐이라, 개별 스크립트의 옵션·동작(재실행 시 파일 덮어쓰기 등)이
-그대로 적용된다 — 이 스크립트는 순서대로 이어 부르는 편의 래퍼다.
+순서대로(직렬로, 하나 끝나야 다음 시작) 호출할 뿐이라, 개별 스크립트의
+옵션·동작(재실행 시 파일 덮어쓰기 등)이 그대로 적용된다 — 이 스크립트는
+순서대로 이어 부르는 편의 래퍼다.
 
 2026-07-20: LLM 치환·PDF 재구성 단계는 범위 축소로 폐기됨(AUGMENTATION_STATUS.md
 참고) — 이 파이프라인은 정규식 기반 후보탐지까지만 담당한다.
@@ -47,6 +48,7 @@ def main() -> None:
 
     if args.from_scratch:
         _run([_PY, "scripts/extract_pdf_text.py", "--source", args.source])
+        _run([_PY, "scripts/extract_hwp_text.py", "--source", args.source])
         _run([_PY, "scripts/annotate_documents.py", "--source", args.source])
 
     _run([_PY, "scripts/find_candidates.py", "--clause", args.clause])
