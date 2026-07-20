@@ -137,7 +137,6 @@ def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[
                     "doc_id": annotated_doc.get("doc_id"),
                     "span_id": span["span_id"],
                     "text": span["text"],
-                    "bbox": span["bbox"],
                     "page_no": page["page_no"],
                 }
             )
