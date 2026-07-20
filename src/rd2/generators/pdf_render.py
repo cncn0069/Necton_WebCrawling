@@ -281,6 +281,7 @@ def _render_context(row: dict, category: str, watermark_path: Path | None, stamp
             slogan=_OFFICIAL_FORM_SLOGAN, agency=row.get("ordering_agency") or "(기관명)",
             department=row.get("department") or "담당부서", recipient=recipient, title=title,
             body_format=template.body_format, extra_notice=notice,
+            form_template=f"forms/{template.form_format}.html",
             signature=_signature_context(template, seed, status), doc_no=10000 + seed % 90000,
             address=_SYNTHETIC_ADDRESSES[seed % len(_SYNTHETIC_ADDRESSES)],
             tel_suffix=1000 + seed % 9000, email_suffix=f"{seed % 100:02d}",

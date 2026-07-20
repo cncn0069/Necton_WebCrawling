@@ -1,0 +1,7 @@
+<p>1. 관련: {{ department }}-{{ doc_no - 31 }}({{ production_date }}.)</p>
+<p>2. {{ subject }}을 다음과 같이 추진하고자 합니다.</p>
+<p class="source-subsection">가. 추진 개요</p>
+<table class="plan-overview"><tr><th>구 분</th><th>내 용</th></tr><tr><td>사업명</td><td>{{ subject }}</td></tr><tr><td>추진기간</td><td>{{ production_date }} ~ 검토 완료 시</td></tr><tr><td>대상</td><td>{{ department }} 관련 업무 대상</td></tr><tr><td>추진방법</td><td>관계 부서 협의 및 단계별 시행</td></tr></table>
+<p class="source-subsection">나. 세부 추진내용</p>{% for p in progress %}<p class="source-indent">{{ loop.index }}) {{ p }}</p>{% endfor %}
+<p class="source-subsection">다. 행정사항</p><p class="source-indent">추진 일정과 공개 제한 범위를 점검한 뒤 시행합니다.</p>
+<p>붙임&nbsp;&nbsp;세부 추진계획 1부.&nbsp;&nbsp;{{ ending }}</p>

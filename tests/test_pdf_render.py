@@ -119,7 +119,7 @@ class TestRenderDocumentPdf:
         TEMPLATE_VARIANTS.values(),
         ids=lambda spec: spec.template_id,
     )
-    def test_all_template_variants_use_official_form(self, tmp_path, monkeypatch, spec):
+    def test_all_template_variants_use_declared_source_form(self, tmp_path, monkeypatch, spec):
         rendered: dict[str, str] = {}
 
         def fake_html_to_pdf(html, output_path, layout):
@@ -138,7 +138,12 @@ class TestRenderDocumentPdf:
         render_document_pdf(row, CATEGORY_PUBLIC_CORPORATION, output)
 
         assert output.exists()
-        assert 'class="official-fields"' in rendered["html"]
+        marker = {
+            "official_form": 'class="official-fields"',
+            "policy_brief_form": 'class="brief-heading"',
+            "meeting_record_form": 'class="meeting-title"',
+        }[spec.form_format]
+        assert marker in rendered["html"]
 
 
 class TestClassificationGatedMarking:

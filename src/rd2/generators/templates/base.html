@@ -3,5 +3,5 @@
 {% if watermark_uri %}<img class="watermark" src="{{ watermark_uri }}" alt="">{% endif %}
 {% if stamp_uri %}<img class="stamp" src="{{ stamp_uri }}" alt="">{% endif %}
 {% if status != 'ok' %}<div class="status">[생성 상태: {{ status }} — 검토용 표시, 본문은 아래 참고]</div>{% endif %}
-{% if template %}{% include 'official_form.html' %}{% else %}{% include 'generic.html' %}{% endif %}
+{% if template %}{% include form_template %}{% else %}{% include 'generic.html' %}{% endif %}
 </body></html>

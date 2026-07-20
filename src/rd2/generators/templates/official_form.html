@@ -1,7 +1,2 @@
-<div class="slogan">{{ slogan }}</div><div class="agency-name">{{ agency }}</div>
-<div class="official-fields"><p>수신&nbsp;&nbsp;{{ recipient }}</p><p>(경유)</p><p>제목&nbsp;&nbsp;{{ title }}</p></div>
-{% include 'bodies/' ~ body_format ~ '.html' %}
-{% if extra_notice %}<p>{{ extra_notice }}</p>{% endif %}
-<div class="sender">{{ agency }}장</div>
-{% if signature %}{% include 'partials/signature.html' %}{% endif %}
-<div class="footer"><p>협조자</p><div class="footer-rule"></div><p>시행&nbsp;&nbsp;{{ department }}-{{ doc_no }}&nbsp;&nbsp;({{ production_date }})&nbsp;&nbsp;&nbsp;&nbsp;접수</p><p>{{ address }}</p><p>전화번호 070-0000-{{ tel_suffix }}&nbsp;&nbsp;팩스번호 0505-000-{{ tel_suffix }} / gongmu{{ email_suffix }}@example.go.kr / {{ disclosure_label }}</p></div>
+{# 이전 include 경로 호환용. 신규 코드는 forms/official_form.html을 직접 사용한다. #}
+{% include 'forms/official_form.html' %}

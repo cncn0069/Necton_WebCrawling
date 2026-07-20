@@ -39,6 +39,7 @@ from rd2.storage.naming import (  # noqa: E402
     DOC_TYPE_MEETING_MINUTES,
     DOC_TYPE_OFFICIAL_DOCUMENT,
     DOC_TYPE_PERSONNEL,
+    DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
@@ -46,6 +47,13 @@ from rd2.storage.naming import (  # noqa: E402
 
 
 _REPO_ROOT = Path(__file__).parent.parent
+
+
+def _display_path(path: Path) -> Path | str:
+    try:
+        return path.relative_to(_REPO_ROOT)
+    except ValueError:
+        return path
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,87 @@ _OFFICIAL_FORM_SOURCE = SourceReference(
     ),
     role="표준 공문 상단·결재선·하단 블록의 구조적 근거",
 )
+
+_SOURCE_BY_DOC_TYPE: dict[str, tuple[SourceReference, ...]] = {
+    DOC_TYPE_OFFICIAL_DOCUMENT: (
+        SourceReference(
+            path=(
+                "data/orginl_info/official_document/1-500/"
+                "B10CB261967523862000_결재문서본문.pdf"
+            ),
+            role="실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고",
+        ),
+    ),
+    DOC_TYPE_POLICY_MATERIAL: (
+        SourceReference(
+            path=(
+                "data/molit/policy_material/1-500/"
+                "4879_20260202174102313_전문교육기관ㆍ항공훈련기관 지정ㆍ인가 및 안전관리 현황.pdf"
+            ),
+            role="실제 정책 참고자료의 참고 라벨·제목 박스·작성부서·□/ㅇ/* 개요체 구조 참고",
+        ),
+    ),
+    DOC_TYPE_REPORT: (
+        SourceReference(
+            path=(
+                "data/orginl_info/report/1-500/"
+                "B10CB261957374394000_결재문서본문.pdf"
+            ),
+            role="실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고",
+        ),
+    ),
+    DOC_TYPE_MEETING_MINUTES: (
+        SourceReference(
+            path=(
+                "data/molit/meeting_minutes/1-500/"
+                "4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx"
+            ),
+            role="실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고",
+        ),
+    ),
+    DOC_TYPE_PLAN: (
+        SourceReference(
+            path=(
+                "data/orginl_info/plan/1-500/"
+                "B10CB261967585853000_결재문서본문.pdf"
+            ),
+            role="실제 운영계획 공문의 추진개요 표·세부계획·행정사항·붙임 구조 참고",
+        ),
+    ),
+    DOC_TYPE_APPROVAL: (
+        SourceReference(
+            path=(
+                "data/orginl_info/approval/1-500/"
+                "B10CB261957405327000_결재문서본문.pdf"
+            ),
+            role="실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고",
+        ),
+    ),
+    DOC_TYPE_REPLY_NOTIFICATION: (
+        SourceReference(
+            path=(
+                "data/orginl_info/approval/1-500/"
+                "S10CB261958278805000_결재문서본문.pdf"
+            ),
+            role="실제 대외 통보 공문의 개인/기관 수신·안내문·조치표·발신명의 구조 참고",
+        ),
+    ),
+}
+
+_SOURCE_PROVENANCE_NOTE = {
+    doc_type: "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함."
+    for doc_type in _SOURCE_BY_DOC_TYPE
+}
+
+_DOC_TYPE_TITLE = {
+    DOC_TYPE_OFFICIAL_DOCUMENT: "업무 검토 공문",
+    DOC_TYPE_POLICY_MATERIAL: "정책 검토 참고자료",
+    DOC_TYPE_REPORT: "검토보고서",
+    DOC_TYPE_MEETING_MINUTES: "실무회의 회의록",
+    DOC_TYPE_PLAN: "추진계획(안)",
+    DOC_TYPE_APPROVAL: "승인 검토(안)",
+    DOC_TYPE_REPLY_NOTIFICATION: "검토결과 통보",
+}
 
 
 def _row(
@@ -400,7 +489,7 @@ def _expanded_samples() -> tuple[TemplateSample, ...]:
                     row_id=f"template-{target.template_id.lower()}",
                     clause_no=target.clause_no,
                     doc_type=target.doc_type,
-                    title=f"{target.subclause_label} {target.doc_type} 검토자료",
+                    title=f"{target.subclause_label} {_DOC_TYPE_TITLE[target.doc_type]}",
                     agency="가온행정기관", department="업무담당과",
                     body_text=(
                         f"{target.subclause_label} 관련 검토 목적과 보호 대상을 확인함.\n"
@@ -409,9 +498,9 @@ def _expanded_samples() -> tuple[TemplateSample, ...]:
                     reason=f"제9조 제1항 제{target.clause_no}호: {target.subclause_label}",
                     document_status="내부검토중", classification=classification,
                 ),
-                sources=(_OFFICIAL_FORM_SOURCE,),
-                provenance_level="partial_structural_reference",
-                provenance_note="표준 공문 구조에 세부조항과 문서유형별 합성 내용을 적용함.",
+                sources=_SOURCE_BY_DOC_TYPE[target.doc_type],
+                provenance_level="structural_reference",
+                provenance_note=_SOURCE_PROVENANCE_NOTE[target.doc_type],
             )
         for index in range(1, target.expected_documents + 1):
             row = dict(base.row)
@@ -477,12 +566,33 @@ def _manifest_entry(sample: TemplateSample, output_path: Path) -> dict:
     }
 
 
-def generate_samples(output_dir: Path, *, require_source_files: bool = False) -> list[dict]:
+def _selected_samples(samples_per_template: int | None) -> tuple[TemplateSample, ...]:
+    if samples_per_template is None:
+        return ALL_SAMPLES
+    if samples_per_template < 1:
+        raise ValueError("samples_per_template은 1 이상이어야 합니다")
+    counts: dict[str, int] = {}
+    selected: list[TemplateSample] = []
+    for sample in ALL_SAMPLES:
+        count = counts.get(sample.template_id, 0)
+        if count < samples_per_template:
+            selected.append(sample)
+            counts[sample.template_id] = count + 1
+    return tuple(selected)
+
+
+def generate_samples(
+    output_dir: Path,
+    *,
+    require_source_files: bool = False,
+    samples_per_template: int | None = None,
+) -> list[dict]:
     _verify_samples(require_source_files=require_source_files)
+    output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: list[dict] = []
-    for sample in ALL_SAMPLES:
+    for sample in _selected_samples(samples_per_template):
         output_path = output_dir / sample.filename
         category = get_agency_category(str(sample.row["ordering_agency"]))
         render_document_pdf(sample.row, category, output_path)
@@ -490,13 +600,13 @@ def generate_samples(output_dir: Path, *, require_source_files: bool = False) ->
         if output_path.read_bytes()[:4] != b"%PDF":
             raise RuntimeError(f"{sample.template_id}: PDF 헤더 검증 실패: {output_path}")
         manifest.append(_manifest_entry(sample, output_path))
-        print(f"[ok] {sample.template_id} -> {output_path.relative_to(_REPO_ROOT)}")
+        print(f"[ok] {sample.template_id} -> {_display_path(output_path)}")
 
     manifest_path = output_dir / "template_samples_manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"[manifest] {manifest_path.relative_to(_REPO_ROOT)}")
+    print(f"[manifest] {_display_path(manifest_path)}")
     return manifest
 
 
@@ -508,13 +618,21 @@ def main() -> None:
         help="PDF와 manifest를 저장할 디렉터리",
     )
     parser.add_argument(
+        "--samples-per-template",
+        type=int,
+        default=None,
+        help="템플릿별 생성할 샘플 수. 생략하면 목표 수량(각 6건)을 모두 생성",
+    )
+    parser.add_argument(
         "--verify-source-files",
         action="store_true",
         help="git에서 제외된 data/ 원본 참조 문서가 로컬에 모두 있는지도 검증",
     )
     args = parser.parse_args()
     generate_samples(
-        Path(args.output_dir), require_source_files=args.verify_source_files
+        Path(args.output_dir),
+        require_source_files=args.verify_source_files,
+        samples_per_template=args.samples_per_template,
     )
 
 
