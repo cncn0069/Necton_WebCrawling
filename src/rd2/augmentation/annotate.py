@@ -45,6 +45,11 @@ _NUMERIC_PATTERN = re.compile(
     rf"^[{_DASH_CHARS}]?\s*[0-9ivxlcdmIVXLCDM]+\s*[{_DASH_CHARS}]?$"
 )
 
+# 숫자/로마숫자 패턴 span을 전부 한 그룹으로 묶기 위한 키 — 실제 텍스트로는
+# 절대 나올 수 없는 값이라 진짜 텍스트와 충돌하지 않는다. bbox 없는 문서(HWP)의
+# 텍스트 기반 그룹핑 fallback에서만 쓰인다.
+_NUMERIC_GROUP_KEY = "\x00NUMERIC\x00"
+
 
 def _looks_numeric(text: str) -> bool:
     return bool(_NUMERIC_PATTERN.fullmatch(text.strip()))
@@ -102,23 +107,73 @@ def _detect_boilerplate_slots(pages: list[dict[str, Any]]) -> set[tuple[int, int
     return boilerplate_slots
 
 
+def _group_key(text: str) -> str:
+    return _NUMERIC_GROUP_KEY if _looks_numeric(text) else text
+
+
+def _detect_boilerplate_keys(pages: list[dict[str, Any]]) -> set[str]:
+    """bbox가 없는 문서(HWP)용 fallback — 조건 A·A'를 만족하는 그룹 키(정확한
+    텍스트 또는 숫자패턴 키) 집합을 반환한다. HWP는 좌표 개념이 없어 bbox 슬롯
+    대신 "정확히 같은 텍스트가 여러 페이지에 반복되는지"로 판정한다(머지 전
+    커밋 2036cc8에서 쓰던 방식과 동일 — bbox가 되살아나면서 밀려났던 걸 복원)."""
+    num_pages = len(pages)
+    if num_pages == 0:
+        return set()
+
+    key_pages: dict[str, set[int]] = defaultdict(set)
+    for page in pages:
+        for span in page["spans"]:
+            key_pages[_group_key(span["text"])].add(page["page_no"])
+
+    boilerplate_keys: set[str] = set()
+    for key, pages_seen in key_pages.items():
+        if len(pages_seen) < _MIN_OCCUPANCY_PAGES:
+            continue  # 절대 최소 반복 횟수 미달 — 짧은 문서의 1회성 콘텐츠 오탐 방지
+        if len(pages_seen) / num_pages < _OCCUPANCY_RATIO_THRESHOLD:
+            continue
+        boilerplate_keys.add(key)
+
+    return boilerplate_keys
+
+
+def _doc_has_bbox(pages: list[dict[str, Any]]) -> bool:
+    """문서 안 span에 bbox가 있는지 확인한다. 한 문서의 span은 전부 같은
+    추출기(pdf_text.py 또는 extract_hwp_text.py)를 거치므로 bbox 유무가
+    문서 단위로 균일하다 — 첫 span만 봐도 안전하다."""
+    for page in pages:
+        for span in page["spans"]:
+            return "bbox" in span
+    return False
+
+
 def annotate_document(extracted_doc: dict[str, Any]) -> dict[str, Any]:
     """추출된 문서 dict를 받아 `is_boilerplate`/`cleaned_text`가 추가된 사본을 반환한다.
 
     원본 dict는 변경하지 않는다(깊은 복사 후 필드만 추가) — span 개수·순서·
-    `span_id`·`bbox`·`text`는 원본과 100% 동일하게 유지된다.
+    `span_id`·`bbox`(있다면)·`text`는 원본과 100% 동일하게 유지된다.
+
+    bbox가 있는 문서(PDF)는 좌표 슬롯 기반으로, bbox가 없는 문서(HWP —
+    렌더링 전 포맷이라 좌표 개념 자체가 없음)는 텍스트 기반으로 반복 판정
+    방식을 분기한다.
     """
     annotated = copy.deepcopy(extracted_doc)
     if "pages" not in annotated:
         return annotated  # error/스캔본 등 pages가 없는 결과는 그대로 반환
 
-    boilerplate_slots = _detect_boilerplate_slots(annotated["pages"])
+    use_bbox = _doc_has_bbox(annotated["pages"])
+    if use_bbox:
+        boilerplate_slots = _detect_boilerplate_slots(annotated["pages"])
+    else:
+        boilerplate_keys = _detect_boilerplate_keys(annotated["pages"])
 
     for page in annotated["pages"]:
         for span in page["spans"]:
-            x0, y0 = span["bbox"][0], span["bbox"][1]
-            slot = (round(x0), round(y0))
-            span["is_boilerplate"] = slot in boilerplate_slots
+            if use_bbox:
+                x0, y0 = span["bbox"][0], span["bbox"][1]
+                slot = (round(x0), round(y0))
+                span["is_boilerplate"] = slot in boilerplate_slots
+            else:
+                span["is_boilerplate"] = _group_key(span["text"]) in boilerplate_keys
             span["cleaned_text"] = _clean_text(span["text"])
 
     return annotated

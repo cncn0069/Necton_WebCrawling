@@ -49,6 +49,7 @@ def main() -> None:
 
     if args.from_scratch:
         _run([_PY, "scripts/extract_pdf_text.py", "--source", args.source])
+        _run([_PY, "scripts/extract_hwp_text.py", "--source", args.source])
         _run([_PY, "scripts/annotate_documents.py", "--source", args.source])
 
     _run([_PY, "scripts/find_candidates.py", "--clause", args.clause])
