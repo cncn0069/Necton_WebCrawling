@@ -244,7 +244,7 @@ def _base_candidate(annotated_doc: dict[str, Any], page: dict[str, Any], span: d
         "doc_id": annotated_doc.get("doc_id"),
         "span_id": span["span_id"],
         "text": span["text"],
-        "bbox": span["bbox"],
+        "bbox": span.get("bbox"),  # HWP 유래 span은 좌표 개념이 없어 None
         "page_no": page["page_no"],
     }
 
