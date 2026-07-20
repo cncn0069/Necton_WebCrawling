@@ -104,9 +104,25 @@ def test_find_candidates_skips_boilerplate_spans():
 
 
 def test_find_candidates_respects_per_document_cap():
-    doc = _annotated_doc([_span(i, "입찰 계약 체결") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
+    # 중복 제거 후에도 상한이 걸리는지 확인해야 하므로 서로 다른 텍스트로 채운다
+    # (전부 같은 텍스트면 중복 제거로 인해 1개만 남아 상한 자체를 못 건드림).
+    doc = _annotated_doc([_span(i, f"입찰 계약 체결 {i}") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
     candidates = find_candidates(doc, "5")
     assert len(candidates) == _MAX_CANDIDATES_PER_DOC
+
+
+def test_find_candidates_deduplicates_identical_text_within_document():
+    """실측(2026-07-20): 워드아트 그림자 효과·반복되는 표 라벨처럼 같은 문서
+    안에서 완전히 동일한 텍스트가 수십 번 겹쳐 찍히는 경우, annotate.py의
+    반복 탐지(여러 페이지 반복만 잡음)로는 못 거른다 — find_candidates가
+    직접 중복을 제거해야 한다."""
+    doc = _annotated_doc(
+        [_span(i, "국책기관 이전 계약 체결") for i in range(15)]
+        + [_span(100, "전혀 다른 입찰 공고문")]
+    )
+    candidates = find_candidates(doc, "5")
+    assert len(candidates) == 2
+    assert [c["span_id"] for c in candidates] == [0, 100]  # 각 고유 텍스트의 첫 등장만 남음
 
 
 def test_find_candidates_returns_empty_when_no_pages_key():

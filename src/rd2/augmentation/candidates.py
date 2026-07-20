@@ -91,6 +91,9 @@ _CLAUSE_6_GOV_TITLE_PATTERN = re.compile(
 )
 
 _MAX_CANDIDATES_PER_DOC = 20  # 문서 하나가 후보 풀을 독점하지 않게 하는 상한
+# 중복 제거 전 원시 매치 개수 상한(폭주 방지 안전장치) — 중복 제거로 인해 실제
+# 반환 개수는 이보다 훨씬 적어질 수 있으므로 _MAX_CANDIDATES_PER_DOC보다 넉넉하게 둔다.
+_MAX_RAW_MATCHES_PER_DOC = 300
 
 
 def _matches_clause_5_or_7_or_8(text: str, clause_no: str) -> bool:
@@ -112,11 +115,22 @@ def _matches_clause_6(text: str) -> bool:
 
 def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[str, Any]]:
     """annotated_doc에서 clause_no(5/6/7/8) 조항 후보 span을 최대
-    _MAX_CANDIDATES_PER_DOC개까지 찾아 반환한다. 원본은 변경하지 않는다."""
+    _MAX_CANDIDATES_PER_DOC개까지 찾아 반환한다. 원본은 변경하지 않는다.
+
+    2026-07-20: 같은 문서 안에서 완전히 동일한 텍스트는 첫 번째 것만 남기고
+    중복 제거한다 — 워드아트 그림자 효과·반복되는 표 라벨처럼 같은 문구가
+    한 문서 안에 수십 번 겹쳐 찍히는 경우가 실측으로 확인됐는데(annotate.py의
+    반복 탐지는 "여러 페이지 반복"만 잡아서 이런 "한 문서 안 반복"은 못 거름),
+    그 문구가 조항 키워드와 우연히 겹치면 사실상 같은 후보가 수십 건 중복
+    생성된다. bbox가 없어져 "이게 렌더링 버그인지 표의 정상 반복인지"는 더 이상
+    구분 못 하므로, 원인 판별 대신 결과(중복 후보)를 후보 생성 시점에 걸러내는
+    쪽을 택했다 — 어차피 완전히 같은 텍스트는 LLM 프롬프트/분석 관점에서도
+    또 하나 들고 있을 이유가 없다.
+    """
     if "pages" not in annotated_doc:
         return []
 
-    candidates: list[dict[str, Any]] = []
+    raw_matches: list[dict[str, Any]] = []
     for page in annotated_doc["pages"]:
         for span in page["spans"]:
             if span["is_boilerplate"]:
@@ -129,7 +143,7 @@ def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[
             if not matched:
                 continue
 
-            candidates.append(
+            raw_matches.append(
                 {
                     "source_pdf_path": annotated_doc.get("source_pdf_path"),
                     "source": annotated_doc.get("source"),
@@ -140,7 +154,19 @@ def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[
                     "page_no": page["page_no"],
                 }
             )
-            if len(candidates) >= _MAX_CANDIDATES_PER_DOC:
-                return candidates
+            if len(raw_matches) >= _MAX_RAW_MATCHES_PER_DOC:
+                break
+        if len(raw_matches) >= _MAX_RAW_MATCHES_PER_DOC:
+            break
 
-    return candidates
+    seen_texts: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for candidate in raw_matches:
+        if candidate["text"] in seen_texts:
+            continue
+        seen_texts.add(candidate["text"])
+        deduped.append(candidate)
+        if len(deduped) >= _MAX_CANDIDATES_PER_DOC:
+            break
+
+    return deduped
