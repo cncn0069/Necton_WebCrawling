@@ -47,8 +47,10 @@ def _table_cells(flowables) -> list[list[str]]:
 
 
 class TestFindTemplate:
-    def test_all_53_subclause_document_targets_have_unique_templates(self):
-        assert len(TEMPLATE_VARIANTS) == 53
+    def test_all_56_subclause_document_targets_have_unique_templates(self):
+        """56 = 53 + press_release 3건(5호 decision_review, 2호 security_defense,
+        3호 life_body, 2026-07-21 신규)."""
+        assert len(TEMPLATE_VARIANTS) == 56
         ids = [spec.template_id for spec in TEMPLATE_VARIANTS.values()]
         assert len(ids) == len(set(ids))
 

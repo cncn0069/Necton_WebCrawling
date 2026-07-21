@@ -179,3 +179,92 @@ def test_administrative_candidates_skip_boilerplate_and_unknown_document_type():
 
     assert find_administrative_candidates(boilerplate_doc) == []
     assert find_administrative_candidates(unknown_doc) == []
+
+
+# 2026-07-21 office-hours/plan-eng-review로 신규 추가된 7개 문서유형 규칙 —
+# 아직 실사 미검증 초안이라는 점은 candidates.py의 해당 dict 주석 참고.
+def test_administrative_candidates_press_release_detects_embargo_signal():
+    doc = _annotated_doc(
+        [_span(1, "본 보도자료는 엠바고 해제 전까지 배포 예정입니다.")],
+        doc_type="press_release",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert [c["document_status"] for c in candidates] == ["공개예정일미도래"]
+
+
+def test_administrative_candidates_notice_detects_draft_signal():
+    doc = _annotated_doc(
+        [_span(1, "공고안에 대한 검토를 진행 중입니다.")],
+        doc_type="notice",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert "초안" in [c["document_status"] for c in candidates]
+
+
+def test_administrative_candidates_bid_renotice_detects_attachment_rule():
+    doc = _annotated_doc(
+        [_span(1, "붙임 재공고문 1부.")],
+        doc_type="bid_renotice",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert candidates[0]["document_status"] == "첨부미등록"
+    assert candidates[0]["verification_requirement"] == "attachment_inventory"
+
+
+def test_administrative_candidates_public_offering_detects_review_signal():
+    doc = _annotated_doc(
+        [_span(1, "공모요강 검토 중이며 심사기준은 추후 확정될 예정입니다.")],
+        doc_type="public_offering",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert "내부검토중" in [c["document_status"] for c in candidates]
+
+
+def test_administrative_candidates_budget_material_detects_review_and_liaison_signals():
+    doc = _annotated_doc(
+        [_span(1, "예산(안)에 대해 기획재정부 협의를 진행 중입니다.")],
+        doc_type="budget_material",
+    )
+
+    statuses = {c["document_status"] for c in find_administrative_candidates(doc)}
+
+    assert statuses == {"내부검토중", "타기관협의중"}
+
+
+def test_administrative_candidates_interpretation_compilation_detects_revision_signal():
+    doc = _annotated_doc(
+        [_span(1, "질의회시 내용은 개정 예정으로 정비 중입니다.")],
+        doc_type="interpretation_compilation",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert [c["document_status"] for c in candidates] == ["문서정리중"]
+
+
+def test_administrative_candidates_pre_spec_notice_detects_review_signal():
+    doc = _annotated_doc(
+        [_span(1, "사전규격 검토 중인 제안요청서 초안입니다.")],
+        doc_type="pre_spec_notice",
+    )
+
+    candidates = find_administrative_candidates(doc)
+
+    assert "내부검토중" in [c["document_status"] for c in candidates]
+
+
+def test_administrative_candidates_deferred_doc_types_still_have_no_rules():
+    """director_activity(xlsx 미지원)/business_trip·budget_execution(open_go_kr
+    P0 차단)은 2026-07-21 설계에서 의도적으로 이번 확장 대상에서 제외됐다 —
+    회귀 확인용."""
+    for doc_type in ("director_activity", "business_trip", "budget_execution"):
+        doc = _annotated_doc([_span(1, "붙임 결재 중 검토안")], doc_type=doc_type)
+        assert find_administrative_candidates(doc) == []

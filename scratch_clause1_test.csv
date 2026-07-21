@@ -1,0 +1,35 @@
+row_id,seed_type,seed_span_id,clause_no,cso_subclause_key,cso_classification,title,ordering_agency,department,unit_task,production_date,subject_category,matched_span_text,non_disclosure_reason,body_text,disclosure_status,document_status,source,source_url,doc_type,is_synthetic,field_source,status,model,tokens_in,tokens_out,gen_time_s,sampling_seed,prompt_version,template_id,template_violations,military_secret_grade
+1-fallback-0,synthetic_fallback,,1,legal_secret,C,[합성] 형사소송법상 수사 비밀 유지 대상인 내사 진행 상황 보고 문서,국가정보원,,,2026-05-30,법률상 비밀·비공개 규정,,제1호 — 법률상 비밀·비공개 규정 (화이트리스트 기반 합성 — rd2 DB 실수집 이력 없음),"**보고서**
+
+**- 국가정보원 -**  
+**문서번호: NIS-2026-0520**  
+**생산일자: 2026-05-30**  
+**담당자: 이종수 (전화: 02-1234-5678)**  
+**분류: C (제1호 - 법률상 비밀·비공개 규정)**  
+
+**안건: 형사소송법에 따른 수사 비밀 유지 대상 내사 진행 상황 보고**
+
+**개요:**  
+본 문서는 현재 진행 중인 내사 사건에 대한 보고서로, 형사소송법 제47조에 근거하여 수사 비밀 유지 의무를 준수하며 작성되었음을 알립니다. 해당 내사는 일정 건에 대해 국가 안보와 관련된 기밀 사항을 포함하고 있으며, 따라서 정보 유출 시 국가 안보에 중대한 영향을 미칠 수 있는 사안입니다.
+
+**내사 진행 상황:**  
+1. **내사 개시일:** 2026년 4월 1일  
+2. **대상:** 특정 외부 세력 및 이들과 관련된 내국인  
+3. **현재 진행상황:**
+   - 2026년 5월 15일, 첩보 수집 완료.
+   - 2026년 5월 20일, 수사관 현장 조사 실시 및 관련 자료 확보.
+   - 2026년 5월 28일, 통신 기록 분석 결과 외부 세력 간 연관성 증명됨.
+   - 추가 증거 확보를 위한 긴급 수사 요청 및 협조 체결 진행 중.
+
+**주의사항:**  
+본 문서의 내용은 형사소송법 및 관련 법령에 따라 엄격히 비밀이 유지되어야 하며, 해당 정보의 유출은 법적 책임을 초래할 뿐만 아니라 국가 안전에 심각한 위협이 될 수 있음을 강조합니다. 관련 사항에 대한 외부 유출을 방지하기 위해 모든 관계자는 각별한 주의가 요구됩니다.
+
+**붙임:**  
+1. 첩보 요약 및 분석 결과  
+2. 수사 협조 요청서  
+3. 관련 법률 조항 목록  
+
+이상 보고합니다.  
+**국가정보원**  
+**(보고서 작성자: 이종수)**  
+**(2026-05-30)**  ",비공개,,synthetic-llm,,official_document,True,"{""ordering_agency"": ""whitelist_synthetic_no_db_history"", ""production_date"": ""synthesized_plausible_range"", ""body_text"": ""synthesized""}",ok,gpt-4o-mini,,,15.04,42,fallback-v2-20260720,T1-1,,3급

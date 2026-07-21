@@ -1,0 +1,1013 @@
+[
+  {
+    "template_id": "T1-1",
+    "sample_pdf": "T1-1_legal_secret_official_document_01.pdf",
+    "sha256": "49529719f9678fac65583fbe94a5f009257763af08230465e0615143c2163fa8",
+    "bytes": 31327,
+    "clause_no": "1",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "법정 비공개 자료 열람 제한 검토 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "표준 공문 구조를 바탕으로 법적 근거·보호대상·열람 제한 섹션을 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T1-2",
+    "sample_pdf": "T1-2_legal_secret_policy_material_01.pdf",
+    "sha256": "ca4e24cfde9ad844e10884f4749f36a9af67bb02c0c5e647e6a82ecd9a0e4916",
+    "bytes": 28294,
+    "clause_no": "1",
+    "doc_type": "policy_material",
+    "document_status": "내부검토중",
+    "title": "법률상 비밀·비공개 규정 정책 검토 참고자료 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/policy_material/1-500/4879_20260202174102313_전문교육기관ㆍ항공훈련기관 지정ㆍ인가 및 안전관리 현황.pdf",
+        "role": "실제 정책 참고자료의 참고 라벨·제목 박스·작성부서·□/ㅇ/* 개요체 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T1-3",
+    "sample_pdf": "T1-3_legal_secret_report_01.pdf",
+    "sha256": "cb651a94ca50a764ddb8b70fafb3999aaf875b74a388efff038d2f85d2b455fc",
+    "bytes": 31985,
+    "clause_no": "1",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "법률상 비밀·비공개 규정 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T1-4",
+    "sample_pdf": "T1-4_legal_secret_meeting_minutes_01.pdf",
+    "sha256": "f91fd0026f7f86d5d52d4bd3b076858401dcc06f3beae56bf0abe608633b28c4",
+    "bytes": 29263,
+    "clause_no": "1",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "법률상 비밀·비공개 규정 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T2-1",
+    "sample_pdf": "T2-1_security_defense_policy_material_01.pdf",
+    "sha256": "c74e13f11e995412165401a32804fa2e99905e2ea5b6b0e41962517f8f0e0e7f",
+    "bytes": 30660,
+    "clause_no": "2",
+    "doc_type": "policy_material",
+    "document_status": "내부검토중",
+    "title": "대외 협력 현안 대응방향 검토 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "표준 공문 구조에 국가이익 보호 대상과 공개 시 우려 섹션을 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T2-2",
+    "sample_pdf": "T2-2_security_defense_official_document_01.pdf",
+    "sha256": "12159da32c4a14f8df2525ddbc19cec4090de51b8b00cd85a2e8cb3584e3c0eb",
+    "bytes": 31323,
+    "clause_no": "2",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "국가안전보장·국방 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T2-3",
+    "sample_pdf": "T2-3_unification_diplomacy_report_01.pdf",
+    "sha256": "72677d1bf1538a04660de49ebd06fc56b49895766b548c76569343c3d7d0b33b",
+    "bytes": 32116,
+    "clause_no": "2",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "통일·외교관계 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T2-4",
+    "sample_pdf": "T2-4_unification_diplomacy_meeting_minutes_01.pdf",
+    "sha256": "8ca6191699feeb5aba53e04a802292c5900cf6d51fdb56478cd9945181fefda3",
+    "bytes": 28786,
+    "clause_no": "2",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "통일·외교관계 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T2-5",
+    "sample_pdf": "T2-5_unification_diplomacy_plan_01.pdf",
+    "sha256": "95c4d4654cd39210552e79aebe468fa785ccc77298f84e1f58ce219a6705d658",
+    "bytes": 33019,
+    "clause_no": "2",
+    "doc_type": "plan",
+    "document_status": "내부검토중",
+    "title": "통일·외교관계 추진계획(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/plan/1-500/B10CB261967585853000_결재문서본문.pdf",
+        "role": "실제 운영계획 공문의 추진개요 표·세부계획·행정사항·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-1",
+    "sample_pdf": "T3-1_life_body_report_01.pdf",
+    "sha256": "f38165c8ef3ef6be12fa1071ec4cbc447b6f95c6e5aa6257b72c5cfcb3524ec3",
+    "bytes": 30878,
+    "clause_no": "3",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "다중이용시설 안전 취약요인 점검보고 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "표준 공문 구조에 보호 대상·위험 분석·공개 제한 범위 섹션을 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-2",
+    "sample_pdf": "T3-2_life_body_official_document_01.pdf",
+    "sha256": "7d8a3de5a93e3e09a3f4b62fe79bfc8a6401922fed8eb0e8ed9271bc008bb0e6",
+    "bytes": 31155,
+    "clause_no": "3",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "국민 생명·신체 보호 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-3",
+    "sample_pdf": "T3-3_life_body_policy_material_01.pdf",
+    "sha256": "9712cc5ef7ac8325240d8d23d213b93f0c892e3a0ef98e4e5fd2cff8d869513f",
+    "bytes": 28835,
+    "clause_no": "3",
+    "doc_type": "policy_material",
+    "document_status": "내부검토중",
+    "title": "국민 생명·신체 보호 정책 검토 참고자료 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/policy_material/1-500/4879_20260202174102313_전문교육기관ㆍ항공훈련기관 지정ㆍ인가 및 안전관리 현황.pdf",
+        "role": "실제 정책 참고자료의 참고 라벨·제목 박스·작성부서·□/ㅇ/* 개요체 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-4",
+    "sample_pdf": "T3-4_life_body_meeting_minutes_01.pdf",
+    "sha256": "ceedb1f86587fb6fccae4f0f98dc2cf87b16e47c5609ec56d48c7feaa1672d96",
+    "bytes": 29189,
+    "clause_no": "3",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "국민 생명·신체 보호 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-5",
+    "sample_pdf": "T3-5_property_report_01.pdf",
+    "sha256": "4aaf5cb2309b3c584db198879f750ebfb2e87e89ec66ca3f1437238f4fe80cf6",
+    "bytes": 31679,
+    "clause_no": "3",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "국민 재산 보호 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-6",
+    "sample_pdf": "T3-6_property_official_document_01.pdf",
+    "sha256": "7ef372894cef6e30b5c6eacf402e26649c23961dc839b99d4b29a664e65d9365",
+    "bytes": 30569,
+    "clause_no": "3",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "국민 재산 보호 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T3-7",
+    "sample_pdf": "T3-7_property_plan_01.pdf",
+    "sha256": "ab68ed082752f431a3eabb4a5c0ac4cf050aa2a8e5afc677f9744b0ad3b4b3be",
+    "bytes": 32878,
+    "clause_no": "3",
+    "doc_type": "plan",
+    "document_status": "내부검토중",
+    "title": "국민 재산 보호 추진계획(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/plan/1-500/B10CB261967585853000_결재문서본문.pdf",
+        "role": "실제 운영계획 공문의 추진개요 표·세부계획·행정사항·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-1",
+    "sample_pdf": "T4-1_trial_investigation_meeting_minutes_01.pdf",
+    "sha256": "f03a7a4c7a79adb05e56173f014f0a1d3b601b05ccbd9cb5064b8a4f8cdf9deb",
+    "bytes": 31547,
+    "clause_no": "4",
+    "doc_type": "meeting_minutes",
+    "document_status": "결재진행중",
+    "title": "진행 중 사건 대응회의 자료 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "표준 공문 구조에 사건·절차 개요와 진행 상태·공개 제한 섹션을 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-2",
+    "sample_pdf": "T4-2_trial_investigation_official_document_01.pdf",
+    "sha256": "10b9a0736f0ee94b20b5f85aa6e3a9dd9513e0935a5cbda23533f0a58b4e8854",
+    "bytes": 30971,
+    "clause_no": "4",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "진행 중 재판·수사 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-3",
+    "sample_pdf": "T4-3_trial_investigation_report_01.pdf",
+    "sha256": "1779d674e3e6335a5eade9270bfdde787f03113cb51fed74b0a3c9057f76e437",
+    "bytes": 31765,
+    "clause_no": "4",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "진행 중 재판·수사 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-4",
+    "sample_pdf": "T4-4_prosecution_approval_01.pdf",
+    "sha256": "9f13e1f3561e8730e1a3fd5462ed126cbbfa46d01bd04c35351e48a0f29f30d6",
+    "bytes": 30988,
+    "clause_no": "4",
+    "doc_type": "approval",
+    "document_status": "내부검토중",
+    "title": "공소 제기·유지 승인 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/B10CB261957405327000_결재문서본문.pdf",
+        "role": "실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-5",
+    "sample_pdf": "T4-5_prosecution_reply_notification_01.pdf",
+    "sha256": "8a26d2d65666555b9cffe15107854b6934abfedb837fc280cc13cfabbcb94701",
+    "bytes": 32975,
+    "clause_no": "4",
+    "doc_type": "reply_notification",
+    "document_status": "내부검토중",
+    "title": "공소 제기·유지 검토결과 통보 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/S10CB261958278805000_결재문서본문.pdf",
+        "role": "실제 대외 통보 공문의 개인/기관 수신·안내문·조치표·발신명의 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-6",
+    "sample_pdf": "T4-6_correction_security_plan_01.pdf",
+    "sha256": "521ea6ebb15b16dd5f5894310114044eced8f8a037b75bb3b0f3641c7b30b854",
+    "bytes": 33267,
+    "clause_no": "4",
+    "doc_type": "plan",
+    "document_status": "내부검토중",
+    "title": "형 집행·교정·보안처분 추진계획(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/plan/1-500/B10CB261967585853000_결재문서본문.pdf",
+        "role": "실제 운영계획 공문의 추진개요 표·세부계획·행정사항·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T4-7",
+    "sample_pdf": "T4-7_correction_security_report_01.pdf",
+    "sha256": "2a00703fd41db3c9bf88d8b0672bd3a1f7cfc46a9740969d2bf6a38740c0dd73",
+    "bytes": 32076,
+    "clause_no": "4",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "형 집행·교정·보안처분 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-2",
+    "sample_pdf": "T5-2_audit_inspection_audit_result_01.pdf",
+    "sha256": "add7984f21fc7541c9e1ae10d7276cd3b59d4dd63ea7a2ec114b423aa78e2fcc",
+    "bytes": 33189,
+    "clause_no": "5",
+    "doc_type": "audit_result",
+    "document_status": "감사진행중",
+    "title": "2026년 상반기 복무점검 중간보고 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "원본은 종결된 감사결과보고서이므로, 결과·처분 항목을 제거하고 중간보고로 재구성함.",
+    "source_documents": [
+      {
+        "path": "data/alio/audit_result/2021040202182090_101_2021년 연말연시 취약시기 복무점검 감사결과보고서.pdf",
+        "role": "감사개요·진행 경과 중심의 보고서 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-6",
+    "sample_pdf": "T5-6_audit_inspection_meeting_minutes_01.pdf",
+    "sha256": "360eec493f9680ba642cf724c5d80405cdfb1aed673e48f95bf80870ba5fbe20",
+    "bytes": 28431,
+    "clause_no": "5",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "감사·검사 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-7",
+    "sample_pdf": "T5-7_audit_inspection_official_document_01.pdf",
+    "sha256": "4c3bc395d324972a96b9fca401377ff034aafce4627fe3c44051644bdeb193fa",
+    "bytes": 30699,
+    "clause_no": "5",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "감사·검사 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-8",
+    "sample_pdf": "T5-8_audit_inspection_report_01.pdf",
+    "sha256": "82468aca8f858cdf7fab0f8aa95903fee1d4ea4fa01cf0af4e1cfdec963d1846",
+    "bytes": 31858,
+    "clause_no": "5",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "감사·검사 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-3",
+    "sample_pdf": "T5-3_bid_contract_bid_notice_01.pdf",
+    "sha256": "ca9bf303ae96fcc4a5699983a96e74fce2ec484102df4b0c00d19ee359a9bfbb",
+    "bytes": 36095,
+    "clause_no": "5",
+    "doc_type": "bid_notice",
+    "document_status": "내부검토중",
+    "title": "전자 행정서비스 통합운영 사업 제안요청서(안) 검토 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "사전규격공개 원본의 형식만 참고하고 사업명·평가내용은 합성함.",
+    "source_documents": [
+      {
+        "path": "data/mohw/pre_spec_notice/1-500/1485351_250415_제안요청서(전자바우처 통합카드사업)_사전규격공개.pdf",
+        "role": "제안요청서의 □/○ 개요체와 평가 배점표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-9",
+    "sample_pdf": "T5-9_bid_contract_approval_01.pdf",
+    "sha256": "1aebca249c6be62055e2acd2c97f65f275cf9f9e6e18a1290c92147903b3f564",
+    "bytes": 31081,
+    "clause_no": "5",
+    "doc_type": "approval",
+    "document_status": "내부검토중",
+    "title": "입찰계약 승인 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/B10CB261957405327000_결재문서본문.pdf",
+        "role": "실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-4",
+    "sample_pdf": "T5-4_personnel_management_personnel_01.pdf",
+    "sha256": "52d43a8c705cde19e38729cd26ffaff8858eb10ab6efefe7b9a963ff33a1af8c",
+    "bytes": 35602,
+    "clause_no": "5",
+    "doc_type": "personnel",
+    "document_status": "결재진행중",
+    "title": "2026년 하반기 승진후보군 평가계획(안) #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "공개 가능한 실물 인사평가 원본은 없어서, 인사발령 문서의 표·결재선 관례를 참고해 평가 진행 중 상태로 설계함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT9604D4D0A1C41CA7F2CE539D3D65CFD2_5급 공무원 인사발령.pdf",
+        "role": "소속·직급·성명 표와 결재선의 공문 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-1",
+    "sample_pdf": "T5-1_decision_review_approval_01.pdf",
+    "sha256": "dac10055b0aa9d74975aa122ddc5c9bee11a2b99e93d88fd27a37a1b286f0823",
+    "bytes": 30677,
+    "clause_no": "5",
+    "doc_type": "approval",
+    "document_status": "타기관협의중",
+    "title": "2026년도 중점사업 추진방안 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "표준 공문·결재선과 승인 검토 문서의 구조만 참고했으며, 본문은 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      },
+      {
+        "path": "data/orginl_info/approval/DCT121B6FD91677367CD89FFFFDC296B6E2_2018년도 BDI 제9차 정기이사회 의결사항 승인 검토.hwp",
+        "role": "승인 검토 문서의 업무 맥락 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-5",
+    "sample_pdf": "T5-5_decision_review_meeting_minutes_01.pdf",
+    "sha256": "26e3d8c7e5e275d44bac51bc18bf487e07c363793050490603bdac6d63b2bddd",
+    "bytes": 34274,
+    "clause_no": "5",
+    "doc_type": "meeting_minutes",
+    "document_status": "타기관협의중",
+    "title": "2026년 제2회 도시계획 실무위원회 심의 진행 현황 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "원본은 공개된 종결 회의록이므로, 최종 의결 대신 <보류> 상태로 재구성함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "회의개요·질문/답변·논의결과 표기 관례 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T5-10",
+    "sample_pdf": "T5-10_technology_development_report_01.pdf",
+    "sha256": "f5f270f014b4c66b35070d492c4831a4f1cc35352bb5bbe22eb30b54f9ad8bad",
+    "bytes": 31611,
+    "clause_no": "5",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "기술개발 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-2",
+    "sample_pdf": "T6-2_petitioner_pii_reply_notification_01.pdf",
+    "sha256": "d5a0ceed41cdc2f7a8f9c0254f43af6910887a93b5c0abdb6305bece7018d3ae",
+    "bytes": 34150,
+    "clause_no": "6",
+    "doc_type": "reply_notification",
+    "document_status": "민원처리중",
+    "title": "생활소음 민원 사실관계 확인 안내 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "실물 민원회신 원본은 현재 수집되지 않아, 실물 표준 공문 형식과 일반 회신 관례를 조합해 설계함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT2A56AFE5393CFF372DBCA1E1C2796D78_9급 공채 임용예정자 실무수습 발령.pdf",
+        "role": "표준 공문 상단·결재선·하단 블록의 구조적 근거"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-1",
+    "sample_pdf": "T6-1_personnel_pii_personnel_01.pdf",
+    "sha256": "faadeb2b7045d0cb0401b3a9db1eb3279424cc77751c910457066b91fe1c9daf",
+    "bytes": 32859,
+    "clause_no": "6",
+    "doc_type": "personnel",
+    "document_status": "비식별처리중",
+    "title": "2026년 하반기 5급 공무원 인사발령 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "원본의 개인·기관 식별값을 사용하지 않고 표의 모든 값은 합성함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/personnel/DCT9604D4D0A1C41CA7F2CE539D3D65CFD2_5급 공무원 인사발령.pdf",
+        "role": "인사발령 도입문·발령사항 표·결재선의 직접 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-3",
+    "sample_pdf": "T6-3_personnel_pii_report_01.pdf",
+    "sha256": "68e02ca7706478fa165ddd64aa49e3a1759ef3329fbf55de21ebbeff75489e60",
+    "bytes": 31601,
+    "clause_no": "6",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "인사·채용 개인정보 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-4",
+    "sample_pdf": "T6-4_welfare_pii_official_document_01.pdf",
+    "sha256": "352c9df01edd3858a08ffc7b4da0256b4eb8888bbf3f07375a7d80524e2a2972",
+    "bytes": 31103,
+    "clause_no": "6",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "복지·민원 개인정보 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-5",
+    "sample_pdf": "T6-5_welfare_pii_approval_01.pdf",
+    "sha256": "466e04a60b17bd8cccc1b120f069177f36d0b80ac0b7939836c263a605bcf584",
+    "bytes": 30944,
+    "clause_no": "6",
+    "doc_type": "approval",
+    "document_status": "내부검토중",
+    "title": "복지·민원 개인정보 승인 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/B10CB261957405327000_결재문서본문.pdf",
+        "role": "실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T6-6",
+    "sample_pdf": "T6-6_subject_pii_meeting_minutes_01.pdf",
+    "sha256": "25e678f42e88302ac08da0a2449997c7b251aa45eb1cc57200c74f20b32dd992",
+    "bytes": 28971,
+    "clause_no": "6",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "조사대상자 개인정보 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-1",
+    "sample_pdf": "T7-1_technology_patent_report_01.pdf",
+    "sha256": "ef6a8f980c0e261e1d21d877edde1972aa8ba65f4bd60fb672a251461d17b307",
+    "bytes": 32068,
+    "clause_no": "7",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "기술·특허 비밀 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-3",
+    "sample_pdf": "T7-3_technology_patent_official_document_01.pdf",
+    "sha256": "a7fe867857b7832b7a0226c9749f41af40ccda8d7dc0fb5fdee8aa9a1ef0b72c",
+    "bytes": 31465,
+    "clause_no": "7",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "기술·특허 비밀 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-4",
+    "sample_pdf": "T7-4_ma_terms_approval_01.pdf",
+    "sha256": "74f02aff59fc39655fb4d53511e54b7b781594ca1ed82962cccd7e4c59630c00",
+    "bytes": 31252,
+    "clause_no": "7",
+    "doc_type": "approval",
+    "document_status": "내부검토중",
+    "title": "M&A·협상조건 승인 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/B10CB261957405327000_결재문서본문.pdf",
+        "role": "실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-5",
+    "sample_pdf": "T7-5_ma_terms_meeting_minutes_01.pdf",
+    "sha256": "b342a120e2b419754020a3805e6882dfb2cd498a0f42f5c26d84bd200f4df510",
+    "bytes": 29478,
+    "clause_no": "7",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "M&A·협상조건 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-6",
+    "sample_pdf": "T7-6_security_diagnosis_report_01.pdf",
+    "sha256": "fecf3b7a098825f43ac6ceb54a814046e6910629bf4dd75ac623769b05e39a0d",
+    "bytes": 32241,
+    "clause_no": "7",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "보안진단·취약점 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-2",
+    "sample_pdf": "T7-2_unit_cost_bid_notice_01.pdf",
+    "sha256": "e730d98009501dd16b1a5ce0d438c2950eb98c7f74b87cc8a23eff017d3fabfe",
+    "bytes": 33693,
+    "clause_no": "7",
+    "doc_type": "bid_notice",
+    "document_status": "공개심사중",
+    "title": "통합업무장비 납품단가 협상자료 공개심사 건 #1",
+    "provenance_level": "partial_structural_reference",
+    "provenance_note": "실물 납품단가 원본은 보유하지 않아, 조달 문서 형식 관례를 참고해 단가표를 합성함.",
+    "source_documents": [
+      {
+        "path": "data/mohw/bid_notice/1-500/1485628_제안요청서(전자바우처 통합카드사업).pdf",
+        "role": "조달·제안요청 문서의 표 구성과 공문 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T7-7",
+    "sample_pdf": "T7-7_business_strategy_policy_material_01.pdf",
+    "sha256": "5bf77f998bd3f6e78596b223c768ea70519abf12f905878a9cb5dc361d1ef778",
+    "bytes": 27742,
+    "clause_no": "7",
+    "doc_type": "policy_material",
+    "document_status": "내부검토중",
+    "title": "경영전략 정책 검토 참고자료 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/policy_material/1-500/4879_20260202174102313_전문교육기관ㆍ항공훈련기관 지정ㆍ인가 및 안전관리 현황.pdf",
+        "role": "실제 정책 참고자료의 참고 라벨·제목 박스·작성부서·□/ㅇ/* 개요체 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-1",
+    "sample_pdf": "T8-1_real_estate_speculation_plan_01.pdf",
+    "sha256": "0b79752f8d0fab36037468b8fb4b64245d6899ac67abe536a94f216fff8cdae4",
+    "bytes": 32579,
+    "clause_no": "8",
+    "doc_type": "plan",
+    "document_status": "내부검토중",
+    "title": "부동산 투기 추진계획(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/plan/1-500/B10CB261967585853000_결재문서본문.pdf",
+        "role": "실제 운영계획 공문의 추진개요 표·세부계획·행정사항·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-2",
+    "sample_pdf": "T8-2_real_estate_speculation_policy_material_01.pdf",
+    "sha256": "89f9b72583dee28867ac1cbfb9b9f608d8309212850e13fa5f771dda90c50660",
+    "bytes": 28059,
+    "clause_no": "8",
+    "doc_type": "policy_material",
+    "document_status": "내부검토중",
+    "title": "부동산 투기 정책 검토 참고자료 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/policy_material/1-500/4879_20260202174102313_전문교육기관ㆍ항공훈련기관 지정ㆍ인가 및 안전관리 현황.pdf",
+        "role": "실제 정책 참고자료의 참고 라벨·제목 박스·작성부서·□/ㅇ/* 개요체 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-3",
+    "sample_pdf": "T8-3_real_estate_speculation_report_01.pdf",
+    "sha256": "471a6f18fb5a637ef0d564e72199aae8ab78b4d0f2402c066e1ba0a32d8349f1",
+    "bytes": 31909,
+    "clause_no": "8",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "부동산 투기 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-4",
+    "sample_pdf": "T8-4_real_estate_speculation_meeting_minutes_01.pdf",
+    "sha256": "8ee5aa5176aa90704460f4e0c3a4aaaa06c3d48a5bfef744fcedb42862f08f2f",
+    "bytes": 28693,
+    "clause_no": "8",
+    "doc_type": "meeting_minutes",
+    "document_status": "내부검토중",
+    "title": "부동산 투기 실무회의 회의록 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/molit/meeting_minutes/1-500/4888_2026년 제1회 수도권정비실무위원회 회의록_홈페이지 게시.hwpx",
+        "role": "실제 회의록의 회의개요와 안건번호·안건명·논의내용·논의결과 표 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-5",
+    "sample_pdf": "T8-5_cornering_official_document_01.pdf",
+    "sha256": "b78002521247b1cb9cc348f93f40a3d2a22c9376a3e7ca5ca7215b59a4285b79",
+    "bytes": 30970,
+    "clause_no": "8",
+    "doc_type": "official_document",
+    "document_status": "내부검토중",
+    "title": "매점매석 업무 검토 공문 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/official_document/1-500/B10CB261967523862000_결재문서본문.pdf",
+        "role": "실제 내부결재 공문의 기관명·수신·제목·번호문단·결재선·시행정보 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-6",
+    "sample_pdf": "T8-6_cornering_report_01.pdf",
+    "sha256": "94a497a8e325c2e55e870dd30f81c4e255ea2c584233eabaf38ae812feda5277",
+    "bytes": 31864,
+    "clause_no": "8",
+    "doc_type": "report",
+    "document_status": "내부검토중",
+    "title": "매점매석 검토보고서 #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/report/1-500/B10CB261957374394000_결재문서본문.pdf",
+        "role": "실제 결과보고 공문의 관련근거·보고문·가나다 계층·붙임 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  },
+  {
+    "template_id": "T8-7",
+    "sample_pdf": "T8-7_cornering_approval_01.pdf",
+    "sha256": "69ed7557ab36d221a24df6dba4f410f3750d047ad86bbca04acfb081d71d815a",
+    "bytes": 30906,
+    "clause_no": "8",
+    "doc_type": "approval",
+    "document_status": "내부검토중",
+    "title": "매점매석 승인 검토(안) #1",
+    "provenance_level": "structural_reference",
+    "provenance_note": "같은 문서유형의 실제 원본에서 페이지 계층과 표·결재·하단 구조를 확인하고 합성 내용만 적용함.",
+    "source_documents": [
+      {
+        "path": "data/orginl_info/approval/1-500/B10CB261957405327000_결재문서본문.pdf",
+        "role": "실제 승인요청 공문의 관련근거·요청문·붙임·미완료 결재선 구조 참고"
+      }
+    ],
+    "synthetic_content": true
+  }
+]

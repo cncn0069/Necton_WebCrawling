@@ -27,14 +27,21 @@ from rd2.storage.naming import (
     DOC_TYPE_APPROVAL,
     DOC_TYPE_AUDIT_RESULT,
     DOC_TYPE_BID_NOTICE,
+    DOC_TYPE_BID_RENOTICE,
+    DOC_TYPE_BUDGET_MATERIAL,
     DOC_TYPE_DIRECTIVE,
     DOC_TYPE_GUIDE,
+    DOC_TYPE_INTERPRETATION_COMPILATION,
     DOC_TYPE_MEETING_MINUTES,
+    DOC_TYPE_NOTICE,
     DOC_TYPE_NOTIFICATION,
     DOC_TYPE_OFFICIAL_DOCUMENT,
     DOC_TYPE_PERSONNEL,
     DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
+    DOC_TYPE_PRE_SPEC_NOTICE,
+    DOC_TYPE_PRESS_RELEASE,
+    DOC_TYPE_PUBLIC_OFFERING,
     DOC_TYPE_REGULATION,
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
@@ -215,6 +222,49 @@ _ADMIN_STATUS_RULES_BY_DOC_TYPE: dict[str, tuple[AdministrativeStatusRule, ...]]
     DOC_TYPE_GUIDE: (
         AdministrativeStatusRule("공개예정일미도래", ("공개 예정", "시행 예정", "배포 예정")),
         AdministrativeStatusRule("문서정리중", ("정비 중", "폐기 예정", "중복")),
+    ),
+    # 2026-07-21 office-hours/plan-eng-review로 신규 추가 — 아래 7개 문서유형
+    # (press_release/notice/bid_renotice/public_offering/budget_material/
+    # interpretation_compilation/pre_spec_notice)은 이 파일의 다른 규칙과 달리
+    # 아직 실제 문서로 검증되지 않은 초안이다. 기존 규칙들이 전부 실사 검증을
+    # 거쳐 오탐 단어를 걸러낸 것과 달리(위 5·7·8호 실측 이력, "평가"/"검토"
+    # 단독 사용 오탐 등 참고), 이 7개는 korea_kr/alio 등 소스의 추출→주석
+    # 파이프라인이 아직 실행된 적이 없어(설계 문서 참고) 대조할 annotated
+    # 문서가 없었다. 인접 문서유형(policy_material/notification/bid_notice
+    # 등)의 이미 검증된 패턴에서 유추해 작성했으며, 첫 실행 후 반드시 실사
+    # 재검증이 필요하다.
+    DOC_TYPE_PRESS_RELEASE: (
+        AdministrativeStatusRule("공개예정일미도래", ("배포 예정", "보도 예정", "엠바고")),
+        AdministrativeStatusRule("초안", ("보도자료(안)", "초안", "검토안")),
+        AdministrativeStatusRule("타기관협의중", ("관계기관", "부처 협의", "의견 조회")),
+    ),
+    DOC_TYPE_NOTICE: (
+        AdministrativeStatusRule("공개예정일미도래", ("공고 예정", "게시 예정", "시행 예정")),
+        AdministrativeStatusRule("초안", ("공고안", "초안", "검토안")),
+        AdministrativeStatusRule("타기관협의중", ("관계기관", "의견수렴", "협의 중")),
+    ),
+    DOC_TYPE_BID_RENOTICE: (
+        AdministrativeStatusRule("내부검토중", ("재공고 검토", "재입찰 검토", "검토안")),
+        AdministrativeStatusRule("첨부미등록", ("붙임", "재공고문", "별첨"), "attachment_inventory"),
+    ),
+    DOC_TYPE_PUBLIC_OFFERING: (
+        AdministrativeStatusRule("공개예정일미도래", ("공모 예정", "접수 예정", "시행 예정")),
+        AdministrativeStatusRule("내부검토중", ("공모요강 검토", "심사기준 검토", "검토안")),
+        AdministrativeStatusRule("타기관협의중", ("관계기관", "의견수렴")),
+    ),
+    DOC_TYPE_BUDGET_MATERIAL: (
+        AdministrativeStatusRule("내부검토중", ("예산(안)", "편성 중", "검토 중")),
+        AdministrativeStatusRule("타기관협의중", ("기획재정부", "관계기관", "협의 중")),
+        AdministrativeStatusRule("첨부미등록", ("붙임", "산출내역서", "별첨"), "attachment_inventory"),
+    ),
+    DOC_TYPE_INTERPRETATION_COMPILATION: (
+        AdministrativeStatusRule("내부검토중", ("회신 검토", "검토 중", "검토 의견")),
+        AdministrativeStatusRule("문서정리중", ("정비 중", "개정 예정", "폐지 예정")),
+    ),
+    DOC_TYPE_PRE_SPEC_NOTICE: (
+        AdministrativeStatusRule("내부검토중", ("사전규격 검토", "제안요청 검토", "검토안")),
+        AdministrativeStatusRule("타기관협의중", ("의견수렴", "관계기관", "협의 중")),
+        AdministrativeStatusRule("첨부미등록", ("붙임", "제안요청서"), "attachment_inventory"),
     ),
 }
 
