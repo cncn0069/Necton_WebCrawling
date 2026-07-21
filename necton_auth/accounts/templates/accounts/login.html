@@ -12,17 +12,19 @@
     <section class="auth-card" aria-labelledby="login-title">
       <header class="auth-header">
         <h1 class="auth-title" id="login-title">Necton RD</h1>
-        <p class="auth-subtitle">등록된 계정으로 로그인해 주세요</p>
+        <p class="auth-subtitle">
+          {% if signed_in_email %}로그인이 완료되었습니다{% else %}등록된 계정으로 로그인해 주세요{% endif %}
+        </p>
       </header>
 
       {% for message in messages %}
         <p class="auth-notice" role="status">{{ message }}</p>
       {% endfor %}
 
-      {% if request.user.is_authenticated %}
+      {% if signed_in_email %}
         <div class="auth-signed-in">
           <p class="auth-signed-in-label">로그인한 계정</p>
-          <p class="auth-signed-in-email">{{ request.user.email }}</p>
+          <p class="auth-signed-in-email">{{ signed_in_email }}</p>
           <form method="post" action="{% url 'accounts:logout' %}">
             {% csrf_token %}
             <button class="auth-submit" type="submit">로그아웃</button>

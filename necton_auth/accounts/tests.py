@@ -1,4 +1,7 @@
+from unittest.mock import patch
+
 from django.contrib.staticfiles import finders
+from django.db import OperationalError
 from django.test import TestCase
 from django.urls import reverse
 
@@ -24,8 +27,26 @@ class LoginPageTests(TestCase):
 
     def test_account_routes_do_not_use_accounts_prefix(self):
         self.assertEqual(reverse("accounts:login"), "/login/")
+        self.assertEqual(reverse("accounts:account"), "/account/")
         self.assertEqual(reverse("accounts:signup"), "/signup/")
         self.assertEqual(reverse("accounts:logout"), "/logout/")
+
+    def test_legacy_account_routes_redirect_to_current_routes(self):
+        redirects = {
+            "/accounts/": reverse("accounts:login"),
+            "/accounts/login/": reverse("accounts:login"),
+            "/accounts/signup/": reverse("accounts:signup"),
+            "/accounts/logout/": reverse("accounts:login"),
+        }
+
+        for old_path, new_path in redirects.items():
+            with self.subTest(old_path=old_path):
+                self.assertRedirects(self.client.get(old_path), new_path)
+
+    def test_unknown_path_redirects_to_login(self):
+        response = self.client.get("/not-found/")
+
+        self.assertRedirects(response, reverse("accounts:login"))
 
     def test_login_page_uses_clean_django_template(self):
         response = self.client.get(reverse("accounts:login"))
@@ -66,15 +87,34 @@ class LoginPageTests(TestCase):
             follow=True,
         )
 
-        self.assertRedirects(response, reverse("accounts:login"))
+        self.assertRedirects(response, reverse("accounts:account"))
         self.assertContains(response, "로그인되었습니다.")
         self.assertContains(response, user.email)
         self.assertContains(response, reverse("accounts:logout"))
         self.assertEqual(self.client.session["_auth_user_id"], str(user.pk))
 
-        next_response = self.client.get(reverse("accounts:login"))
+        next_response = self.client.get(reverse("accounts:login"), follow=True)
+        self.assertRedirects(next_response, reverse("accounts:account"))
         self.assertContains(next_response, user.email)
         self.assertContains(next_response, "로그아웃")
+
+    def test_login_success_page_does_not_repeat_database_user_lookup(self):
+        user = self.create_user()
+
+        with patch(
+            "accounts.backends.EmailBackend.get_user",
+            side_effect=OperationalError("simulated database lookup failure"),
+        ) as get_user:
+            response = self.client.post(
+                reverse("accounts:login"),
+                {"email": user.email, "password": self.password},
+                follow=True,
+            )
+
+        self.assertRedirects(response, reverse("accounts:account"))
+        self.assertContains(response, user.email)
+        self.assertContains(response, "로그아웃")
+        get_user.assert_not_called()
 
     def test_login_rejects_inactive_user(self):
         self.create_user(status="I")
@@ -90,6 +130,24 @@ class LoginPageTests(TestCase):
         )
         self.assertNotIn("_auth_user_id", self.client.session)
 
+    def test_login_shows_friendly_message_when_database_is_unavailable(self):
+        with patch(
+            "accounts.backends.EmailBackend.authenticate",
+            side_effect=OperationalError("simulated database failure"),
+        ):
+            response = self.client.post(
+                reverse("accounts:login"),
+                {"email": "admin@example.com", "password": self.password},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertContains(
+            response,
+            "데이터베이스 연결에 문제가 있습니다. 잠시 후 다시 시도해 주세요.",
+            status_code=503,
+        )
+        self.assertNotIn("_auth_user_id", self.client.session)
+
     def test_logout_clears_login_session(self):
         self.create_user()
         self.client.post(
@@ -97,12 +155,20 @@ class LoginPageTests(TestCase):
             {"email": "admin@example.com", "password": self.password},
         )
 
-        response = self.client.post(reverse("accounts:logout"), follow=True)
+        with patch(
+            "accounts.backends.EmailBackend.get_user",
+            side_effect=OperationalError("simulated database lookup failure"),
+        ) as get_user:
+            response = self.client.post(
+                reverse("accounts:logout"),
+                follow=True,
+            )
 
         self.assertRedirects(response, reverse("accounts:login"))
         self.assertContains(response, "로그아웃되었습니다.")
         self.assertContains(response, 'name="email"')
         self.assertNotIn("_auth_user_id", self.client.session)
+        get_user.assert_not_called()
 
     def test_login_stylesheet_is_discoverable(self):
         self.assertIsNotNone(finders.find("accounts/css/login.css"))
