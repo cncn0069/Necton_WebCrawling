@@ -22,6 +22,11 @@ class LoginPageTests(TestCase):
 
         self.assertRedirects(response, reverse("accounts:login"))
 
+    def test_account_routes_do_not_use_accounts_prefix(self):
+        self.assertEqual(reverse("accounts:login"), "/login/")
+        self.assertEqual(reverse("accounts:signup"), "/signup/")
+        self.assertEqual(reverse("accounts:logout"), "/logout/")
+
     def test_login_page_uses_clean_django_template(self):
         response = self.client.get(reverse("accounts:login"))
 
@@ -31,6 +36,8 @@ class LoginPageTests(TestCase):
         self.assertContains(response, 'name="password"')
         self.assertContains(response, 'name="csrfmiddlewaretoken"')
         self.assertContains(response, "accounts/css/login.css")
+        self.assertContains(response, "Necton RD")
+        self.assertContains(response, "등록된 계정으로 로그인해 주세요")
         self.assertNotContains(response, "__bundler")
         self.assertNotContains(response, "<x-dc")
 
@@ -128,6 +135,8 @@ class SignUpPageTests(TestCase):
         self.assertContains(response, 'name="company"')
         self.assertContains(response, 'name="csrfmiddlewaretoken"')
         self.assertContains(response, "accounts/css/signup.css")
+        self.assertContains(response, "Necton RD")
+        self.assertContains(response, "새 계정을 생성해 주세요")
         self.assertNotContains(response, "support.js")
         self.assertNotContains(response, "<x-dc")
 
