@@ -167,6 +167,31 @@ input {
   transform: translateY(1px);
 }
 
+.auth-switch {
+  margin: 0;
+  color: var(--auth-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.auth-link {
+  margin-left: 4px;
+  color: var(--auth-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.auth-link:hover {
+  text-decoration: underline;
+}
+
+.auth-link:focus-visible {
+  border-radius: 2px;
+  outline: 3px solid var(--auth-focus);
+  outline-offset: 2px;
+}
+
 @media (max-width: 560px) {
   .auth-page {
     align-items: start;
