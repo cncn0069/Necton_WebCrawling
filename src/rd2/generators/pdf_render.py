@@ -239,7 +239,13 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
     return context
 
 
-def _render_context(row: dict, category: str, watermark_path: Path | None, stamp_path: Path | None) -> dict:
+def _render_context(
+    row: dict,
+    category: str,
+    watermark_path: Path | None,
+    stamp_path: Path | None,
+    stamp_top_path: Path | None = None,
+) -> dict:
     layout = LAYOUT_SPECS.get(category, LAYOUT_SPECS[CATEGORY_PUBLIC_CORPORATION])
     doc_type = row.get("doc_type") or ""
     template = find_template(
@@ -261,6 +267,7 @@ def _render_context(row: dict, category: str, watermark_path: Path | None, stamp
         "css": Markup(_embedded_css()),
         "watermark_uri": _file_uri(watermark_path),
         "stamp_uri": _file_uri(stamp_path),
+        "stamp_top_uri": _file_uri(stamp_top_path),
     }
     context.update(_body_context(row, template.body_format if template else context["generic_body_format"], status))
     if template:
@@ -341,14 +348,20 @@ def render_document_pdf(
     security_mark_path: Path | None = None,
     watermark_path: Path | None = None,
     stamp_path: Path | None = None,
+    stamp_top_path: Path | None = None,
 ) -> Path:
-    """공개 진입점. C 문서에만 페이지 반복 워터마크와 스탬프를 적용한다."""
+    """공개 진입점. C 문서에만 페이지 반복 워터마크와 스탬프를 적용한다.
+
+    stamp_top_path는 군사기밀 [별표 2] 등급 마크처럼 상단·하단 양쪽에 같은 마크를
+    붙여야 하는 경우에만 넘긴다 — 일반 "대외비" 마크는 하단(stamp_path)만 쓴다.
+    """
     output_path = Path(output_path)
     confidential = (row.get("cso_classification") or "").strip().upper() == "C"
     effective_stamp = (stamp_path or security_mark_path) if confidential else None
+    effective_stamp_top = stamp_top_path if confidential else None
     effective_watermark = watermark_path if confidential else None
     env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_autoescape(("html",)))
-    context = _render_context(row, category, effective_watermark, effective_stamp)
+    context = _render_context(row, category, effective_watermark, effective_stamp, effective_stamp_top)
     template = context["template"]
     if row.get("cso_subclause_key") and template is None:
         raise ValueError(

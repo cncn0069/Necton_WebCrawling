@@ -1,4 +1,4 @@
-"""보안마크(대외비 워터마크 + 하단 분류 스탬프) 생성 — Pillow + opencv.
+"""보안마크(대외비/군사기밀 워터마크 + 분류 스탬프) 생성 — Pillow + opencv.
 
 2026-07-14 사용자 피드백 반영 이력:
 1. 초기 버전(우측 하단 작은 사각 스탬프)이 실제 한국 관공서 대외비 문서
@@ -12,6 +12,12 @@
 2. 재수정: 페이지 전체를 덮는 "대외비" 타일 반복 워터마크가 아니라,
    가/나/다/라... 중 하나를 골라 큰 단일 문자로 한 번 배경에 찍는
    워터마크로 변경. "대외비" 분류 박스 스탬프는 페이지당 1회로 별개 유지.
+3. 2026-07-21: 손으로 그린 "대외비" 박스 대신 logo/대외비.png(사용자가
+   준비한 실제 서식 참고 원본)를 그대로 쓰도록 교체. 또한 국방부/국가정보원
+   문서는 군사기밀 보호법 시행령 [별표 2](제5조제1항)의 등급별(Ⅰ/Ⅱ/Ⅲ급)
+   마크(logo/1급_비밀.png 등, 사용자가 [별표 2] 도안을 참고해 준비함)를
+   대신 쓴다 — generate_military_secret_mark() 참고. 두 마크 모두 노이즈
+   처리(흐림·회전·잉크번짐)는 기존과 동일하게 적용한다.
 
 Genalog는 이 프로젝트 Python 버전(3.14.6)에서 설치가 안 되는 게 확인돼
 (pip install genalog 재현 시 numpy 소스 빌드 실패) 대신 Pillow+opencv로
@@ -31,12 +37,17 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from rd2.generators.agency_resolver import MILITARY_SECRET_MARK_FILENAMES
+
 _WATERMARK_CHARS = ("가", "나", "다", "라", "마", "바", "사")
 WATERMARK_VARIANT_COUNT = len(_WATERMARK_CHARS)
-_STAMP_TEXT = "대외비"
 _FONT_DIR = Path(__file__).with_name("assets") / "fonts"
 _KOREAN_FONT_PATH = str(_FONT_DIR / "NotoSansKR-Regular.ttf")
 _KOREAN_FONT_BOLD_PATH = str(_FONT_DIR / "NotoSansKR-Bold.ttf")
+
+_REPO_ROOT = Path(__file__).parent.parent.parent.parent
+_LOGO_DIR = _REPO_ROOT / "logo"
+_CONFIDENTIAL_MARK_ASSET = _LOGO_DIR / "대외비.png"
 
 # A4 @ ~150dpi (reportlab A4는 pt 단위 595x842 — 150dpi로 래스터화)
 _PAGE_SIZE_PX = (1240, 1754)
@@ -70,22 +81,16 @@ def _draw_single_character_watermark(seed: int) -> Image.Image:
     return img
 
 
-def _draw_stamp_box() -> Image.Image:
-    """하단 중앙에 들어갈 "대외비" 분류 박스 스탬프(참고 이미지의 급비밀
-    박스와 같은 "박스 안에 분류문구" 형식만 차용, 실제 기관 서식 아님)."""
-    img = Image.new("RGBA", _STAMP_SIZE_PX, (255, 255, 255, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rectangle(
-        [3, 3, _STAMP_SIZE_PX[0] - 3, _STAMP_SIZE_PX[1] - 3],
-        outline=(0, 0, 0, 255), width=3,
-    )
-    font = _load_font(_KOREAN_FONT_BOLD_PATH, 34)
-    bbox = draw.textbbox((0, 0), _STAMP_TEXT, font=font)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (_STAMP_SIZE_PX[0] - text_w) / 2 - bbox[0]
-    y = (_STAMP_SIZE_PX[1] - text_h) / 2 - bbox[1]
-    draw.text((x, y), _STAMP_TEXT, font=font, fill=(0, 0, 0, 255))
-    return img
+def _load_mark_asset(asset_path: Path) -> Image.Image:
+    """logo/ 폴더의 실제 마크 원본을 표준 스탬프 캔버스 크기로 맞춘다(비율 유지, 중앙 배치)."""
+    source = Image.open(asset_path).convert("RGBA")
+    canvas = Image.new("RGBA", _STAMP_SIZE_PX, (255, 255, 255, 0))
+    scale = min(_STAMP_SIZE_PX[0] / source.width, _STAMP_SIZE_PX[1] / source.height)
+    new_size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
+    resized = source.resize(new_size, Image.LANCZOS)
+    offset = ((_STAMP_SIZE_PX[0] - new_size[0]) // 2, (_STAMP_SIZE_PX[1] - new_size[1]) // 2)
+    canvas.paste(resized, offset, resized)
+    return canvas
 
 
 def _apply_noise(img: Image.Image, *, seed: int, angle_range: float = 3.0) -> Image.Image:
@@ -125,8 +130,31 @@ def generate_page_watermark(output_path: Path, *, seed: int = 0) -> Path:
 
 
 def generate_classification_stamp(output_path: Path, *, seed: int = 0) -> Path:
-    """하단 중앙에 넣을 "대외비" 분류 박스 스탬프 PNG를 만든다(C 전용)."""
-    base = _draw_stamp_box()
+    """"대외비" 분류 마크 PNG를 만든다(C 전용, 군사기밀 대상 기관 제외).
+
+    agency_resolver.is_military_secret_agency()가 True인 문서(국방부·국가정보원)는
+    이 마크 대신 generate_military_secret_mark()를 써야 한다.
+    """
+    base = _load_mark_asset(_CONFIDENTIAL_MARK_ASSET)
+    noisy = _apply_noise(base, seed=seed, angle_range=8.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
+
+
+def generate_military_secret_mark(output_path: Path, grade: str, *, seed: int = 0) -> Path:
+    """군사기밀 보호법 시행령 [별표 2](제5조제1항) 등급별("1급"/"2급"/"3급") 마크 PNG를 만든다.
+
+    국방부/국가정보원 문서에만 쓴다(agency_resolver.is_military_secret_agency) — 나머지
+    C(기밀) 문서는 generate_classification_stamp()의 "대외비" 마크를 그대로 쓴다.
+    [별표 2] "가"목: 기밀문서는 앞뒷면 표지와 기밀이 포함된 면마다 상단·하단 중앙에
+    이 마크를 표시한다 — 이 함수는 마크 이미지 한 장만 만들고, 상단·하단 배치는
+    pdf_render.py(템플릿의 stamp/stamp-top 슬롯)가 담당한다.
+    """
+    if grade not in MILITARY_SECRET_MARK_FILENAMES:
+        raise ValueError(f"알 수 없는 군사기밀 등급: {grade!r}")
+    asset_path = _LOGO_DIR / MILITARY_SECRET_MARK_FILENAMES[grade]
+    base = _load_mark_asset(asset_path)
     noisy = _apply_noise(base, seed=seed, angle_range=8.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     noisy.save(output_path)

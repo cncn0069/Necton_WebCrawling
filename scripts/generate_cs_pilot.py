@@ -63,9 +63,12 @@ from openai import RateLimitError
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import (
     MARKING_SPEC_AGENCY_WHITELIST,
+    MILITARY_SECRET_MARK_FILENAMES,
     fetch_real_agency_date_samples,
+    is_military_secret_agency,
     resolve_agency_for_candidate,
     sample_real_agency_and_date_for_fallback,
+    select_military_secret_grade,
     select_whitelisted_agency,
     synthesize_plausible_date,
 )
@@ -77,6 +80,7 @@ from rd2.generators.pdf_render import render_document_pdf
 from rd2.generators.security_mark import (
     WATERMARK_VARIANT_COUNT,
     generate_classification_stamp,
+    generate_military_secret_mark,
     generate_page_watermark,
 )
 from rd2.generators.template_matrix import infer_subclause_key
@@ -91,6 +95,7 @@ CSV_FIELDNAMES = [
     "disclosure_status", "document_status", "source", "source_url", "doc_type", "is_synthetic",
     "field_source", "status", "model", "tokens_in", "tokens_out", "gen_time_s",
     "sampling_seed", "prompt_version", "template_id", "template_violations",
+    "military_secret_grade",
 ]
 
 SPAN_SEEDED_PROMPT_VERSION = "span-seeded-v1-20260720"
@@ -103,6 +108,11 @@ ADMIN_STATUS_SAMPLE_ROW_ID = "admin-status-attachment-missing-0"
 _SPAN_CLAUSES = ("5", "6", "7", "8")
 
 _MAX_SOURCE_DOCUMENT_CHARS = 4000  # generate.py의 _MAX_ANCHOR_TEXT_CHARS와 동일 절단 관례
+# 근거 span을 중심으로 앞/뒤에 배분할 글자 수. 문서 앞부분부터 자르면 근거 span이
+# 뒤쪽 페이지에 있을 때 그 앞뒤 문맥이 통째로 잘려나가 LLM이 근거 문구만 보고
+# 본문을 얇게 쓰는 문제가 있었다(2026-07-21 사용자 피드백).
+_CONTEXT_CHARS_BEFORE = _MAX_SOURCE_DOCUMENT_CHARS // 2
+_CONTEXT_CHARS_AFTER = _MAX_SOURCE_DOCUMENT_CHARS - _CONTEXT_CHARS_BEFORE
 
 
 def connect_mariadb() -> pymysql.connections.Connection:
@@ -157,13 +167,22 @@ def _sample_candidates(candidates: list[dict], count: int, rng: random.Random) -
     return rng.sample(candidates, count)
 
 
-def load_annotated_document_text(source_pdf_path: str, annotated_root: Path) -> str | None:
+def load_annotated_document_text(
+    source_pdf_path: str, annotated_root: Path, *, target_span_id: int | None = None
+) -> str | None:
     """candidate의 source_pdf_path로 원본 annotated JSON을 찾아 원문 텍스트를 재구성한다.
 
     is_boilerplate=false span만 페이지 순서대로 이어붙인다. source_pdf_path는
     "data/{source}/{doc_type}/{filename}.pdf" 형태(repo-root 기준, OS에 따라
     구분자가 다를 수 있어 먼저 정규화한다) — 첫 세그먼트(data)를 annotated_root로
     바꾸고 확장자를 .json으로 바꾸면 annotated JSON 경로가 된다.
+
+    target_span_id가 주어지면 그 span을 기준으로 앞/뒤 문맥을 함께 잘라 반환한다
+    (근거 span 자체는 항상 창 안에 포함됨) — candidates.py가 찾은 근거 span은
+    문서 아무 곳에나 있을 수 있는데, 예전처럼 문서 맨 앞부터 고정 길이로 자르면
+    근거 span이 뒤쪽 페이지에 있을 때 그 주변 문맥이 통째로 빠져 LLM이 참고할
+    실제 내용이 얇아졌다. target_span_id를 못 찾으면(예: span_id 없음, 예전
+    candidate 포맷) 문서 맨 앞부터 자르는 기존 동작으로 폴백한다.
     """
     if not source_pdf_path:
         return None
@@ -188,17 +207,44 @@ def load_annotated_document_text(source_pdf_path: str, annotated_root: Path) -> 
         return None
 
     doc = json.loads(json_path.read_text(encoding="utf-8"))
-    lines: list[str] = []
+    entries: list[tuple[object, str]] = []
     for page in doc.get("pages", []):
         for span in page.get("spans", []):
             if span.get("is_boilerplate"):
                 continue
             text = (span.get("cleaned_text") or "").strip()
             if text:
-                lines.append(text)
-    if not lines:
+                entries.append((span.get("span_id"), text))
+    if not entries:
         return None
-    return "\n".join(lines)[:_MAX_SOURCE_DOCUMENT_CHARS]
+
+    target_index = None
+    if target_span_id is not None:
+        target_index = next(
+            (i for i, (span_id, _) in enumerate(entries) if span_id == target_span_id), None
+        )
+    if target_index is None:
+        return "\n".join(text for _, text in entries)[:_MAX_SOURCE_DOCUMENT_CHARS]
+
+    before: list[str] = []
+    before_chars = 0
+    i = target_index - 1
+    while i >= 0 and before_chars < _CONTEXT_CHARS_BEFORE:
+        before.append(entries[i][1])
+        before_chars += len(entries[i][1]) + 1
+        i -= 1
+    before.reverse()
+
+    after: list[str] = []
+    after_chars = 0
+    i = target_index + 1
+    while i < len(entries) and after_chars < _CONTEXT_CHARS_AFTER:
+        after.append(entries[i][1])
+        after_chars += len(entries[i][1]) + 1
+        i += 1
+
+    window = [*before, entries[target_index][1], *after]
+    return "\n".join(window)[:_MAX_SOURCE_DOCUMENT_CHARS]
 
 
 def _with_retry(fn, *, max_attempts: int = 2):
@@ -247,7 +293,8 @@ def generate_span_seeded_row(
         clause_no, doc_type, keyword_text=matched_span_text
     )
     source_document_text = load_annotated_document_text(
-        candidate.get("source_pdf_path") or "", annotated_root
+        candidate.get("source_pdf_path") or "", annotated_root,
+        target_span_id=candidate.get("span_id"),
     )
     if not source_document_text:
         print(f"  [skip] {row_id}: annotated 원문을 찾을 수 없어 스킵")
@@ -328,6 +375,7 @@ def generate_span_seeded_row(
         "gen_time_s": gen_time_s,
         "sampling_seed": sampling_seed,
         "prompt_version": SPAN_SEEDED_PROMPT_VERSION,
+        "military_secret_grade": "",  # 5~8호 span-seeded 경로는 군사기밀 대상 기관이 없음
     }
 
 
@@ -341,6 +389,7 @@ def generate_fallback_row(
     ordering_agency: str,
     production_date: str,
     agency_source: str = "real_db_sample",
+    military_secret_grade: str | None = None,
 ) -> dict:
     """span 후보가 없는 조항(1~4호) 또는 span 후보가 부족한 조항의 나머지분을
     D1 4번(완전 독립 시나리오)으로 백필한다.
@@ -353,6 +402,12 @@ def generate_fallback_row(
     없어 (1) 방식을 쓸 수 없다). agency_source로 어느 쪽인지 구분해 필드
     출처를 정직하게 기록한다. 이 함수 자체는 전달받은 값을 검증하지 않고
     그대로 신뢰한다.
+
+    military_secret_grade("1급"/"2급"/"3급")는 ordering_agency가 국방부/국가정보원일
+    때만 호출자가 채워 넘긴다(agency_resolver.is_military_secret_agency) — 본문
+    생성 프롬프트에 그 등급에 맞는 심각성으로 쓰라는 지시를 추가하고, CSV에도 같은
+    값을 남겨 render_pdfs_for_csv()가 [별표 2] 등급 마크를 고를 수 있게 한다
+    (2026-07-21 사용자 결정 — 마크와 본문 내용이 어긋나지 않아야 함).
     """
     clause = CLAUSES[clause_no]
     start = time.monotonic()
@@ -369,6 +424,7 @@ def generate_fallback_row(
                 production_date=production_date,
                 client=client,
                 model=model,
+                military_secret_grade=military_secret_grade,
             )
         )
         title = doc.title
@@ -435,6 +491,7 @@ def generate_fallback_row(
         "gen_time_s": gen_time_s,
         "sampling_seed": sampling_seed,
         "prompt_version": FALLBACK_PROMPT_VERSION,
+        "military_secret_grade": military_secret_grade or "",
     }
 
 
@@ -487,6 +544,7 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "gen_time_s": 0,
         "sampling_seed": sampling_seed,
         "prompt_version": ADMIN_STATUS_PROMPT_VERSION,
+        "military_secret_grade": "",
     }
 
 
@@ -547,9 +605,11 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
 
     대외비 분류 스탬프(박스)는 C(기밀) 문서에 페이지당 1회, 파이프라인
     전체가 공유하는 이미지 하나로 충분하다(문구가 항상 "대외비"로 고정).
-    워터마크(가/나/다/라... 중 하나를 크게)는 문서마다 다른 문자가
-    나오도록 row별로 다시 그린다 — 같은 문자가 나오는 행끼리는 캐시를
-    재사용해 중복 렌더링하지 않는다. S 문서는 마크 없음(2026-07-14 결정).
+    military_secret_grade가 있는 행(국방부/국가정보원, 2026-07-21 추가)은 대신
+    [별표 2] 등급 마크를 상단·하단 양쪽에 붙인다 — 등급별 마크는 3종류뿐이라
+    등급마다 하나씩만 만들어 재사용한다. 워터마크(가/나/다/라... 중 하나를 크게)는
+    문서마다 다른 문자가 나오도록 row별로 다시 그린다 — 같은 문자가 나오는 행끼리는
+    캐시를 재사용해 중복 렌더링하지 않는다. S 문서는 마크 없음(2026-07-14 결정).
     LLM을 다시 호출하지 않으므로 --resume과 함께 쓰면 기존 CSV를 그대로
     재사용해 비용 없이 PDF만 새로 만들 수 있다.
     """
@@ -559,6 +619,17 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
     pdf_dir.mkdir(parents=True, exist_ok=True)
     stamp_path = pdf_dir / "_stamp_confidential.png"
     generate_classification_stamp(stamp_path, seed=sampling_seed)
+
+    military_mark_cache: dict[str, Path] = {}
+
+    def _military_mark_for_grade(grade: str) -> Path:
+        cached = military_mark_cache.get(grade)
+        if cached is not None:
+            return cached
+        mark_path = pdf_dir / f"_stamp_military_{grade}.png"
+        generate_military_secret_mark(mark_path, grade, seed=sampling_seed)
+        military_mark_cache[grade] = mark_path
+        return mark_path
 
     watermark_cache: dict[int, Path] = {}
 
@@ -583,12 +654,20 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
             output_path = _safe_pdf_output_path(pdf_dir, row.get("row_id") or "")
             is_confidential = (row.get("cso_classification") or "").upper() == "C"
             watermark_path = _watermark_for_row(row) if is_confidential else None
+            grade = (row.get("military_secret_grade") or "").strip()
+            if grade and grade in MILITARY_SECRET_MARK_FILENAMES:
+                military_mark = _military_mark_for_grade(grade)
+                row_stamp_path, row_stamp_top_path = military_mark, military_mark
+                mark = f"군사기밀({grade})" if is_confidential else "마크없음"
+            else:
+                row_stamp_path, row_stamp_top_path = stamp_path, None
+                mark = "C(대외비)" if is_confidential else "마크없음"
             render_document_pdf(
                 row, category, output_path,
-                watermark_path=watermark_path, stamp_path=stamp_path,
+                watermark_path=watermark_path, stamp_path=row_stamp_path,
+                stamp_top_path=row_stamp_top_path,
             )
             rendered += 1
-            mark = "C(대외비)" if is_confidential else "마크없음"
             print(f"  [pdf] {row['row_id']} -> {category} -> {mark} -> {output_path.name}")
     return rendered
 
@@ -724,11 +803,21 @@ def main() -> None:
                                 rng, fallback_samples
                             )
                             agency_source = "real_db_sample"
+                        # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급
+                        # 마크 대상이다(2026-07-21 사용자 결정) — 등급은 여기서 한 번만
+                        # 뽑아 본문 생성 프롬프트와 render_pdfs_for_csv()의 마크 선택
+                        # 양쪽에 그대로 넘긴다(마크·본문 불일치 방지).
+                        military_secret_grade = (
+                            select_military_secret_grade(rng)
+                            if is_military_secret_agency(agency)
+                            else None
+                        )
                         row = generate_fallback_row(
                             row_id, clause_no, client=client, model=args.model,
                             sampling_seed=args.sampling_seed,
                             ordering_agency=agency, production_date=prod_date,
                             agency_source=agency_source,
+                            military_secret_grade=military_secret_grade,
                         )
                         _apply_template_validation(row)
                         writer.writerow(row)
