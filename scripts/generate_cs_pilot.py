@@ -87,6 +87,8 @@ from rd2.generators.security_mark import (
     generate_military_secret_mark,
 )
 from rd2.generators.template_matrix import TARGET_BY_KEY, infer_subclause_key
+from rd2.schema.models import Document
+from rd2.storage.db import DocumentStore
 
 load_dotenv()
 
@@ -997,8 +999,56 @@ def _unique_pdf_output_path(pdf_dir: Path, row: dict, used_filenames: dict[str, 
     return _safe_pdf_output_path(pdf_dir, candidate)
 
 
-def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) -> int:
+def _document_from_csv_row(row: dict, output_path: Path, repo_root: Path) -> Document:
+    """CSV 행 + 방금 렌더링된 PDF 실제 경로로 RDS documents 테이블에 넣을
+    Document를 조립한다(2026-07-21 사용자 결정: CSV를 매개로 한 별도 반영
+    스텝 대신, 렌더링 시점에 바로 upsert — 사람 사전 승인 게이트는 만들지 않고
+    CSV는 사후 확인용 기록으로만 남긴다).
+
+    source_url은 CSV엔 항상 빈 문자열이지만(합성 문서라 원문 URL이 없음),
+    여기서 row_id 기반 결정적 값을 채운다 — DocumentStore._dedup_key()가
+    source_url이 비어있으면 매번 새 UUID를 붙여 무조건 새 레코드로 취급하므로
+    (db.py:125), 그대로 두면 --commit-to-rds를 다시 돌릴 때마다 같은 문서가
+    중복 삽입된다.
+    """
+    try:
+        body_file_path = str(output_path.relative_to(repo_root))
+    except ValueError:
+        body_file_path = str(output_path)
+
+    return Document(
+        title=row["title"],
+        ordering_agency=row["ordering_agency"],
+        department=row.get("department") or None,
+        unit_task=row.get("unit_task") or None,
+        production_date=row.get("production_date") or None,
+        disclosure_status=row["disclosure_status"],
+        subject_category=row.get("subject_category") or None,
+        body_text=row.get("body_text") or None,
+        body_file_path=body_file_path,
+        non_disclosure_reason=row.get("non_disclosure_reason") or None,
+        cso_classification=row["cso_classification"],
+        cso_sub_clause=row.get("clause_no") or None,
+        source=row["source"],
+        source_url=f"synthetic://cs-pilot/{row['row_id']}",
+        doc_type=row.get("doc_type") or None,
+        is_synthetic=True,
+    )
+
+
+def render_pdfs_for_csv(
+    csv_path: Path,
+    pdf_dir: Path,
+    *,
+    sampling_seed: int,
+    store: DocumentStore | None = None,
+    repo_root: Path | None = None,
+) -> tuple[int, int, int, int]:
     """CSV 행을 기관유형별로 렌더링하되 템플릿 검증 위반 행은 제외한다.
+    store가 주어지면(--commit-to-rds) status=ok로 렌더링된 행을 그 자리에서
+    RDS에도 upsert한다 — 반환값은 (렌더링 건수, RDS 신규삽입 건수, RDS 중복스킵 건수,
+    RDS 삽입 실패 건수). 한 행의 Document 조립/삽입이 실패해도(예: CSV에 필수
+    필드가 비어있는 예외적인 행) 배치 전체를 중단하지 않고 다음 행으로 넘어간다.
 
     대외비 분류 스탬프(박스)는 C(기밀) 문서에 페이지당 1회, 파이프라인
     전체가 공유하는 이미지 하나로 충분하다(문구가 항상 "대외비"로 고정).
@@ -1064,7 +1114,11 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
         agency_watermark_cache[logo_filename] = wm_path
         return wm_path
 
+    rds_root = repo_root or pdf_dir.parent
     rendered = 0
+    inserted = 0
+    dup_skipped = 0
+    rds_errors = 0
     used_filenames: dict[str, int] = {}
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -1091,7 +1145,22 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
             )
             rendered += 1
             print(f"  [pdf] {row['row_id']} -> {category} -> {mark} -> {output_path.name}")
-    return rendered
+
+            if store is not None and row.get("status") == "ok":
+                try:
+                    doc = _document_from_csv_row(row, output_path, rds_root)
+                    if store.upsert(doc):
+                        inserted += 1
+                        print(f"  [rds] {row['row_id']}: 삽입됨 ({doc.cso_classification.value})")
+                    else:
+                        dup_skipped += 1
+                        print(f"  [rds-dup] {row['row_id']}: 이미 RDS에 있음, 스킵")
+                except Exception as exc:  # noqa: BLE001 — 한 행의 DB 삽입 실패로 나머지
+                    # 렌더링/삽입까지 중단되면 안 된다(이미 렌더링한 PDF·앞선 삽입도
+                    # 그대로 유지). 원인 파악은 아래 로그로.
+                    rds_errors += 1
+                    print(f"  [rds-error] {row['row_id']}: {exc}")
+    return rendered, inserted, dup_skipped, rds_errors
 
 
 def main() -> None:
@@ -1167,7 +1236,19 @@ def main() -> None:
         "--cell-report", default=None,
         help="--target-matrix 셀별 리포트 CSV 경로 (기본: <output>_cell_report.csv)",
     )
+    parser.add_argument(
+        "--commit-to-rds", action="store_true",
+        help=(
+            "PDF 렌더링과 동시에 status=ok 행을 실제 RDS(rd2 MariaDB) documents "
+            "테이블에 upsert한다(2026-07-21 결정: 사람 사전 승인 게이트 없이 바로 "
+            "반영 — CSV는 사후 확인용 기록으로 남는다). --render-pdf와 함께만 "
+            "쓸 수 있다(렌더링된 PDF의 실제 경로가 body_file_path가 되므로)."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.commit_to_rds and not args.render_pdf:
+        parser.error("--commit-to-rds는 --render-pdf와 함께 써야 합니다")
 
     run_tag = args.run_tag.strip()
     if run_tag and re.fullmatch(r"[\w.-]+", run_tag) is None:
@@ -1394,8 +1475,20 @@ def main() -> None:
         pdf_dir = Path(args.pdf_dir) if args.pdf_dir else repo_root / "cs_pilot_pdfs"
         print()
         print(f"Rendering PDFs (status 무관, 전체 행) -> {pdf_dir}")
-        rendered = render_pdfs_for_csv(output_path, pdf_dir, sampling_seed=args.sampling_seed)
+        store = DocumentStore() if args.commit_to_rds else None
+        if store is not None:
+            print(f"Committing status=ok rows to RDS as they render (database={store.database!r}) ...")
+        try:
+            rendered, inserted, dup_skipped, rds_errors = render_pdfs_for_csv(
+                output_path, pdf_dir, sampling_seed=args.sampling_seed,
+                store=store, repo_root=repo_root,
+            )
+        finally:
+            if store is not None:
+                store.close()
         print(f"Rendered {rendered} PDFs -> {pdf_dir}")
+        if store is not None:
+            print(f"RDS: inserted {inserted}, skipped as duplicate {dup_skipped}, errors {rds_errors}")
 
 
 if __name__ == "__main__":
