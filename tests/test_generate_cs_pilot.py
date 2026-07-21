@@ -277,6 +277,41 @@ class TestGenerateFallbackRow:
         assert row["status"] == "llm_error"
         assert set(row.keys()) == set(pilot.CSV_FIELDNAMES) - {"template_id", "template_violations"}
 
+    def test_whitelist_synthetic_agency_source_is_recorded_honestly(self, monkeypatch):
+        """1~4호(C트랙)는 화이트리스트 기관을 쓰므로, 실제 DB 값인 척하면 안 된다
+        (2026-07-20 plan-eng-review, Approach D)."""
+
+        def fake_generate_clause_document(clause_no, *, ordering_agency, production_date, client, model):
+            return Document(
+                title="[합성] 가상 시나리오",
+                ordering_agency=ordering_agency,
+                production_date=production_date,
+                disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제2호 — 안보·국방·통일·외교 국익저해",
+                subject_category="안보·국방·통일·외교 국익저해",
+                body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C,
+                cso_sub_clause="2",
+                source="synthetic-llm",
+                source_url=None,
+                doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "2-fallback-0", "2", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="국방부", production_date="2026-01-01",
+            agency_source="whitelist_synthetic",
+        )
+
+        assert row["status"] == "ok"
+        assert "화이트리스트 기반 합성" in row["non_disclosure_reason"]
+        field_source = json.loads(row["field_source"])
+        assert field_source["ordering_agency"] == "whitelist_synthetic_no_db_history"
+        assert field_source["production_date"] == "synthesized_plausible_range"
+
 
 class TestGenerateAdministrativeStatusSample:
     def test_attachment_missing_sample_is_partial_without_clause(self):

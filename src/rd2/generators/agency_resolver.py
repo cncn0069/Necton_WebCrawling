@@ -23,6 +23,7 @@ R3(2026-07-20 사용자 결정): 완전 가상 폴백 문서라도 기관명만�
 
 from __future__ import annotations
 
+import datetime
 import random
 
 FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
@@ -31,6 +32,62 @@ FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
     "mohw": "보건복지부",
     "molit": "국토교통부",
 }
+
+# 1~4호(C트랙) 폴백 생성용 실존 기관 화이트리스트 (2026-07-20 plan-eng-review, Approach D).
+# rd2 DB의 실제 기관 풀에는 안보/외교/수사 계열 기관이 0건이라
+# sample_real_agency_and_date_for_fallback()로는 이 조항들에 맞는 기관을 뽑을 수
+# 없다 — 대신 저장소 루트 logo/ 폴더에 이미 준비된 실존 기관 로고 인벤토리를
+# 화이트리스트 소스로 쓴다(법령 조사 불필요, R3를 시각 자료까지 포함해 충족).
+# 조항 안에 성격이 다른 시나리오가 섞여 있어도(예: 1호는 사이버안보/국정원/군사기밀/
+# 수사비밀 시나리오가 혼재) 화이트리스트 자체를 조항 단위로 넉넉히 잡아 랜덤 선택만으로
+# "완전히 무관하지는 않은" 수준의 그럴싸함을 확보한다 — 시나리오별로 정교하게 매칭하는
+# 것은 이번 스코프에서 과함으로 판단됨(사용자 확인).
+MARKING_SPEC_AGENCY_WHITELIST: dict[str, list[str]] = {
+    "1": ["국가정보원", "국방부", "검찰청", "고위공직자범죄수사처"],
+    "2": ["국방부", "국가정보원"],
+    "3": ["정부부처"],  # 원자력안전위원회/소방청 등 전용 로고가 아직 없어 generic 폴백
+    "4": ["검찰청", "고위공직자범죄수사처"],
+}
+
+# logo/ 폴더의 실제 파일명 매핑. "정부부처"는 화이트리스트에 없는 조항이나 미매칭
+# 기관의 generic 폴백으로도 쓰인다.
+AGENCY_LOGO_FILENAMES: dict[str, str] = {
+    "감사원": "감사원.png",
+    "검찰청": "검찰.png",
+    "고위공직자범죄수사처": "고위공직자범죄수사처.png",
+    "국방부": "국방부.png",
+    "국가정보원": "국정원.png",
+    "대통령경호처": "대통령경호처.png",
+    "대통령실": "대통령실.svg",
+    "정부부처": "정부부처.png",
+}
+
+_GENERIC_WHITELIST_AGENCY = "정부부처"
+
+
+def select_whitelisted_agency(clause_no: str, rng: random.Random) -> tuple[str, str]:
+    """1~4호 폴백 생성용 실존 기관을 화이트리스트에서 고르고 로고 파일명과 함께 반환한다.
+
+    화이트리스트에 없는 clause_no는 generic(정부부처)으로 폴백한다 — Approach D는
+    법정근거/화이트리스트 미확보를 이유로 생성을 막지 않는다(on_hold 폐기, 2026-07-20).
+    """
+    pool = MARKING_SPEC_AGENCY_WHITELIST.get(clause_no) or [_GENERIC_WHITELIST_AGENCY]
+    agency = rng.choice(pool)
+    logo_filename = AGENCY_LOGO_FILENAMES.get(agency, AGENCY_LOGO_FILENAMES[_GENERIC_WHITELIST_AGENCY])
+    return agency, logo_filename
+
+
+def synthesize_plausible_date(rng: random.Random, *, years_back: int = 3) -> str:
+    """화이트리스트 기관용 개연성 있는 생산일자를 ISO 문자열로 생성한다.
+
+    화이트리스트 기관은 rd2 DB에 실수집 이력이 없어 실제 행과 날짜를 짝지을 수
+    없다(sample_real_agency_and_date_for_fallback와 다른 점) — 호출자는
+    non_disclosure_reason 등에 "화이트리스트 기반 합성"임을 명시해 RD-1에
+    투명하게 전달해야 한다(Outside Voice 지적, 2026-07-20).
+    """
+    today = datetime.date.today()
+    days_back = rng.randrange(1, years_back * 365)
+    return (today - datetime.timedelta(days=days_back)).isoformat()
 
 # me는 어댑터 기본값("기후에너지환경부")이 있지만 문서별로 오버라이드될 수 있어
 # 고정 테이블에서 제외하고 문서별 DB 조회 대상으로 둔다.
