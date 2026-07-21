@@ -49,18 +49,23 @@ class _FakeChat:
 
 class FakeOpenAIClient:
     """OpenAI SDK가 노출하는 client.chat.completions.create(...).choices[0].message.content
-    경로만 흉내내는 테스트용 더블 — 실제 API 호출 없이 generate_clause_document를 검증한다."""
+    경로만 흉내내는 테스트용 더블 — 실제 API 호출 없이 generate_clause_document를 검증한다.
 
-    def __init__(self, content: str = "가상의 공공기관 문서 본문") -> None:
+    content는 _FALLBACK_RESPONSE_JSON_SCHEMA와 같은 형태의 JSON 문자열이어야 한다
+    (2026-07-21 사용자 결정: title도 LLM이 JSON으로 함께 생성 — 아래 클래스 docstring
+    참고)."""
+
+    def __init__(self, content: str = '{"title": "가상의 문서 제목", "body_text": "가상의 공공기관 문서 본문"}') -> None:
         self.chat = _FakeChat(content)
 
 
 def test_generate_clause_document_builds_expected_document():
+    llm_content = json.dumps({"title": "특정 사건에 대한 구체적 제목", "body_text": "테스트용 합성 본문"})
     doc = generate.generate_clause_document(
         "1",
         ordering_agency="실제기관명",
         production_date="2025-03-01",
-        client=FakeOpenAIClient("테스트용 합성 본문"),
+        client=FakeOpenAIClient(llm_content),
         scenario_index=0,
     )
     assert doc.body_text == "테스트용 합성 본문"
@@ -71,13 +76,38 @@ def test_generate_clause_document_builds_expected_document():
     assert doc.is_synthetic is True
     assert doc.disclosure_status == DisclosureStatus.CLOSED
     assert doc.non_disclosure_reason is not None
-    # 2026-07-21 사용자 결정: "[합성]" 같은 라벨이 문서 제목(=PDF 파일명 소스)에
-    # 섞여 나가면 안 된다 — title은 scenario 원문 그대로여야 한다.
-    assert doc.title == CLAUSES["1"].scenario_prompts[0]
+    # 2026-07-21 사용자 결정(개정): scenario_prompts가 몇 개뿐인데 같은 시나리오로
+    # 여러 건을 만들면 title 컬럼이 통째로 동일 문자열이 되는 문제가 있어, title도
+    # LLM이 시나리오 범주 안에서 구체적 사건에 맞게 직접 짓게 바꿨다(scenario 원문을
+    # 그대로 쓰지 않는다) — 다만 "[합성]" 라벨이 섞이면 안 된다는 앞선 결정의 취지는
+    # 여전히 유효하다(아래 guard 테스트 참고).
+    assert doc.title == "특정 사건에 대한 구체적 제목"
     # R3(2026-07-20): 기관명/생산일자는 실제 값을 그대로 보존해야 한다 —
     # "가상기관(합성)" 같은 가짜 이름으로 되돌아가면 안 된다.
     assert doc.ordering_agency == "실제기관명"
     assert str(doc.production_date) == "2025-03-01"
+
+
+def test_generate_clause_document_strips_synthetic_label_from_llm_title():
+    # LLM이 지시를 무시하고 title 앞에 "[합성]" 라벨을 붙이더라도 후처리 가드가
+    # 제거해야 한다 — title은 PDF 파일명 소스이므로 라벨이 섞이면 안 된다는
+    # 7/21 결정의 취지를 지킨다.
+    llm_content = json.dumps({"title": "[합성] 라벨이 붙은 제목", "body_text": "본문"})
+    doc = generate.generate_clause_document(
+        "1",
+        ordering_agency="실제기관명",
+        production_date="2025-03-01",
+        client=FakeOpenAIClient(llm_content),
+        scenario_index=0,
+    )
+    assert doc.title == "라벨이 붙은 제목"
+
+
+def test_strip_synthetic_label_handles_various_bracket_styles():
+    assert generate._strip_synthetic_label("[합성] 제목") == "제목"
+    assert generate._strip_synthetic_label("(가상) 제목") == "제목"
+    assert generate._strip_synthetic_label("[합성][가상] 제목") == "제목"
+    assert generate._strip_synthetic_label("깨끗한 제목") == "깨끗한 제목"
 
 
 def test_build_user_prompt_marks_agency_and_date_as_real_not_invented():
@@ -90,6 +120,9 @@ def test_build_user_prompt_marks_agency_and_date_as_real_not_invented():
     assert "그대로 쓰고 바꾸지 마라" in prompt
     # 인명/전화번호/금액은 여전히 가상으로 지어내라는 지시가 남아있어야 한다.
     assert "가상으로 지어내라" in prompt
+    # 2026-07-21 사용자 결정(개정): 같은 시나리오가 여러 건에 반복돼도 서로 다른
+    # 구체적 사건이 되도록, LLM에 겹치지 말라는 지시를 명시해야 한다.
+    assert "겹치지 않아야 한다" in prompt
 
 
 def test_system_prompt_no_longer_forbids_naming_real_agency():
@@ -98,6 +131,13 @@ def test_system_prompt_no_longer_forbids_naming_real_agency():
     # 시스템 프롬프트에 남아있으면 회귀다.
     assert "가상기관" not in generate._SYSTEM_PROMPT
     assert "그대로 쓰고" in generate._SYSTEM_PROMPT
+
+
+def test_system_prompt_bans_synthetic_labels_in_title():
+    # 2026-07-21 사용자 결정(개정): title을 LLM이 직접 짓게 하더라도 "[합성]"
+    # 같은 라벨이 섞이면 안 된다는 취지는 유지해야 한다.
+    assert "[합성]" in generate._SYSTEM_PROMPT
+    assert "JSON" in generate._SYSTEM_PROMPT
 
 
 def test_generate_clause_document_rejects_on_hold_clause():
