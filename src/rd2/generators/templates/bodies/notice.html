@@ -1,0 +1,5 @@
+<div class="divider">－ 아 래 －</div>
+<p class="section">1. 공고 개요</p><p>□ 공고명 : {{ subject }}</p><p>□ 작성일 : {{ production_date }}</p>
+<p class="section">2. 주요 내용</p><p>o {{ purpose }}</p>{% for p in progress %}<p>o {{ p }}</p>{% endfor %}
+<p class="section">3. 향후 계획</p><p>○ 관계 부서 의견 조회 후 공고(안) 확정 및 게시 예정</p>
+<p>{{ ending }}</p>

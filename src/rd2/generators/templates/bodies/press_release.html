@@ -1,0 +1,8 @@
+<p>보도시점 배포 전까지 엠바고 &nbsp;&nbsp; 배포 {{ production_date }}</p>
+<div class="divider">－ 아 래 －</div>
+{% if overview %}<ul>{% for p in overview %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+{% for p in details %}<p>o {{ p }}</p>{% endfor %}
+<p>※ 본 자료는 배포 전까지 대외 공개를 제한함.</p>
+<p class="source-subsection">담당 부서 및 문의처</p>
+<p class="source-indent">{{ department }} 담당자 (문의처는 배포 시 확정)</p>
+<p>{{ ending }}</p>

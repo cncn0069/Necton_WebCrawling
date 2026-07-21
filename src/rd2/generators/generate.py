@@ -52,9 +52,35 @@ def _default_client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
+# [별표 2](군사기밀 보호법 시행령 제5조제1항)의 등급 설명을 요약한 프롬프트용 라벨.
+# 등급 마크(agency_resolver.MILITARY_SECRET_MARK_FILENAMES)와 본문 내용의 심각성이
+# 어긋나지 않도록, 같은 등급 값을 여기 프롬프트와 PDF 렌더링 양쪽에 그대로 넘겨야
+# 한다(2026-07-21 사용자 결정).
+_MILITARY_SECRET_GRADE_PROMPT_LABELS: dict[str, str] = {
+    "1급": "Ⅰ급비밀(TOP SECRET) — 노출 시 국가안보에 치명적 손실을 초래할 수준",
+    "2급": "Ⅱ급비밀(SECRET) — 노출 시 국가안보에 심각한 손실을 초래할 수준",
+    "3급": "Ⅲ급비밀(CONFIDENTIAL) — 노출 시 국가안보에 손실을 초래할 수 있는 수준",
+}
+
+
 def _build_user_prompt(
-    clause: ClauseDefinition, scenario: str, *, ordering_agency: str, production_date: str
+    clause: ClauseDefinition,
+    scenario: str,
+    *,
+    ordering_agency: str,
+    production_date: str,
+    military_secret_grade: str | None = None,
 ) -> str:
+    grade_line = ""
+    if military_secret_grade:
+        grade_label = _MILITARY_SECRET_GRADE_PROMPT_LABELS.get(
+            military_secret_grade, military_secret_grade
+        )
+        grade_line = (
+            f"\n이 문서는 군사기밀보호법상 {grade_label}에 해당하는 문서다 — 그 등급에 "
+            f"맞는 심각성과 구체성으로 내용을 작성하라(등급이 높을수록 더 치명적이고 "
+            f"광범위한 파급효과를 가정하라)."
+        )
     return (
         f"다음 시나리오에 해당하는 공공기관 내부 문서를 작성하라.\n\n"
         f"분류: {clause.classification.value} (제{clause.clause_no}호 - {clause.title})\n"
@@ -64,6 +90,7 @@ def _build_user_prompt(
         f"생산일자: {production_date} (실제 존재하는 값 — 그대로 쓰고 바꾸지 마라)\n"
         f"담당자명·전화번호·금액·문서번호는 완전히 가상으로 지어내라. "
         f"실제 사건을 지칭하지 마라."
+        f"{grade_line}"
     )
 
 
@@ -75,12 +102,18 @@ def generate_clause_document(
     client: OpenAI | None = None,
     model: str = "gpt-4o-mini",
     scenario_index: int | None = None,
+    military_secret_grade: str | None = None,
 ) -> Document:
     """조항 하나에 대해 합성 문서 1건을 생성한다 (텍스트만, Genalog 미적용).
 
     ordering_agency/production_date는 rd2 DB에 실제로 존재하는 값이어야 한다
     (agency_resolver.sample_real_agency_and_date_for_fallback로 얻는다) — 이
     함수 자체는 그 값을 검증하지 않고 그대로 신뢰해 프롬프트와 Document에 반영한다.
+
+    military_secret_grade("1급"/"2급"/"3급")가 주어지면 그 등급에 맞는 심각성으로
+    본문을 쓰라는 지시를 프롬프트에 추가한다 — 호출자(agency_resolver의
+    is_military_secret_agency로 국방부/국가정보원 문서만 판단)가 PDF에 붙일 등급
+    마크와 같은 값을 넘겨야 마크와 본문 내용이 어긋나지 않는다.
     """
     clause = CLAUSES[clause_no]
     if clause.on_hold:
@@ -99,7 +132,9 @@ def generate_clause_document(
             {
                 "role": "user",
                 "content": _build_user_prompt(
-                    clause, scenario, ordering_agency=ordering_agency, production_date=production_date
+                    clause, scenario, ordering_agency=ordering_agency,
+                    production_date=production_date,
+                    military_secret_grade=military_secret_grade,
                 ),
             },
         ],

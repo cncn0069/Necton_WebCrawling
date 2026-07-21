@@ -7,11 +7,13 @@
 2. `src/rd2/generators/pdf_render.py:208`의 `_build_body_flowables()`는 `DOC_TYPE_AUDIT_RESULT`만 특수 렌더링(감사결과 전용 구조)한다 — 새 `DOC_TYPE_DIRECTOR_ACTIVITY`가 C/S 합성 파이프라인 최종 산출물에 들어간다면 렌더링 스타일 검증이 필요.
 3. 본문(회차/개최일/안건내용/활동현황 표)을 `_parse_doc_detail()`의 `soup.get_text()` 방식으로 플래튼해서 넣는 게 이 콘텐츠 유형에도 의미 있는 corpus인지 불명확 — "활동내용"의 핵심 정보가 표 구조 자체에 있을 수 있어, 단순 텍스트화 시 정보 손실 우려.
 
+**(2026-07-21 plan-eng-review 실측 갱신):** 1번 우려가 프로덕션 RDS 실측으로 정량 확인됨 — `director_activity` 3,486건 중 xlsx 3,390 + xls 69 = **97%**가 엑셀, PDF는 27건(0.8%)뿐. `extract_pdf_text.py`(PDF 전용)와 `extract_structured_documents.py`(HWP/HWPX 전용) 둘 다 xlsx를 처리 못 해서, xlsx 추출기(예: openpyxl/xlrd 기반 텍스트 평탄화) 없이는 이 소스의 행정상태 후보 탐지·C/S 합성 둘 다 사실상 커버리지 0.8%에 그친다. 이번 세션(문서유형 커버리지 완성 설계)에서 `director_activity`를 행정상태 규칙 확장 스코프에서 명시적으로 제외한 이유이기도 함 — 설계 문서: `안정현-fix-seoul-opengov-naming-registration-design-20260721-093910.md`.
+
 **Why:** 세 항목 모두 director_activity 소스가 실제로 문민주(스펙 담당자) 확인을 거쳐 전량(3,490건) 수집으로 이어질 때만 의미가 있다 — 아직 확인 안 된 수요(Demand Evidence 참고)에 이 검증까지 먼저 하는 건 과잉 투자. 채택이 확정되면 바로 다뤄야 한다.
 
 **Context:** `src/rd2/adapters/alio.py`, `src/rd2/generators/pdf_render.py`, `tests/test_pdf_render.py`(현재 `DOC_TYPE_AUDIT_RESULT`/`DOC_TYPE_OFFICIAL_DOCUMENT` 두 유형만 테스트).
 
-**Effort:** S~M (xlsx 처리 확인은 S, pdf_render.py 스타일 추가는 M)
+**Effort:** S~M (xlsx 처리 확인은 S, pdf_render.py 스타일 추가는 M) — xlsx 추출기 신규 개발은 별도로 M~L
 **Priority:** P2 — director_activity 전량 수집 채택 확정 시 P1로 상향
 **Depends on:** director_activity 소스 채택 여부 확정(문민주 확인)
 

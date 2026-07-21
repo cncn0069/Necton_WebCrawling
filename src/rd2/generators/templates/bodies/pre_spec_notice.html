@@ -1,0 +1,5 @@
+<div class="divider">－ 아 래 －</div>
+<p class="section">1. 사업 개요</p><p>□ 사업명 : {{ subject }}</p><p>□ 작성일 : {{ production_date }}</p><p>□ 공개 목적 : 제안요청서(안)에 대한 사전 의견수렴</p>
+<p class="section">2. 제안요청 내용(안)</p><p>o {{ purpose }}</p>{% for p in progress %}<p>o {{ p }}</p>{% endfor %}
+<p class="section">3. 향후 계획</p><p>○ 사전규격 의견 접수·반영 후 입찰공고 게시 예정</p>
+<p>붙임&nbsp;&nbsp;제안요청서(안) 1부.&nbsp;&nbsp;{{ ending }}</p>

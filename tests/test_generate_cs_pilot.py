@@ -67,6 +67,20 @@ class TestSampleCandidates:
 
 
 class TestLoadAnnotatedDocumentText:
+    def _write_annotated_json_with_span_ids(
+        self, annotated_root: Path, rel_path: str, texts: list[str]
+    ) -> None:
+        pages = [
+            {
+                "page_no": 1,
+                "spans": [
+                    {"span_id": i, "is_boilerplate": False, "cleaned_text": text}
+                    for i, text in enumerate(texts)
+                ],
+            }
+        ]
+        self._write_annotated_json(annotated_root, rel_path, pages)
+
     def _write_annotated_json(self, annotated_root: Path, rel_path: str, pages: list[dict]) -> None:
         json_path = annotated_root / rel_path
         json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,6 +155,68 @@ class TestLoadAnnotatedDocumentText:
     def test_rejects_absolute_data_path(self, tmp_path):
         assert pilot.load_annotated_document_text("/data/moel/1.pdf", tmp_path) is None
 
+    def test_target_span_id_centers_window_on_matched_span(self, tmp_path):
+        annotated_root = tmp_path / "annotated"
+        self._write_annotated_json_with_span_ids(
+            annotated_root, "moel/notification/1.json",
+            ["앞 문단1", "앞 문단2", "근거 문단", "뒤 문단1", "뒤 문단2"],
+        )
+
+        text = pilot.load_annotated_document_text(
+            "data/moel/notification/1.pdf", annotated_root, target_span_id=2,
+        )
+
+        assert text == "앞 문단1\n앞 문단2\n근거 문단\n뒤 문단1\n뒤 문단2"
+
+    def test_target_span_id_not_found_falls_back_to_document_start(self, tmp_path):
+        annotated_root = tmp_path / "annotated"
+        self._write_annotated_json_with_span_ids(
+            annotated_root, "moel/notification/1.json", ["첫 문단", "둘째 문단"],
+        )
+
+        text = pilot.load_annotated_document_text(
+            "data/moel/notification/1.pdf", annotated_root, target_span_id=999,
+        )
+
+        assert text == "첫 문단\n둘째 문단"
+
+    def test_window_excludes_far_context_beyond_budget(self, tmp_path):
+        annotated_root = tmp_path / "annotated"
+        chunk_size = 500
+        num_before = pilot._CONTEXT_CHARS_BEFORE // chunk_size + 3  # 예산을 넘치도록 여유 있게
+        num_after = pilot._CONTEXT_CHARS_AFTER // chunk_size + 3
+        before_chunks = [f"앞문단{i}" + "가" * chunk_size for i in range(num_before)]
+        after_chunks = [f"뒤문단{i}" + "나" * chunk_size for i in range(num_after)]
+        texts = before_chunks + ["근거 문단"] + after_chunks
+        self._write_annotated_json_with_span_ids(
+            annotated_root, "moel/notification/1.json", texts,
+        )
+        target_span_id = len(before_chunks)
+
+        text = pilot.load_annotated_document_text(
+            "data/moel/notification/1.pdf", annotated_root, target_span_id=target_span_id,
+        )
+
+        assert "근거 문단" in text
+        assert before_chunks[0] not in text  # 창 밖으로 밀려난 가장 먼 앞 문단
+        assert after_chunks[-1] not in text  # 창 밖으로 밀려난 가장 먼 뒤 문단
+        assert before_chunks[-1] in text  # 근거 span 바로 앞 문단은 창 안에 있어야 함
+        assert after_chunks[0] in text  # 근거 span 바로 뒤 문단은 창 안에 있어야 함
+
+    def test_window_still_respects_total_char_cap(self, tmp_path):
+        annotated_root = tmp_path / "annotated"
+        chunk = "다" * 200
+        texts = [chunk for _ in range(60)]  # span_id 0..59, target in the middle
+        self._write_annotated_json_with_span_ids(
+            annotated_root, "moel/notification/1.json", texts,
+        )
+
+        text = pilot.load_annotated_document_text(
+            "data/moel/notification/1.pdf", annotated_root, target_span_id=30,
+        )
+
+        assert len(text) <= pilot._MAX_SOURCE_DOCUMENT_CHARS
+
 
 class TestGenerateSpanSeededRow:
     def _candidate(self, **overrides) -> dict:
@@ -163,7 +239,9 @@ class TestGenerateSpanSeededRow:
 
     def test_skips_when_annotated_text_not_found(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
-        monkeypatch.setattr(pilot, "load_annotated_document_text", lambda path, root: None)
+        monkeypatch.setattr(
+            pilot, "load_annotated_document_text", lambda path, root, **kwargs: None
+        )
 
         row = pilot.generate_span_seeded_row(
             "5-span-0", "5", self._candidate(), client=object(), model="gpt-4o-mini",
@@ -174,9 +252,13 @@ class TestGenerateSpanSeededRow:
 
     def test_success_path_builds_expected_row(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
-        monkeypatch.setattr(
-            pilot, "load_annotated_document_text", lambda path, root: "문서 원문 전체 내용"
-        )
+        captured_kwargs = {}
+
+        def fake_load_annotated_document_text(path, root, **kwargs):
+            captured_kwargs.update(kwargs)
+            return "문서 원문 전체 내용"
+
+        monkeypatch.setattr(pilot, "load_annotated_document_text", fake_load_annotated_document_text)
 
         def fake_generate_span_seeded_body(seed, *, client, model):
             assert seed.ordering_agency == "고용노동부"
@@ -205,10 +287,13 @@ class TestGenerateSpanSeededRow:
         assert row["cso_subclause_key"] == "audit_inspection"
         assert row["is_synthetic"] is True
         assert set(row.keys()) == set(pilot.CSV_FIELDNAMES) - {"template_id", "template_violations"}
+        assert captured_kwargs.get("target_span_id") == 0
 
     def test_llm_failure_produces_llm_error_status(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
-        monkeypatch.setattr(pilot, "load_annotated_document_text", lambda path, root: "문서 원문")
+        monkeypatch.setattr(
+            pilot, "load_annotated_document_text", lambda path, root, **kwargs: "문서 원문"
+        )
 
         def fake_generate_span_seeded_body(seed, *, client, model):
             raise RuntimeError("simulated API failure")
@@ -226,7 +311,9 @@ class TestGenerateSpanSeededRow:
 
 class TestGenerateFallbackRow:
     def test_success_path_preserves_real_agency_and_date(self, monkeypatch):
-        def fake_generate_clause_document(clause_no, *, ordering_agency, production_date, client, model):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
             assert ordering_agency == "실제기관명"
             assert production_date == "2025-01-01"
             return Document(
@@ -265,7 +352,9 @@ class TestGenerateFallbackRow:
         assert set(row.keys()) == set(pilot.CSV_FIELDNAMES) - {"template_id", "template_violations"}
 
     def test_llm_failure_produces_llm_error_status_and_keeps_row(self, monkeypatch):
-        def fake_generate_clause_document(clause_no, *, ordering_agency, production_date, client, model):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
             raise RuntimeError("simulated failure")
 
         monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
@@ -281,7 +370,9 @@ class TestGenerateFallbackRow:
         """1~4호(C트랙)는 화이트리스트 기관을 쓰므로, 실제 DB 값인 척하면 안 된다
         (2026-07-20 plan-eng-review, Approach D)."""
 
-        def fake_generate_clause_document(clause_no, *, ordering_agency, production_date, client, model):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
             return Document(
                 title="[합성] 가상 시나리오",
                 ordering_agency=ordering_agency,
@@ -311,6 +402,57 @@ class TestGenerateFallbackRow:
         field_source = json.loads(row["field_source"])
         assert field_source["ordering_agency"] == "whitelist_synthetic_no_db_history"
         assert field_source["production_date"] == "synthesized_plausible_range"
+
+    def test_military_secret_grade_forwarded_to_prompt_and_row(self, monkeypatch):
+        captured_kwargs = {}
+
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            captured_kwargs.update(kwargs)
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제2호 — 안보·국방·통일·외교 국익저해",
+                subject_category="안보·국방·통일·외교 국익저해", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="2",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "2-fallback-0", "2", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="국방부", production_date="2026-01-01",
+            agency_source="whitelist_synthetic", military_secret_grade="1급",
+        )
+
+        assert captured_kwargs.get("military_secret_grade") == "1급"
+        assert row["military_secret_grade"] == "1급"
+
+    def test_military_secret_grade_defaults_to_empty_string(self, monkeypatch):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제1호 — 법률상 비밀·비공개 규정",
+                subject_category="법률상 비밀·비공개 규정", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="1",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "1-fallback-0", "1", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="검찰청", production_date="2026-01-01",
+        )
+
+        assert row["military_secret_grade"] == ""
 
 
 class TestGenerateAdministrativeStatusSample:

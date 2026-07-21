@@ -25,11 +25,17 @@ from rd2.storage.naming import (
     DOC_TYPE_APPROVAL,
     DOC_TYPE_AUDIT_RESULT,
     DOC_TYPE_BID_NOTICE,
+    DOC_TYPE_BID_RENOTICE,
+    DOC_TYPE_INTERPRETATION_COMPILATION,
     DOC_TYPE_MEETING_MINUTES,
+    DOC_TYPE_NOTICE,
     DOC_TYPE_OFFICIAL_DOCUMENT,
     DOC_TYPE_PERSONNEL,
     DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
+    DOC_TYPE_PRE_SPEC_NOTICE,
+    DOC_TYPE_PRESS_RELEASE,
+    DOC_TYPE_PUBLIC_OFFERING,
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
 )
@@ -418,6 +424,12 @@ _DOC_BODY_FORMAT = {
     DOC_TYPE_PLAN: "source_plan",
     DOC_TYPE_APPROVAL: "source_approval",
     DOC_TYPE_REPLY_NOTIFICATION: "source_notification",
+    DOC_TYPE_PRESS_RELEASE: "press_release",
+    DOC_TYPE_NOTICE: "notice",
+    DOC_TYPE_BID_RENOTICE: "bid_renotice",
+    DOC_TYPE_PUBLIC_OFFERING: "public_offering",
+    DOC_TYPE_INTERPRETATION_COMPILATION: "interpretation_compilation",
+    DOC_TYPE_PRE_SPEC_NOTICE: "pre_spec_notice",
 }
 _DOC_FORM_FORMAT = {
     DOC_TYPE_POLICY_MATERIAL: "policy_brief_form",
@@ -430,7 +442,10 @@ def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
         spec = existing.get(target.template_id)
         if spec is None:
             state = ApprovalState.PENDING if target.doc_type in {
-                DOC_TYPE_APPROVAL, DOC_TYPE_MEETING_MINUTES, DOC_TYPE_POLICY_MATERIAL
+                DOC_TYPE_APPROVAL, DOC_TYPE_MEETING_MINUTES, DOC_TYPE_POLICY_MATERIAL,
+                DOC_TYPE_PRESS_RELEASE, DOC_TYPE_NOTICE, DOC_TYPE_BID_RENOTICE,
+                DOC_TYPE_PUBLIC_OFFERING, DOC_TYPE_INTERPRETATION_COMPILATION,
+                DOC_TYPE_PRE_SPEC_NOTICE,
             } else ApprovalState.COMPLETE
             spec = DocTemplateSpec(
                 template_id=target.template_id, clause_no=target.clause_no,

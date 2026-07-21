@@ -18,11 +18,11 @@ class TemplateTarget:
 _GROUPS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] = {
     "1": (("legal_secret", "법률상 비밀·비공개 규정", ("official_document", "policy_material", "report", "meeting_minutes")),),
     "2": (
-        ("security_defense", "국가안전보장·국방", ("policy_material", "official_document")),
+        ("security_defense", "국가안전보장·국방", ("policy_material", "official_document", "press_release")),
         ("unification_diplomacy", "통일·외교관계", ("report", "meeting_minutes", "plan")),
     ),
     "3": (
-        ("life_body", "국민 생명·신체 보호", ("report", "official_document", "policy_material", "meeting_minutes")),
+        ("life_body", "국민 생명·신체 보호", ("report", "official_document", "policy_material", "meeting_minutes", "press_release")),
         ("property", "국민 재산 보호", ("report", "official_document", "plan")),
     ),
     "4": (
@@ -32,9 +32,9 @@ _GROUPS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] = {
     ),
     "5": (
         ("audit_inspection", "감사·검사", ("audit_result", "meeting_minutes", "official_document", "report")),
-        ("bid_contract", "입찰계약", ("bid_notice", "approval")),
+        ("bid_contract", "입찰계약", ("bid_notice", "approval", "bid_renotice", "public_offering", "pre_spec_notice")),
         ("personnel_management", "인사관리", ("personnel",)),
-        ("decision_review", "의사결정·내부검토", ("approval", "meeting_minutes")),
+        ("decision_review", "의사결정·내부검토", ("approval", "meeting_minutes", "press_release", "notice", "interpretation_compilation")),
         ("technology_development", "기술개발", ("report",)),
     ),
     "6": (

@@ -31,20 +31,33 @@ ensure_src_on_path()
 import random
 
 from rd2.generators.agency_categories import get_agency_category  # noqa: E402
-from rd2.generators.agency_resolver import select_whitelisted_agency  # noqa: E402
+from rd2.generators.agency_resolver import (  # noqa: E402
+    is_military_secret_agency,
+    select_military_secret_grade,
+    select_whitelisted_agency,
+)
 from rd2.generators.doc_templates import TEMPLATE_VARIANTS, find_template, validate_row  # noqa: E402
 from rd2.generators.template_matrix import TEMPLATE_TARGETS  # noqa: E402
 from rd2.generators.pdf_render import render_document_pdf  # noqa: E402
-from rd2.generators.security_mark import generate_classification_stamp  # noqa: E402
+from rd2.generators.security_mark import (  # noqa: E402
+    generate_classification_stamp,
+    generate_military_secret_mark,
+)
 from rd2.storage.naming import (  # noqa: E402
     DOC_TYPE_APPROVAL,
     DOC_TYPE_AUDIT_RESULT,
     DOC_TYPE_BID_NOTICE,
+    DOC_TYPE_BID_RENOTICE,
+    DOC_TYPE_INTERPRETATION_COMPILATION,
     DOC_TYPE_MEETING_MINUTES,
+    DOC_TYPE_NOTICE,
     DOC_TYPE_OFFICIAL_DOCUMENT,
     DOC_TYPE_PERSONNEL,
     DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
+    DOC_TYPE_PRE_SPEC_NOTICE,
+    DOC_TYPE_PRESS_RELEASE,
+    DOC_TYPE_PUBLIC_OFFERING,
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
 )
@@ -153,6 +166,16 @@ _SOURCE_BY_DOC_TYPE: dict[str, tuple[SourceReference, ...]] = {
             role="실제 대외 통보 공문의 개인/기관 수신·안내문·조치표·발신명의 구조 참고",
         ),
     ),
+    DOC_TYPE_PRESS_RELEASE: (
+        SourceReference(
+            path=(
+                "data/korea_kr/press_release/"
+                "156770636_★ (260712) 재정전략회의_보도자료_최종.pdf"
+            ),
+            role="실제 보도자료의 보도시점/배포일시 표기, 헤드라인+글머리 요약, "
+            "말미 부처별 담당자 연락처 표 구조 참고",
+        ),
+    ),
 }
 
 _SOURCE_PROVENANCE_NOTE = {
@@ -168,6 +191,12 @@ _DOC_TYPE_TITLE = {
     DOC_TYPE_PLAN: "추진계획(안)",
     DOC_TYPE_APPROVAL: "승인 검토(안)",
     DOC_TYPE_REPLY_NOTIFICATION: "검토결과 통보",
+    DOC_TYPE_PRESS_RELEASE: "보도자료(안)",
+    DOC_TYPE_NOTICE: "공고(안)",
+    DOC_TYPE_BID_RENOTICE: "입찰 재공고(안)",
+    DOC_TYPE_PUBLIC_OFFERING: "공모 공고(안)",
+    DOC_TYPE_INTERPRETATION_COMPILATION: "질의회시 정비(안)",
+    DOC_TYPE_PRE_SPEC_NOTICE: "사전규격공개(안)",
 }
 
 
@@ -609,14 +638,36 @@ def generate_samples(
     stamp_path = output_dir / "_stamp_confidential.png"
     generate_classification_stamp(stamp_path, seed=20260716)
 
+    # 국방부/국가정보원 샘플(T1-1, T2-1 등)은 "대외비" 대신 군사기밀 [별표 2] 등급
+    # 마크를 쓴다(2026-07-21 사용자 결정) — 등급별 마크는 3종류뿐이라 재사용한다.
+    # 등급은 template_id로 시드를 고정해 재실행해도 같은 마크가 나오게 한다.
+    military_mark_cache: dict[str, Path] = {}
+
+    def _military_mark_for_grade(grade: str) -> Path:
+        cached = military_mark_cache.get(grade)
+        if cached is not None:
+            return cached
+        mark_path = output_dir / f"_stamp_military_{grade}.png"
+        generate_military_secret_mark(mark_path, grade, seed=20260716)
+        military_mark_cache[grade] = mark_path
+        return mark_path
+
     manifest: list[dict] = []
     for sample in _selected_samples(samples_per_template):
         output_path = output_dir / sample.filename
-        category = get_agency_category(str(sample.row["ordering_agency"]))
+        agency = str(sample.row["ordering_agency"])
+        category = get_agency_category(agency)
         is_confidential = str(sample.row.get("cso_classification") or "").upper() == "C"
+        if is_confidential and is_military_secret_agency(agency):
+            grade = select_military_secret_grade(random.Random(sample.template_id))
+            military_mark = _military_mark_for_grade(grade)
+            row_stamp_path, row_stamp_top_path = military_mark, military_mark
+        else:
+            row_stamp_path = stamp_path if is_confidential else None
+            row_stamp_top_path = None
         render_document_pdf(
             sample.row, category, output_path,
-            stamp_path=stamp_path if is_confidential else None,
+            stamp_path=row_stamp_path, stamp_top_path=row_stamp_top_path,
         )
 
         if output_path.read_bytes()[:4] != b"%PDF":

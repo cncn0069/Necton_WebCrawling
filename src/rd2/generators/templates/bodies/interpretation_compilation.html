@@ -1,0 +1,7 @@
+<div class="divider">－ 아 래 －</div>
+<p class="section">{{ subject }}</p>
+<p><strong>질의</strong></p><p>o {{ purpose }}</p>
+<p><strong>회시</strong></p>{% for p in progress %}<p>o {{ p }}</p>{% endfor %}
+<p>({{ department }}-{{ doc_no }}, {{ production_date }})</p>
+<p>※ 본 회시는 정비·개정 검토 중으로 최종 편철 전까지 대외 인용을 제한함.</p>
+<p>{{ ending }}</p>
