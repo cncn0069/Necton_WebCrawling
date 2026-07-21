@@ -1,9 +1,13 @@
 import csv
 import json
+import random
 import sys
+import threading
 from pathlib import Path
 
+import httpx
 import pytest
+from openai import RateLimitError
 
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
 if _SCRIPTS_DIR not in sys.path:
@@ -12,7 +16,14 @@ if _SCRIPTS_DIR not in sys.path:
 import generate_cs_pilot as pilot  # noqa: E402
 
 from rd2.generators.generate import SeededResult  # noqa: E402
+from rd2.generators.template_matrix import TARGET_BY_KEY  # noqa: E402
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document  # noqa: E402
+
+
+def _make_rate_limit_error() -> RateLimitError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    return RateLimitError("rate limited", response=response, body=None)
 
 
 class TestFetchAllSpanCandidates:
@@ -518,6 +529,34 @@ class TestConnectMariadb:
             pilot.connect_mariadb()
 
 
+class TestFilenameFromTitle:
+    def test_strips_brackets_and_converts_spaces_and_dashes(self):
+        result = pilot._filename_from_title("[문서 근거] 국가안보 관련 사안 — 국방부", fallback="fallback-id")
+        assert result == "문서_근거_국가안보_관련_사안_-_국방부"
+
+    def test_removes_commas_and_other_disallowed_punctuation(self):
+        result = pilot._filename_from_title("보고서, 요약(안)", fallback="fallback-id")
+        assert result == "보고서_요약안"
+
+    def test_empty_title_falls_back(self):
+        assert pilot._filename_from_title("", fallback="5-span-0") == "5-span-0"
+
+    def test_title_of_only_disallowed_chars_falls_back(self):
+        assert pilot._filename_from_title("···///", fallback="5-span-0") == "5-span-0"
+
+
+class TestUniquePdfOutputPath:
+    def test_duplicate_titles_get_disambiguating_suffix(self, tmp_path):
+        used: dict[str, int] = {}
+        row_a = {"title": "대북 접경지역 군사대비태세 강화", "row_id": "1-fallback-0"}
+        row_b = {"title": "대북 접경지역 군사대비태세 강화", "row_id": "1-fallback-1"}
+        path_a = pilot._unique_pdf_output_path(tmp_path, row_a, used)
+        path_b = pilot._unique_pdf_output_path(tmp_path, row_b, used)
+        assert path_a != path_b
+        assert path_a.name == "대북_접경지역_군사대비태세_강화.pdf"
+        assert path_b.name == "대북_접경지역_군사대비태세_강화_2.pdf"
+
+
 class TestRenderPdfsForCsv:
     def _write_sample_csv(self, csv_path):
         rows = [
@@ -561,20 +600,26 @@ class TestRenderPdfsForCsv:
         rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 2
-        assert (pdf_dir / "5-span-0.pdf").exists()  # S — 마크 없음
-        assert (pdf_dir / "1-fallback-0.pdf").exists()  # C — 워터마크+스탬프 적용
+        # 2026-07-21 사용자 결정: PDF 파일명은 row_id가 아니라 문서 제목(title)
+        # 기반이어야 한다 — row_id는 여전히 CSV 컬럼으로만 남는다.
+        assert (pdf_dir / "테스트_문서.pdf").exists()  # S — 마크 없음
+        assert (pdf_dir / "합성_폴백_문서.pdf").exists()  # C — 워터마크+스탬프+기관마크 적용
         assert (pdf_dir / "_stamp_confidential.png").exists()
-        # 워터마크는 row별 캐시 파일(_watermark_char_N.png)로 생성된다 —
-        # C 행이 하나뿐이므로 정확히 1개가 생겨야 한다.
-        watermark_files = list(pdf_dir.glob("_watermark_char_*.png"))
+        # 워터마크/좌상단 기관마크는 기관 로고 파일명별 캐시 파일로 생성된다 —
+        # agency_logo_filename이 비어 있으면 정부부처 공용 마크로 폴백하므로
+        # C 행이 하나뿐이면 정확히 1개씩 생겨야 한다.
+        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
         assert len(watermark_files) == 1
+        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
+        assert len(letterhead_files) == 1
 
-    def test_watermark_cache_reused_across_c_rows_sharing_same_character(self, tmp_path):
-        """워터마크 문자는 row별로 다시 그리되, 같은 문자가 나오는 행끼리는
-        캐시를 재사용해 중복 파일을 만들지 않는다."""
+    def test_watermark_cache_reused_across_c_rows_sharing_same_agency_logo(self, tmp_path):
+        """워터마크/기관마크는 기관 로고 파일명별로 캐시된다 — 같은 로고를 쓰는
+        행끼리는 재사용하고, 다른 로고는 별도 파일을 만든다."""
         csv_path = tmp_path / "cs_pilot_output.csv"
+        logo_filenames = ["국정원.png"] * 3 + ["정부부처.png"] * 2
         rows = []
-        for i in range(5):
+        for i, logo_filename in enumerate(logo_filenames):
             row = {name: "" for name in pilot.CSV_FIELDNAMES}
             row.update(
                 {
@@ -586,6 +631,7 @@ class TestRenderPdfsForCsv:
                     "ordering_agency": "실제기관명",
                     "body_text": "폴백 본문입니다.",
                     "status": "ok",
+                    "agency_logo_filename": logo_filename,
                 }
             )
             rows.append(row)
@@ -598,20 +644,11 @@ class TestRenderPdfsForCsv:
         rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 5
-        # 문자는 최대 7종류(security_mark._WATERMARK_CHARS)뿐이므로
-        # 워터마크 캐시 파일 개수는 5개를 넘을 수 없다(캐시가 안 됐다면 5개).
-        watermark_files = list(pdf_dir.glob("_watermark_char_*.png"))
-        assert 1 <= len(watermark_files) <= 5
-
-    def test_watermark_seed_for_row_is_deterministic(self):
-        row = {"row_id": "5-span-0", "seed_span_id": "123"}
-        seed_a = pilot._watermark_seed_for_row(row, sampling_seed=42)
-        seed_b = pilot._watermark_seed_for_row(row, sampling_seed=42)
-        assert seed_a == seed_b
-
-    def test_watermark_seed_has_stable_expected_value(self):
-        row = {"row_id": "5-span-0", "seed_span_id": "123"}
-        assert pilot._watermark_seed_for_row(row, sampling_seed=42) == 158676051
+        # 로고는 2종류(국정원/정부부처)뿐이므로 캐시가 재사용되면 파일도 2개여야 한다.
+        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
+        assert len(watermark_files) == 2
+        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
+        assert len(letterhead_files) == 2
 
     def test_rejects_row_id_path_traversal(self, tmp_path):
         csv_path = tmp_path / "unsafe.csv"
@@ -664,3 +701,332 @@ class TestExistingRowIds:
             writer.writerow(row)
 
         assert pilot._existing_row_ids(csv_path) == {"5-span-0"}
+
+
+class TestBuildTargetCells:
+    """--target-matrix 모드의 4축(조항,세부조항,문서유형,행정상태) 셀 생성.
+
+    Lane B(template_matrix.py 상태축 추가, candidates.py 공개 이름 변경)가 아직
+    이 브랜치에 들어오지 않은 상태를 전제로 한다 — build_target_cells()는
+    template_matrix.TARGET_BY_KEY(3축, 기존 구조 그대로)와 candidates.py의
+    문서유형별 행정상태 규칙(현재는 private 이름)을 조합해서 만든다.
+    """
+
+    def test_only_includes_clauses_5_to_8(self):
+        cells = pilot.build_target_cells()
+        assert cells  # 최소 1개 이상 생성돼야 함
+        assert {cell.clause_no for cell in cells} <= {"5", "6", "7", "8"}
+
+    def test_cell_count_matches_doc_type_conditional_status_expansion(self):
+        """설계 문서 "조합 규모" 절: 완전 격자가 아니라 문서유형-조건부 구조다 —
+        (조항,세부조항,문서유형) 삼중쌍마다 그 문서유형에 등록된 상태 수만큼만
+        늘어나야 하고, 상태가 없으면 정확히 1개(빈 상태)여야 한다."""
+        rules_by_doc_type = pilot._load_admin_status_rules_by_doc_type()
+        expected = 0
+        for (clause_no, _subclause_key, doc_type), _target in TARGET_BY_KEY.items():
+            if clause_no not in ("5", "6", "7", "8"):
+                continue
+            n_statuses = len(rules_by_doc_type.get(doc_type, ()))
+            expected += n_statuses if n_statuses else 1
+
+        cells = pilot.build_target_cells()
+        assert len(cells) == expected
+
+    def test_every_cell_key_is_unique(self):
+        cells = pilot.build_target_cells()
+        keys = [cell.cell_key for cell in cells]
+        assert len(keys) == len(set(keys))
+
+    def test_every_cell_maps_back_to_a_real_target_by_key_entry(self):
+        cells = pilot.build_target_cells()
+        for cell in cells:
+            assert (cell.clause_no, cell.subclause_key, cell.doc_type) in TARGET_BY_KEY
+
+    def test_falls_back_to_single_status_less_cell_when_doc_type_has_no_rule(self, monkeypatch):
+        """행정상태 규칙이 아예 없는 문서유형(no_rule_defined)이라도 그
+        (조항,세부조항,문서유형) 삼중쌍 자체는 매트릭스에서 빠지면 안 된다 —
+        상태 축 없는 셀 1개로 남아야 한다."""
+        monkeypatch.setattr(pilot, "_load_admin_status_rules_by_doc_type", lambda: {})
+
+        cells = pilot.build_target_cells()
+
+        expected_triples = {
+            (clause_no, subclause_key, doc_type)
+            for (clause_no, subclause_key, doc_type) in TARGET_BY_KEY
+            if clause_no in ("5", "6", "7", "8")
+        }
+        actual_triples = {(c.clause_no, c.subclause_key, c.doc_type) for c in cells}
+        assert actual_triples == expected_triples
+        assert len(cells) == len(expected_triples)  # 삼중쌍당 정확히 1개
+        assert all(cell.admin_status == "" for cell in cells)
+
+    def test_respects_clause_nos_argument(self):
+        cells = pilot.build_target_cells(("5",))
+        assert {cell.clause_no for cell in cells} == {"5"}
+
+
+class TestPlanCell:
+    def _cell(self) -> pilot.TargetCell:
+        return pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+
+    def test_zero_real_candidates_lowers_effective_target(self):
+        plan = pilot.plan_cell(
+            self._cell(), [],
+            per_cell_target=2000, zero_candidate_target=50,
+            force_full_target_for_zero_cells=False,
+        )
+        assert plan.effective_target == 50
+        assert plan.is_zero_candidate_exception is True
+
+    def test_nonzero_real_candidates_uses_full_per_cell_target(self):
+        plan = pilot.plan_cell(
+            self._cell(), [{"span_id": 1}],
+            per_cell_target=2000, zero_candidate_target=50,
+            force_full_target_for_zero_cells=False,
+        )
+        assert plan.effective_target == 2000
+        assert plan.is_zero_candidate_exception is False
+
+    def test_force_full_target_overrides_reduction_but_keeps_exception_flag(self):
+        plan = pilot.plan_cell(
+            self._cell(), [],
+            per_cell_target=2000, zero_candidate_target=50,
+            force_full_target_for_zero_cells=True,
+        )
+        assert plan.effective_target == 2000
+        assert plan.is_zero_candidate_exception is True  # 예외 사실 자체는 계속 표시됨
+
+
+class TestBucketSpanCandidatesBySubclauseDocType:
+    def test_buckets_by_inferred_subclause_and_doc_type(self):
+        candidates = [
+            {"text": "감사 관련 내부검토"},  # audit_inspection 계열 키워드
+            {"text": "입찰 계약 관련 낙찰"},  # bid_contract 계열 키워드
+        ]
+        buckets = pilot._bucket_span_candidates_by_subclause_doc_type(candidates, "5")
+        assert sum(len(v) for v in buckets.values()) == 2
+
+    def test_empty_input_returns_empty_dict(self):
+        assert pilot._bucket_span_candidates_by_subclause_doc_type([], "5") == {}
+
+
+class TestRunConcurrently:
+    def test_concurrency_one_runs_sequentially_and_preserves_order(self):
+        calls = []
+
+        def make_task(i):
+            def _task():
+                calls.append(i)
+                return i
+            return _task
+
+        tasks = [make_task(i) for i in range(5)]
+        results = pilot._run_concurrently(tasks, concurrency=1)
+        assert results == [0, 1, 2, 3, 4]
+        assert calls == [0, 1, 2, 3, 4]
+
+    def test_concurrency_above_one_preserves_submission_order(self):
+        import time as time_module
+
+        def make_task(i):
+            def _task():
+                time_module.sleep(0.01 * (5 - i))  # 역순으로 끝나도 결과 순서는 그대로여야 함
+                return i
+            return _task
+
+        tasks = [make_task(i) for i in range(5)]
+        results = pilot._run_concurrently(tasks, concurrency=4)
+        assert results == [0, 1, 2, 3, 4]
+
+    def test_empty_task_list_returns_empty_list(self):
+        assert pilot._run_concurrently([], concurrency=4) == []
+
+    def test_retry_backoff_still_triggers_under_concurrent_execution(self, monkeypatch):
+        """동시성을 켜도 각 태스크 내부의 _with_retry(재시도/지수 백오프)가
+        무시되거나 우회되지 않아야 한다 — 여러 스레드가 동시에 rate limit을
+        맞아도 각자 재시도해서 결국 성공해야 한다."""
+        monkeypatch.setattr(pilot.time, "sleep", lambda seconds: None)  # 백오프 대기 스킵
+
+        call_counts: dict[str, int] = {}
+        lock = threading.Lock()
+
+        def flaky_generate_clause_document(clause_no, *, ordering_agency, production_date, client, model, **kwargs):
+            with lock:
+                call_counts[ordering_agency] = call_counts.get(ordering_agency, 0) + 1
+                attempt = call_counts[ordering_agency]
+            if attempt == 1:
+                raise _make_rate_limit_error()
+            return Document(
+                title="[합성] 테스트", ordering_agency=ordering_agency, production_date=production_date,
+                disclosure_status=DisclosureStatus.CLOSED, non_disclosure_reason="제1호",
+                subject_category="법률상 비밀·비공개 규정", body_text="본문",
+                cso_classification=CsoClassification.C, cso_sub_clause=clause_no,
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", flaky_generate_clause_document)
+
+        tasks = [
+            (lambda i=i: pilot.generate_fallback_row(
+                f"row-{i}", "1", client=object(), model="gpt-4o-mini", sampling_seed=1,
+                ordering_agency=f"기관{i}", production_date="2025-01-01",
+            ))
+            for i in range(8)
+        ]
+
+        results = pilot._run_concurrently(tasks, concurrency=4)
+
+        assert len(results) == 8
+        assert all(row["status"] == "ok" for row in results)
+        # 모든 기관이 정확히 2번(1회 실패 + 1회 재시도 성공) 호출됐어야 함 —
+        # 동시 실행 중에도 재시도 로직이 각 태스크별로 정상 작동했다는 뜻.
+        assert all(count == 2 for count in call_counts.values())
+        assert len(call_counts) == 8
+
+
+class TestApplyCellMetadata:
+    def test_stamps_cell_key_and_ratio_and_exception_flag(self):
+        row = {name: "" for name in pilot.CSV_FIELDNAMES}
+        cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+
+        pilot._apply_cell_metadata(row, cell, fallback_ratio=1.0, is_zero_candidate_exception=True)
+
+        assert row["cell_key"] == "5|audit_inspection|audit_result|감사진행중"
+        assert row["cell_fallback_ratio"] == "1.0000"
+        assert row["cell_zero_candidate_exception"] == "true"
+
+    def test_non_exception_cell_is_flagged_false(self):
+        row = {name: "" for name in pilot.CSV_FIELDNAMES}
+        cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+
+        pilot._apply_cell_metadata(row, cell, fallback_ratio=0.25, is_zero_candidate_exception=False)
+
+        assert row["cell_fallback_ratio"] == "0.2500"
+        assert row["cell_zero_candidate_exception"] == "false"
+
+
+class TestGenerateCellRows:
+    def _stub_fallback_row(self, row_id, clause_no, **kwargs):
+        row = {name: "" for name in pilot.CSV_FIELDNAMES}
+        row.update({
+            "row_id": row_id, "status": "ok", "clause_no": clause_no,
+            "doc_type": "audit_result", "seed_type": "synthetic_fallback",
+            "ordering_agency": kwargs.get("ordering_agency", ""),
+        })
+        return row
+
+    def test_zero_candidate_cell_is_100_percent_fallback_and_flagged(self, monkeypatch):
+        monkeypatch.setattr(pilot, "generate_fallback_row", self._stub_fallback_row)
+
+        cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+        cell_plan = pilot.plan_cell(
+            cell, [],  # 실측 후보 0건 — 영구 0건 셀 예외
+            per_cell_target=2000, zero_candidate_target=5,
+            force_full_target_for_zero_cells=False,
+        )
+
+        rows, report_row = pilot.generate_cell_rows(
+            cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
+            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
+            concurrency=2, db_lock=threading.Lock(),
+        )
+
+        assert len(rows) == 5  # zero_candidate_target만큼만(2000 아님)
+        assert all(row["seed_type"] == "synthetic_fallback" for row in rows)
+        assert all(row["cell_zero_candidate_exception"] == "true" for row in rows)
+        assert all(row["cell_fallback_ratio"] == "1.0000" for row in rows)
+        assert all(row["cell_key"] == cell.cell_key for row in rows)
+        assert report_row["real_candidates"] == 0
+        assert report_row["effective_target"] == 5
+        assert report_row["produced_span_seeded"] == 0
+        assert report_row["produced_fallback"] == 5
+        assert report_row["zero_candidate_exception"] == "true"
+
+    def test_force_full_target_generates_full_count_via_fallback(self, monkeypatch):
+        monkeypatch.setattr(pilot, "generate_fallback_row", self._stub_fallback_row)
+
+        cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+        cell_plan = pilot.plan_cell(
+            cell, [],
+            per_cell_target=12, zero_candidate_target=2,
+            force_full_target_for_zero_cells=True,
+        )
+
+        rows, report_row = pilot.generate_cell_rows(
+            cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
+            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
+            concurrency=2, db_lock=threading.Lock(),
+        )
+
+        assert len(rows) == 12
+        assert report_row["zero_candidate_exception"] == "true"  # 여전히 표시됨
+
+    def test_mixes_span_seeded_and_fallback_and_computes_partial_ratio(self, monkeypatch):
+        monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
+        monkeypatch.setattr(
+            pilot, "load_annotated_document_text", lambda path, root, **kwargs: "문서 원문"
+        )
+
+        def fake_generate_span_seeded_body(seed, *, client, model):
+            return SeededResult(
+                department="감사담당관실", unit_task="내부감사", production_date="2025-03-01",
+                body_text="본문", tokens_in=10, tokens_out=10,
+            )
+
+        monkeypatch.setattr(pilot, "generate_span_seeded_body", fake_generate_span_seeded_body)
+        monkeypatch.setattr(pilot, "generate_fallback_row", self._stub_fallback_row)
+
+        cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
+        real_candidates = [
+            {"source": "moel", "doc_type": "notification", "doc_id": "1", "span_id": 0,
+             "text": "감사 관련 내부검토", "source_pdf_path": "data/moel/notification/1.pdf"},
+        ]
+        cell_plan = pilot.plan_cell(
+            cell, real_candidates,
+            per_cell_target=4, zero_candidate_target=50,
+            force_full_target_for_zero_cells=False,
+        )
+
+        rows, report_row = pilot.generate_cell_rows(
+            cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
+            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
+            concurrency=2, db_lock=threading.Lock(),
+        )
+
+        assert report_row["real_candidates"] == 1
+        assert report_row["effective_target"] == 4
+        assert report_row["produced_span_seeded"] == 1
+        assert report_row["produced_fallback"] == 3
+        assert report_row["zero_candidate_exception"] == "false"
+        assert report_row["fallback_ratio"] == "0.7500"
+        assert len(rows) == 4
+        span_rows = [r for r in rows if r["seed_type"] == "span_seeded"]
+        assert len(span_rows) == 1
+        assert span_rows[0]["cell_fallback_ratio"] == "0.7500"
+        assert span_rows[0]["cell_zero_candidate_exception"] == "false"
+
+
+class TestWriteCellReport:
+    def test_writes_expected_header_and_rows(self, tmp_path):
+        report_path = tmp_path / "cell_report.csv"
+        cell_reports = [
+            {
+                "cell_key": "5|audit_inspection|audit_result|감사진행중",
+                "clause_no": "5", "subclause_key": "audit_inspection", "doc_type": "audit_result",
+                "admin_status": "감사진행중", "template_id": "T5-2", "real_candidates": 0,
+                "effective_target": 50, "produced_span_seeded": 0, "produced_fallback": 50,
+                "fallback_ratio": "1.0000", "zero_candidate_exception": "true",
+            }
+        ]
+
+        pilot.write_cell_report(report_path, cell_reports)
+
+        with report_path.open("r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        assert rows[0]["cell_key"] == "5|audit_inspection|audit_result|감사진행중"
+        assert rows[0]["zero_candidate_exception"] == "true"

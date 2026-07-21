@@ -7,10 +7,12 @@ import datetime
 from rd2.generators.agency_resolver import (
     AGENCY_LOGO_FILENAMES,
     FIXED_AGENCY_BY_SOURCE,
+    GENERAL_TRACK_SUPPLEMENTARY_AGENCIES,
     MARKING_SPEC_AGENCY_WHITELIST,
     PER_DOC_AGENCY_SOURCES,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
+    sample_diverse_agency_and_date_for_fallback,
     sample_real_agency_and_date_for_fallback,
     select_whitelisted_agency,
     synthesize_plausible_date,
@@ -147,6 +149,64 @@ class TestSampleRealAgencyAndDateForFallback:
             sample_real_agency_and_date_for_fallback(random.Random(42), [])
 
 
+class TestSampleDiverseAgencyAndDateForFallback:
+    def test_deduplicates_agency_before_choosing(self):
+        # 기관A가 문서 99건, 기관B가 1건이어도 "기관 하나당 한 표"이므로
+        # 여러 시드에 걸쳐 기관B도 뽑혀야 한다(가중 추출이면 사실상 불가능).
+        samples = [("기관A", "2025-01-01")] * 99 + [("기관B", "2025-06-15")]
+        picked_agencies = {
+            sample_diverse_agency_and_date_for_fallback(random.Random(seed), samples)[0]
+            for seed in range(20)
+        }
+        assert "기관B" in picked_agencies
+
+    def test_date_matches_the_chosen_agencys_own_history(self):
+        samples = [("기관A", "2025-01-01"), ("기관A", "2025-02-02"), ("기관B", "2025-06-15")]
+        for seed in range(20):
+            agency, prod_date, source = sample_diverse_agency_and_date_for_fallback(
+                random.Random(seed), samples
+            )
+            if agency in GENERAL_TRACK_SUPPLEMENTARY_AGENCIES:
+                assert source == "whitelist_synthetic"
+                continue
+            assert (agency, prod_date) in samples
+            assert source == "real_db_sample"
+
+    def test_supplementary_agency_gets_synthesized_date(self):
+        samples = [("기관A", "2025-01-01")]
+        found_supplementary = False
+        for seed in range(200):
+            agency, prod_date, source = sample_diverse_agency_and_date_for_fallback(
+                random.Random(seed), samples
+            )
+            if agency in GENERAL_TRACK_SUPPLEMENTARY_AGENCIES:
+                found_supplementary = True
+                assert source == "whitelist_synthetic"
+                datetime.date.fromisoformat(prod_date)
+        assert found_supplementary, "보충 목록 기관이 한 번도 안 뽑혔다 — 확률 또는 로직 확인 필요"
+
+    def test_deterministic_given_fixed_seed(self):
+        samples = [("기관A", "2025-01-01"), ("기관B", "2025-06-15")]
+        result_a = sample_diverse_agency_and_date_for_fallback(random.Random(42), samples)
+        result_b = sample_diverse_agency_and_date_for_fallback(random.Random(42), samples)
+        assert result_a == result_b
+
+    def test_empty_samples_still_works_via_supplementary_list(self):
+        agency, prod_date, source = sample_diverse_agency_and_date_for_fallback(
+            random.Random(42), []
+        )
+        assert agency in GENERAL_TRACK_SUPPLEMENTARY_AGENCIES
+        assert source == "whitelist_synthetic"
+        datetime.date.fromisoformat(prod_date)
+
+    def test_empty_samples_and_empty_supplementary_list_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            "rd2.generators.agency_resolver.GENERAL_TRACK_SUPPLEMENTARY_AGENCIES", []
+        )
+        with pytest.raises(RuntimeError, match="실제 \\(ordering_agency, production_date\\) 쌍이 비어"):
+            sample_diverse_agency_and_date_for_fallback(random.Random(42), [])
+
+
 class TestSelectWhitelistedAgency:
     def test_clause_1_to_4_have_whitelist_entries(self):
         for clause_no in ("1", "2", "3", "4"):
@@ -177,6 +237,44 @@ class TestSelectWhitelistedAgency:
         result_a = select_whitelisted_agency("1", random.Random(7))
         result_b = select_whitelisted_agency("1", random.Random(7))
         assert result_a == result_b
+
+    def test_scenario_index_narrows_to_scenario_specific_pool(self):
+        from rd2.generators.clause_data import CLAUSES
+
+        for clause_no in ("1", "2", "3", "4"):
+            clause = CLAUSES[clause_no]
+            for idx, expected_pool in enumerate(clause.scenario_agencies):
+                for seed in range(10):
+                    agency, logo_filename = select_whitelisted_agency(
+                        clause_no, random.Random(seed), scenario_index=idx
+                    )
+                    assert agency in expected_pool, (
+                        f"clause {clause_no} scenario {idx} picked {agency!r}, "
+                        f"expected one of {expected_pool}"
+                    )
+                    assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
+
+    def test_scenario_specific_pools_are_subsets_of_clause_whitelist(self):
+        from rd2.generators.clause_data import CLAUSES
+
+        for clause_no in ("1", "2", "3", "4"):
+            clause = CLAUSES[clause_no]
+            whitelist = set(MARKING_SPEC_AGENCY_WHITELIST[clause_no])
+            assert len(clause.scenario_agencies) == len(clause.scenario_prompts), (
+                f"clause {clause_no} scenario_agencies must align 1:1 with scenario_prompts"
+            )
+            for pool in clause.scenario_agencies:
+                assert set(pool) <= whitelist, (
+                    f"clause {clause_no} scenario pool {pool} has agencies outside the whitelist"
+                )
+
+    def test_no_scenario_index_falls_back_to_full_clause_pool(self):
+        # 하위 호환: scenario_index 없이 호출하는 기존 경로(예: template_samples.py)는
+        # 여전히 조항 전체 화이트리스트에서 고른다.
+        rng = random.Random(42)
+        agency, logo_filename = select_whitelisted_agency("2", rng, scenario_index=None)
+        assert agency in MARKING_SPEC_AGENCY_WHITELIST["2"]
+        assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
 
 
 class TestSynthesizePlausibleDate:

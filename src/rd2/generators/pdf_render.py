@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import tempfile
 from dataclasses import dataclass
@@ -84,6 +85,18 @@ LAYOUT_SPECS: dict[str, LayoutSpec] = {
 
 def _file_uri(path: Path | None) -> str | None:
     return path.resolve().as_uri() if path is not None and path.exists() else None
+
+
+def _image_data_uri(path: Path | None) -> str | None:
+    """header_template/footer_template용 base64 data URI.
+
+    Playwright 헤더/푸터 템플릿은 body와 별도의 격리된 컨텍스트라 file:// 상대
+    경로를 안정적으로 못 불러온다 — 바이트를 직접 인라인해야 한다.
+    """
+    if path is None or not path.exists():
+        return None
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 @lru_cache(maxsize=1)
@@ -243,8 +256,7 @@ def _render_context(
     row: dict,
     category: str,
     watermark_path: Path | None,
-    stamp_path: Path | None,
-    stamp_top_path: Path | None = None,
+    agency_mark_path: Path | None = None,
 ) -> dict:
     layout = LAYOUT_SPECS.get(category, LAYOUT_SPECS[CATEGORY_PUBLIC_CORPORATION])
     doc_type = row.get("doc_type") or ""
@@ -266,8 +278,7 @@ def _render_context(
         "base_uri": _TEMPLATE_DIR.resolve().as_uri() + "/",
         "css": Markup(_embedded_css()),
         "watermark_uri": _file_uri(watermark_path),
-        "stamp_uri": _file_uri(stamp_path),
-        "stamp_top_uri": _file_uri(stamp_top_path),
+        "agency_mark_uri": _file_uri(agency_mark_path),
     }
     context.update(_body_context(row, template.body_format if template else context["generic_body_format"], status))
     if template:
@@ -297,12 +308,51 @@ def _render_context(
     return context
 
 
-def _html_to_pdf(html: str, output_path: Path, layout: LayoutSpec) -> None:
+_FOOTER_MARK_HEIGHT_MM = 12  # 하단 여백(최소 25mm)엔 여유 있게 들어감
+# 실사(2026-07-21)로 확인: Chromium 헤더 템플릿은 내용 앞에 ~5.3mm 정도의
+# 여백을 자체적으로 넣는다(원인 불명, 명세에 없는 동작) — 그만큼을 감안해
+# 상단은 더 작게 잡아야 최소 여백(public_corporation 15mm) 카테고리에서도
+# 본문과 안 겹친다.
+_HEADER_MARK_HEIGHT_MM = 8
+
+
+def _html_to_pdf(
+    html: str,
+    output_path: Path,
+    layout: LayoutSpec,
+    *,
+    stamp_uri: str | None = None,
+    stamp_top_uri: str | None = None,
+) -> None:
+    """대외비/군사기밀 마크는 body에 position:fixed로 심지 않고 Playwright의
+    header_template/footer_template로 그린다.
+
+    실사(2026-07-21)로 확인: 이 Chromium 인쇄 엔진은 상하 여백이 다르면
+    position:fixed 오프셋이 콘텐츠 높이 기준으로 반복 타일링돼(페이지 물리
+    높이가 아니라) 계산이 어긋나고, 심하면 본문 텍스트와 겹친다. 반면
+    header_template/footer_template(페이지 번호가 이미 매 페이지 정상 반복되는
+    바로 그 메커니즘)는 브라우저가 각 페이지 여백 영역에 결정적으로 배치해줘서
+    이 문제가 없다.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise RuntimeError("PDF 렌더링에는 playwright가 필요합니다. 프로젝트 의존성을 설치하세요.") from exc
     executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+    footer_mark = (
+        f'<img src="{stamp_uri}" style="display:block;margin:0 auto 1mm;height:{_FOOTER_MARK_HEIGHT_MM}mm;">'
+        if stamp_uri else ""
+    )
+    footer_template = (
+        f'<div style="width:100%;text-align:center">{footer_mark}'
+        '<div style="font-size:9px">- <span class="pageNumber"></span> -</div></div>'
+    )
+    header_template = (
+        f'<div style="width:100%;text-align:center">'
+        f'<img src="{stamp_top_uri}" style="display:block;margin:0 auto;height:{_HEADER_MARK_HEIGHT_MM}mm;">'
+        "</div>"
+        if stamp_top_uri else "<span></span>"
+    )
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
@@ -327,8 +377,8 @@ def _html_to_pdf(html: str, output_path: Path, layout: LayoutSpec) -> None:
                         "top": f"{layout.margins_mm[0]}mm", "bottom": f"{layout.margins_mm[1]}mm",
                         "left": f"{layout.margins_mm[2]}mm", "right": f"{layout.margins_mm[3]}mm",
                     },
-                    header_template="<span></span>",
-                    footer_template='<div style="font-size:9px;width:100%;text-align:center">- <span class="pageNumber"></span> -</div>',
+                    header_template=header_template,
+                    footer_template=footer_template,
                 )
             finally:
                 browser.close()
@@ -349,19 +399,23 @@ def render_document_pdf(
     watermark_path: Path | None = None,
     stamp_path: Path | None = None,
     stamp_top_path: Path | None = None,
+    agency_mark_path: Path | None = None,
 ) -> Path:
     """공개 진입점. C 문서에만 페이지 반복 워터마크와 스탬프를 적용한다.
 
     stamp_top_path는 군사기밀 [별표 2] 등급 마크처럼 상단·하단 양쪽에 같은 마크를
     붙여야 하는 경우에만 넘긴다 — 일반 "대외비" 마크는 하단(stamp_path)만 쓴다.
+    agency_mark_path는 문서 좌상단에 한 번 표시하는 기관 마크(레터헤드)다 — 대외비/
+    군사기밀 마크와 별개로, C 문서에만 적용한다(2026-07-21 사용자 결정).
     """
     output_path = Path(output_path)
     confidential = (row.get("cso_classification") or "").strip().upper() == "C"
     effective_stamp = (stamp_path or security_mark_path) if confidential else None
     effective_stamp_top = stamp_top_path if confidential else None
     effective_watermark = watermark_path if confidential else None
+    effective_agency_mark = agency_mark_path if confidential else None
     env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_autoescape(("html",)))
-    context = _render_context(row, category, effective_watermark, effective_stamp, effective_stamp_top)
+    context = _render_context(row, category, effective_watermark, effective_agency_mark)
     template = context["template"]
     if row.get("cso_subclause_key") and template is None:
         raise ValueError(
@@ -376,5 +430,8 @@ def render_document_pdf(
             raise ValueError("템플릿 검증 실패:\n- " + "\n- ".join(violations))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     html = env.get_template("base.html").render(**context)
-    _html_to_pdf(html, output_path, context["layout"])
+    _html_to_pdf(
+        html, output_path, context["layout"],
+        stamp_uri=_image_data_uri(effective_stamp), stamp_top_uri=_image_data_uri(effective_stamp_top),
+    )
     return output_path
