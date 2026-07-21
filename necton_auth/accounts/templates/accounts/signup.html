@@ -75,6 +75,29 @@
         </div>
 
         <div class="signup-field">
+          <label class="signup-label" for="password-confirm">
+            비밀번호 확인 <span class="signup-required" aria-hidden="true">*</span>
+          </label>
+          <input
+            class="signup-input{% if form.password_confirm.errors %} signup-input--error{% endif %}"
+            id="password-confirm"
+            name="password_confirm"
+            type="password"
+            placeholder="비밀번호를 한 번 더 입력하세요"
+            autocomplete="new-password"
+            maxlength="255"
+            aria-describedby="{% if form.password_confirm.errors %}password-confirm-error{% endif %}"
+            {% if form.password_confirm.errors %}aria-invalid="true"{% endif %}
+            required
+          >
+          {% if form.password_confirm.errors %}
+            <div id="password-confirm-error">
+              {% for error in form.password_confirm.errors %}<p class="signup-error">{{ error }}</p>{% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="signup-field">
           <label class="signup-label" for="nickname">닉네임</label>
           <input
             class="signup-input{% if form.nickname.errors %} signup-input--error{% endif %}"

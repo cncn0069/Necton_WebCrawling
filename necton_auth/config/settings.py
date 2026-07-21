@@ -83,6 +83,13 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+AUTHENTICATION_BACKENDS = [
+    "accounts.backends.EmailBackend",
+]
+
+# 기존 USER 테이블만 있는 DB에서도 별도 django_session 테이블 없이 동작한다.
+SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

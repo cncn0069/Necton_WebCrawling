@@ -17,54 +17,77 @@
 
       {% for message in messages %}
         <p class="auth-notice" role="status">{{ message }}</p>
-      {% empty %}
-        {% if request.method == "POST" %}
-          <p class="auth-notice" role="status">
-            로그인 기능은 데이터베이스 연결 후 사용할 수 있습니다.
-          </p>
-        {% endif %}
       {% endfor %}
 
-      <form class="auth-form" method="post" action="{% url 'accounts:login' %}">
-        {% csrf_token %}
-
-        <div class="auth-field">
-          <label class="auth-label" for="email">이메일</label>
-          <input
-            class="auth-input"
-            id="email"
-            name="email"
-            type="email"
-            value="{{ request.POST.email|default:'' }}"
-            placeholder="name@company.com"
-            autocomplete="username"
-            maxlength="255"
-            required
-            autofocus
-          >
+      {% if request.user.is_authenticated %}
+        <div class="auth-signed-in">
+          <p class="auth-signed-in-label">로그인한 계정</p>
+          <p class="auth-signed-in-email">{{ request.user.email }}</p>
+          <form method="post" action="{% url 'accounts:logout' %}">
+            {% csrf_token %}
+            <button class="auth-submit" type="submit">로그아웃</button>
+          </form>
         </div>
+      {% else %}
+        {% if form.non_field_errors %}
+          <div class="auth-form-errors" role="alert">
+            {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+          </div>
+        {% endif %}
 
-        <div class="auth-field">
-          <label class="auth-label" for="password">비밀번호</label>
-          <input
-            class="auth-input"
-            id="password"
-            name="password"
-            type="password"
-            placeholder="비밀번호를 입력하세요"
-            autocomplete="current-password"
-            maxlength="255"
-            required
-          >
-        </div>
+        <form class="auth-form" method="post" action="{% url 'accounts:login' %}" novalidate>
+          {% csrf_token %}
 
-        <button class="auth-submit" type="submit">로그인</button>
+          <div class="auth-field">
+            <label class="auth-label" for="email">이메일</label>
+            <input
+              class="auth-input{% if form.email.errors %} auth-input--error{% endif %}"
+              id="email"
+              name="email"
+              type="email"
+              value="{{ form.email.value|default_if_none:'' }}"
+              placeholder="name@company.com"
+              autocomplete="username"
+              maxlength="255"
+              {% if form.email.errors %}aria-invalid="true" aria-describedby="email-error"{% endif %}
+              required
+              autofocus
+            >
+            {% if form.email.errors %}
+              <div id="email-error">
+                {% for error in form.email.errors %}<p class="auth-error">{{ error }}</p>{% endfor %}
+              </div>
+            {% endif %}
+          </div>
 
-        <p class="auth-switch">
-          계정이 없으신가요?
-          <a class="auth-link" href="{% url 'accounts:signup' %}">회원가입</a>
-        </p>
-      </form>
+          <div class="auth-field">
+            <label class="auth-label" for="password">비밀번호</label>
+            <input
+              class="auth-input{% if form.password.errors %} auth-input--error{% endif %}"
+              id="password"
+              name="password"
+              type="password"
+              placeholder="비밀번호를 입력하세요"
+              autocomplete="current-password"
+              maxlength="255"
+              {% if form.password.errors %}aria-invalid="true" aria-describedby="password-error"{% endif %}
+              required
+            >
+            {% if form.password.errors %}
+              <div id="password-error">
+                {% for error in form.password.errors %}<p class="auth-error">{{ error }}</p>{% endfor %}
+              </div>
+            {% endif %}
+          </div>
+
+          <button class="auth-submit" type="submit">로그인</button>
+
+          <p class="auth-switch">
+            계정이 없으신가요?
+            <a class="auth-link" href="{% url 'accounts:signup' %}">회원가입</a>
+          </p>
+        </form>
+      {% endif %}
     </section>
   </main>
 {% endblock %}

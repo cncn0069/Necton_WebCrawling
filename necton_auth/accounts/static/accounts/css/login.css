@@ -10,6 +10,8 @@
   --auth-focus: rgb(79 96 126 / 18%);
   --auth-notice-background: #f2f5fa;
   --auth-notice-border: #d7deea;
+  --auth-error: #b42318;
+  --auth-error-focus: rgb(180 35 24 / 14%);
 }
 
 * {
@@ -138,6 +140,27 @@ input {
   box-shadow: 0 0 0 3px var(--auth-focus);
 }
 
+.auth-input--error {
+  border-color: var(--auth-error);
+}
+
+.auth-input--error:focus-visible {
+  border-color: var(--auth-error);
+  box-shadow: 0 0 0 3px var(--auth-error-focus);
+}
+
+.auth-error,
+.auth-form-errors p {
+  margin: 0;
+  color: var(--auth-error);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auth-form-errors {
+  margin: -20px 0 24px;
+}
+
 .auth-submit {
   height: 50px;
   margin-top: 4px;
@@ -190,6 +213,29 @@ input {
   border-radius: 2px;
   outline: 3px solid var(--auth-focus);
   outline-offset: 2px;
+}
+
+.auth-signed-in {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.auth-signed-in-label {
+  margin: 0;
+  color: var(--auth-muted);
+  font-size: 13px;
+}
+
+.auth-signed-in-email {
+  margin: -12px 0 4px;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.auth-signed-in form .auth-submit {
+  width: 100%;
 }
 
 @media (max-width: 560px) {

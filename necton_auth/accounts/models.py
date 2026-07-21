@@ -1,5 +1,7 @@
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
+from django.utils.crypto import salted_hmac
 
 
 class User(models.Model):
@@ -30,3 +32,26 @@ class User(models.Model):
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    def get_session_auth_hash(self):
+        return self._get_session_auth_hash()
+
+    def get_session_auth_fallback_hash(self):
+        for fallback_secret in settings.SECRET_KEY_FALLBACKS:
+            yield self._get_session_auth_hash(secret=fallback_secret)
+
+    def _get_session_auth_hash(self, secret=None):
+        return salted_hmac(
+            "django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash",
+            self.password,
+            secret=secret,
+            algorithm="sha256",
+        ).hexdigest()
