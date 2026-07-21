@@ -2,7 +2,7 @@
 name = "rd2-training-data"
 version = "0.1.0"
 description = "RD-2: C/S/O 문서 자동 분류기 학습 데이터 구축 파이프라인"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
     "httpx>=0.27",

@@ -12,10 +12,11 @@ AWS EC2 배포 절차는 [`deploy/README.md`](./deploy/README.md)를 참고.
 
 ## 설치
 
-Python 3.11 이상 필요 (`pyproject.toml`의 `requires-python`).
+Python 3.12 이상 필요 (`pyproject.toml`의 `requires-python`). `requirements.txt`가
+고정한 `numpy==2.5.1`이 3.12+ 전용이라, 이보다 낮은 버전에서는 설치 자체가 실패한다.
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt   # 검증된 고정 버전 (재현성 우선 — EC2 등 새 환경에서 사용)
 pip install -e .
