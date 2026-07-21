@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Admin Console 로그인{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{% static 'accounts/css/login.css' %}">
+{% endblock %}
+
+{% block content %}
+  <main class="auth-page">
+    <section class="auth-card" aria-labelledby="login-title">
+      <header class="auth-header">
+        <h1 class="auth-title" id="login-title">Admin Console</h1>
+        <p class="auth-subtitle">관리자 계정으로 로그인해 주세요</p>
+      </header>
+
+      {% if request.method == "POST" %}
+        <p class="auth-notice" role="status">
+          로그인 기능은 데이터베이스 연결 후 사용할 수 있습니다.
+        </p>
+      {% endif %}
+
+      <form class="auth-form" method="post" action="{% url 'accounts:login' %}">
+        {% csrf_token %}
+
+        <div class="auth-field">
+          <label class="auth-label" for="email">이메일</label>
+          <input
+            class="auth-input"
+            id="email"
+            name="email"
+            type="email"
+            value="{{ request.POST.email|default:'' }}"
+            placeholder="name@company.com"
+            autocomplete="username"
+            maxlength="255"
+            required
+            autofocus
+          >
+        </div>
+
+        <div class="auth-field">
+          <label class="auth-label" for="password">비밀번호</label>
+          <input
+            class="auth-input"
+            id="password"
+            name="password"
+            type="password"
+            placeholder="비밀번호를 입력하세요"
+            autocomplete="current-password"
+            maxlength="255"
+            required
+          >
+        </div>
+
+        <button class="auth-submit" type="submit">로그인</button>
+      </form>
+    </section>
+  </main>
+{% endblock %}

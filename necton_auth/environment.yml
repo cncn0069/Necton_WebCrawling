@@ -1,0 +1,8 @@
+name: necton_auth_env
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - Django==6.0.7
