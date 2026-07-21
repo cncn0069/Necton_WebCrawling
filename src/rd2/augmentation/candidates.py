@@ -141,7 +141,7 @@ class AdministrativeStatusRule:
 
 # 문서유형별로 같은 행정상태라도 서로 다른 표현을 사용한다. 이 표는 "상태 확정"
 # 규칙이 아니라 원본 형식 보존 재구성 단계에 보낼 후보를 고르는 규칙이다.
-_ADMIN_STATUS_RULES_BY_DOC_TYPE: dict[str, tuple[AdministrativeStatusRule, ...]] = {
+ADMIN_STATUS_RULES_BY_DOC_TYPE: dict[str, tuple[AdministrativeStatusRule, ...]] = {
     DOC_TYPE_OFFICIAL_DOCUMENT: (
         AdministrativeStatusRule("결재진행중", ("결재 중", "검토 중", "기안"), "approval_history"),
         AdministrativeStatusRule("첨부미등록", ("붙임", "별첨", "첨부"), "attachment_inventory"),
@@ -334,7 +334,7 @@ def find_administrative_candidates(annotated_doc: dict[str, Any]) -> list[dict[s
     if "pages" not in annotated_doc:
         return []
 
-    rules = _ADMIN_STATUS_RULES_BY_DOC_TYPE.get(annotated_doc.get("doc_type") or "", ())
+    rules = ADMIN_STATUS_RULES_BY_DOC_TYPE.get(annotated_doc.get("doc_type") or "", ())
     if not rules:
         return []
 
