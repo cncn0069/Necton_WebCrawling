@@ -107,7 +107,7 @@ class SignUpPageTests(TestCase):
         "password": "S3cure!Passphrase-7746",
         "password_confirm": "S3cure!Passphrase-7746",
         "nickname": "관리자",
-        "phone": "010-1234-5678",
+        "phone": "01012345678",
         "company": "Necton",
     }
 
@@ -121,6 +121,10 @@ class SignUpPageTests(TestCase):
         self.assertContains(response, 'name="password_confirm"')
         self.assertContains(response, 'name="nickname"')
         self.assertContains(response, 'name="phone"')
+        self.assertContains(response, 'placeholder="01012345678"')
+        self.assertContains(response, 'pattern="[0-9]{11}"')
+        self.assertContains(response, 'minlength="11"')
+        self.assertContains(response, 'maxlength="11"')
         self.assertContains(response, 'name="company"')
         self.assertContains(response, 'name="csrfmiddlewaretoken"')
         self.assertContains(response, "accounts/css/signup.css")
@@ -167,6 +171,64 @@ class SignUpPageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'aria-invalid="true"')
         self.assertFalse(User.objects.exists())
+
+    def test_signup_accepts_simple_password_when_it_has_eight_characters(self):
+        signup_data = self.valid_signup_data | {
+            "password": "password",
+            "password_confirm": "password",
+        }
+
+        response = self.client.post(
+            reverse("accounts:signup"),
+            signup_data,
+        )
+
+        self.assertRedirects(response, reverse("accounts:login"))
+        user = User.objects.get(email=self.valid_signup_data["email"])
+        self.assertTrue(user.check_password("password"))
+
+    def test_signup_rejects_password_shorter_than_eight_characters(self):
+        signup_data = self.valid_signup_data | {
+            "password": "1234567",
+            "password_confirm": "1234567",
+        }
+
+        response = self.client.post(reverse("accounts:signup"), signup_data)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "비밀번호는 8자 이상 입력해 주세요.")
+        self.assertFalse(User.objects.exists())
+
+    def test_signup_rejects_phone_unless_it_is_exactly_eleven_digits(self):
+        invalid_phone_numbers = (
+            "010-1234-5678",
+            "0101234567",
+            "010123456789",
+            "0101234abcd",
+        )
+
+        for phone in invalid_phone_numbers:
+            with self.subTest(phone=phone):
+                response = self.client.post(
+                    reverse("accounts:signup"),
+                    self.valid_signup_data | {"phone": phone},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(
+                    response,
+                    "핸드폰 번호는 숫자 11자리로 입력해 주세요.",
+                )
+                self.assertFalse(User.objects.exists())
+
+    def test_signup_allows_phone_to_be_empty(self):
+        response = self.client.post(
+            reverse("accounts:signup"),
+            self.valid_signup_data | {"phone": ""},
+        )
+
+        self.assertRedirects(response, reverse("accounts:login"))
+        self.assertIsNone(User.objects.get().phone)
 
     def test_signup_rejects_mismatched_password_confirmation(self):
         signup_data = self.valid_signup_data | {
