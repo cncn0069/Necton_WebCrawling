@@ -18,6 +18,13 @@ class ClauseDefinition:
     title: str
     description: str
     scenario_prompts: list[str] = field(default_factory=list)  # 조항당 3~5개 변형 (다양성 확보)
+    # scenario_prompts[i]와 같은 인덱스로 짝지어지는, 그 시나리오에 그럴싸한 기관
+    # 풀(agency_resolver.MARKING_SPEC_AGENCY_WHITELIST[clause_no]의 부분집합).
+    # 비워두면(기본값) agency_resolver가 조항 전체 화이트리스트에서 고른다 — 5~8호처럼
+    # 화이트리스트 자체가 없는 조항은 이 필드도 채우지 않는다. 1~4호(C트랙)는 채워야
+    # "외교부가 군사대비태세 문서를 쓴다" 같은 시나리오-기관 불일치를 막을 수 있다
+    # (2026-07-21 사용자 지적으로 스코프 재확정 — 이전엔 조항 단위 랜덤만 허용했었다).
+    scenario_agencies: list[list[str]] = field(default_factory=list)
     requires_pii: bool = False
     on_hold: bool = False
 
@@ -34,6 +41,12 @@ CLAUSES: dict[str, ClauseDefinition] = {
             "군사기밀보호법 적용 대상 무기체계 시험평가 결과 보고서",
             "형사소송법상 수사 비밀 유지 대상인 내사 진행 상황 보고 문서",
         ],
+        scenario_agencies=[
+            ["국가정보원"],
+            ["국가정보원"],
+            ["국방부"],
+            ["검찰청", "고위공직자범죄수사처"],
+        ],
     ),
     "2": ClauseDefinition(
         clause_no="2",
@@ -44,6 +57,11 @@ CLAUSES: dict[str, ClauseDefinition] = {
             "대북 접경지역 군사대비태세 강화 방안 검토 문서",
             "주변국과의 비공개 외교 협상 전략 및 대응 시나리오 문건",
             "국방부 차세대 방위산업 기술 이전 관련 대외비 협의 자료",
+        ],
+        scenario_agencies=[
+            ["국방부", "국가정보원"],
+            ["외교부"],
+            ["국방부"],
         ],
     ),
     "3": ClauseDefinition(
@@ -56,6 +74,11 @@ CLAUSES: dict[str, ClauseDefinition] = {
             "댐 붕괴 시 하류지역 대피 시나리오 및 인명피해 예측 보고서",
             "위험물질 저장시설 보안 취약점 점검 결과 문서",
         ],
+        scenario_agencies=[
+            ["산업통상자원부", "행정안전부"],
+            ["환경부", "국토교통부", "행정안전부"],
+            ["행정안전부", "환경부", "고용노동부"],
+        ],
     ),
     "4": ClauseDefinition(
         clause_no="4",
@@ -66,6 +89,11 @@ CLAUSES: dict[str, ClauseDefinition] = {
             "진행 중인 대형 경제범죄 수사 내사 진행 상황 및 압수수색 계획 문서",
             "교정시설 보안 등급 재조정 및 수용자 이송 계획 내부 문건",
             "특정 사건 관련 피고인 신병처리 방침 검토 보고서",
+        ],
+        scenario_agencies=[
+            ["검찰청", "고위공직자범죄수사처"],
+            ["법무부"],
+            ["검찰청"],
         ],
     ),
     "5": ClauseDefinition(

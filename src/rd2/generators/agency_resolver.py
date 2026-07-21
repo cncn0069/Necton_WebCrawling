@@ -26,6 +26,8 @@ from __future__ import annotations
 import datetime
 import random
 
+from rd2.generators.clause_data import CLAUSES
+
 FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
     "moel": "고용노동부",
     "moe": "교육부",
@@ -120,13 +122,42 @@ def select_military_secret_grade(rng: random.Random) -> str:
     return rng.choice(MILITARY_SECRET_GRADES)
 
 
-def select_whitelisted_agency(clause_no: str, rng: random.Random) -> tuple[str, str]:
+def _scenario_agency_pool(clause_no: str, scenario_index: int | None) -> list[str] | None:
+    """clause_data.ClauseDefinition.scenario_agencies에서 시나리오 전용 기관 풀을 찾는다.
+
+    scenario_index가 없거나, 그 조항에 시나리오별 매핑이 없으면 None을 반환해
+    호출자가 조항 전체 화이트리스트로 폴백하게 한다.
+    """
+    if scenario_index is None:
+        return None
+    clause = CLAUSES.get(clause_no)
+    if clause is None or not clause.scenario_agencies:
+        return None
+    pool = clause.scenario_agencies[scenario_index % len(clause.scenario_agencies)]
+    return pool or None
+
+
+def select_whitelisted_agency(
+    clause_no: str, rng: random.Random, *, scenario_index: int | None = None
+) -> tuple[str, str]:
     """1~4호 폴백 생성용 실존 기관을 화이트리스트에서 고르고 로고 파일명과 함께 반환한다.
+
+    scenario_index가 주어지고 그 조항에 시나리오별 기관 매핑
+    (clause_data.ClauseDefinition.scenario_agencies)이 있으면, 조항 전체
+    화이트리스트가 아니라 그 시나리오에 그럴싸한 기관 풀로 좁혀서 고른다 —
+    "외교부가 대북 군사대비태세 문서를 쓴다"처럼 시나리오 본문과 무관한 기관이
+    뽑히는 걸 막기 위함(2026-07-21 사용자 지적). scenario_index를 생략하면
+    기존처럼 조항 전체 화이트리스트에서 고른다(하위 호환 — 시나리오 개념이 없는
+    호출부, 예: generate_template_samples.py).
 
     화이트리스트에 없는 clause_no는 generic(정부부처)으로 폴백한다 — Approach D는
     법정근거/화이트리스트 미확보를 이유로 생성을 막지 않는다(on_hold 폐기, 2026-07-20).
     """
-    pool = MARKING_SPEC_AGENCY_WHITELIST.get(clause_no) or [_GENERIC_WHITELIST_AGENCY]
+    pool = (
+        _scenario_agency_pool(clause_no, scenario_index)
+        or MARKING_SPEC_AGENCY_WHITELIST.get(clause_no)
+        or [_GENERIC_WHITELIST_AGENCY]
+    )
     agency = rng.choice(pool)
     logo_filename = AGENCY_LOGO_FILENAMES.get(agency, AGENCY_LOGO_FILENAMES[_GENERIC_WHITELIST_AGENCY])
     return agency, logo_filename
@@ -227,7 +258,11 @@ def fetch_real_agency_date_samples(conn) -> list[tuple[str, str]]:
 def sample_real_agency_and_date_for_fallback(
     rng: random.Random, samples: list[tuple[str, str]]
 ) -> tuple[str, str]:
-    """조항 1~4 폴백 문서용으로 실제 (기관명, 생산일자) 쌍 목록에서 하나를 뽑는다.
+    """5~8호 폴백 문서용으로 실제 (기관명, 생산일자) 쌍 목록에서 하나를 뽑는다.
+
+    문서 건수 그대로 가중 추출이라 rd2 DB의 수집 편중(고용노동부 등 4개
+    FIXED_AGENCY_BY_SOURCE 소스가 절반 가까이 차지)을 그대로 재현한다 —
+    분포 다양성이 필요하면 sample_diverse_agency_and_date_for_fallback()을 쓴다.
 
     목록이 비어 있으면 가짜 값을 지어내는 대신 실패시킨다(R3 강제) — 이 경로가
     조용히 "가상기관(합성)"이나 임의의 날짜로 되돌아가면 안 된다.
@@ -238,3 +273,49 @@ def sample_real_agency_and_date_for_fallback(
             "고를 수 없습니다 — rd2 DB에 최소 1건 이상의 실제 값이 있어야 합니다."
         )
     return rng.choice(samples)
+
+
+# 5~8호 폴백에서 sample_real_agency_and_date_for_fallback()을 그대로 쓰면 문서
+# 건수 가중 추출이라 rd2 DB 수집 편중(moel/moe/mohw/molit 4개 소스가
+# FIXED_AGENCY_BY_SOURCE로 하드코딩돼 있어 고용노동부·국토교통부·보건복지부가
+# 상위권 독점)을 그대로 재현한다. 아래 목록은 "기관 하나당 한 표"로 균등 추출할
+# 때, 정부조직법상 19부·3처 소속인데도 rd2 DB 실수집 풀에 전혀 없는 것으로
+# 확인된 기관을 보충한다(2026-07-21 확인 — 나머지 18부·3처는 이미 DB에 있고,
+# 기획재정부만 옛 명칭인 재정경제부/기획예산처로만 존재해 현재 명칭 기준으로는
+# 빠져 있었다). 이후 다른 누락 기관이 확인되면 여기에 추가한다.
+GENERAL_TRACK_SUPPLEMENTARY_AGENCIES: list[str] = ["기획재정부"]
+
+
+def sample_diverse_agency_and_date_for_fallback(
+    rng: random.Random, samples: list[tuple[str, str]]
+) -> tuple[str, str, str]:
+    """5~8호 폴백 문서용으로 (기관명, 생산일자, agency_source)를 뽑는다.
+
+    sample_real_agency_and_date_for_fallback()과 달리 기관명을 먼저 "기관
+    하나당 한 표"로 중복 제거해 균등 추출한다(+ 실수집 이력이 아예 없는 걸로
+    확인된 GENERAL_TRACK_SUPPLEMENTARY_AGENCIES 보충) — 그래야 문서 건수가
+    많은 소수 기관에 쏠리지 않고 5~8호 폴백 결과의 기관 다양성이 확보된다.
+    선택된 기관에 실제 날짜 이력이 있으면 그중 하나를 그대로 쓰고
+    (agency_source="real_db_sample"), 보충 목록에서 온 기관처럼 실제 날짜가
+    없으면 synthesize_plausible_date()로 짓는다(agency_source="whitelist_synthetic",
+    R3에 따라 기관명 자체는 항상 실존 기관이다).
+    """
+    agency_to_dates: dict[str, list[str]] = {}
+    for agency, prod_date in samples:
+        agency_to_dates.setdefault(agency, []).append(prod_date)
+
+    pool = list(agency_to_dates.keys())
+    for agency in GENERAL_TRACK_SUPPLEMENTARY_AGENCIES:
+        if agency not in agency_to_dates:
+            pool.append(agency)
+
+    if not pool:
+        raise RuntimeError(
+            "실제 (ordering_agency, production_date) 쌍이 비어 있어 폴백 값을 "
+            "고를 수 없습니다 — rd2 DB에 최소 1건 이상의 실제 값이 있어야 합니다."
+        )
+
+    agency = rng.choice(pool)
+    if agency in agency_to_dates:
+        return agency, rng.choice(agency_to_dates[agency]), "real_db_sample"
+    return agency, synthesize_plausible_date(rng), "whitelist_synthetic"

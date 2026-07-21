@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -32,14 +33,65 @@ load_dotenv()
 # generate_clause_document()가 ordering_agency/production_date를 필수 인자로
 # 받는 이유가 이것이다(agency_resolver.sample_real_agency_and_date_for_fallback로
 # rd2 DB의 실제 쌍 중 하나를 뽑아 전달).
+#
+# 2026-07-21 사용자 결정: title을 scenario 원문 그대로 쓰던 이전 방식(같은
+# scenario_index가 여러 건에 반복되면 title 컬럼이 통째로 동일 문자열이 되는
+# 문제 — 사용자 지적)을 버리고, LLM이 시나리오 범주 안에서 구체적이고 서로
+# 다른 사건을 스스로 설정해 title/body를 함께 JSON으로 생성하게 한다. 다만
+# 7/21 앞선 결정("[합성]" 라벨이 title=파일명 소스에 섞이면 안 된다)의 취지는
+# 유지해야 하므로, 프롬프트로 라벨 금지를 지시하고 _strip_synthetic_label로
+# 후처리 가드까지 이중으로 건다.
 _SYSTEM_PROMPT = (
     "너는 한국 공공기관의 문서 작성 스타일을 재현하는 어시스턴트다. "
     "아래에 실제로 존재하는 기관명과 생산일자가 주어진다 — 이 값들은 그대로 쓰고 "
     "다른 값으로 바꾸지 마라. 다만 인명·전화번호·금액 등 나머지 세부사항은 "
     "여전히 완전히 가상으로 지어내라(실제 사건을 지칭하지 마라). "
     "한국 관공서 특유의 문서 형식(안건, 개요, 붙임 등)과 어투를 사용하고, "
-    "AI가 작성했다는 티가 나는 상투적 설명은 넣지 마라. 문서 본문만 출력하라."
+    "AI가 작성했다는 티가 나는 상투적 설명은 넣지 마라.\n\n"
+    "주어지는 시나리오는 하나의 큰 범주일 뿐이다 — 그 범주 안에서 구체적이고 "
+    "고유한 하나의 사건(장소·배경·경위 등)을 스스로 설정하고, 그 사건에 맞는 "
+    "자연스러운 문서 제목을 지어라. 제목에는 '[합성]', '(가상)', 'AI 생성', "
+    "'synthetic' 같은 라벨이나 이 문서가 합성·가상이라는 티를 내는 표현을 "
+    "절대 넣지 마라 — 실제 관공서 문서 제목처럼 써라. 지정된 JSON 스키마로만 "
+    "응답하라."
 )
+
+_FALLBACK_RESPONSE_JSON_SCHEMA = {
+    "name": "fallback_document",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "type": "string",
+                "description": (
+                    "문서 제목 — 시나리오 범주 안에서 스스로 설정한 구체적 사건에 "
+                    "맞는 자연스러운 제목. 합성/가상 문서임을 암시하는 라벨을 "
+                    "포함하지 마라."
+                ),
+            },
+            "body_text": {
+                "type": "string",
+                "description": "문서 본문",
+            },
+        },
+        "required": ["title", "body_text"],
+        "additionalProperties": False,
+    },
+}
+
+_SYNTHETIC_LABEL_PREFIX_RE = re.compile(r"^\s*[\[(（][^\])）]*[\])）]\s*")
+
+
+def _strip_synthetic_label(title: str) -> str:
+    """LLM이 지시를 무시하고 title 앞에 '[합성]' 류 라벨을 붙였을 때를 대비한
+    후처리 가드 — 프롬프트 지시만으로는 100% 보장되지 않으므로 이중으로 건다."""
+    stripped = title.strip()
+    prev = None
+    while prev != stripped:
+        prev = stripped
+        stripped = _SYNTHETIC_LABEL_PREFIX_RE.sub("", stripped).strip()
+    return stripped
 
 
 def _default_client() -> OpenAI:
@@ -85,7 +137,10 @@ def _build_user_prompt(
         f"다음 시나리오에 해당하는 공공기관 내부 문서를 작성하라.\n\n"
         f"분류: {clause.classification.value} (제{clause.clause_no}호 - {clause.title})\n"
         f"조항 설명: {clause.description}\n"
-        f"시나리오: {scenario}\n\n"
+        f"시나리오: {scenario}\n"
+        f"위 시나리오는 하나의 큰 범주다 — 그 범주 안에서 구체적이고 고유한 하나의 "
+        f"사건(장소·배경·경위 등 세부사항)을 스스로 설정해 작성하라. 같은 시나리오로 "
+        f"이미 만들어졌을 다른 문서들과 내용이 겹치지 않아야 한다.\n\n"
         f"기관명: {ordering_agency} (실제 존재하는 값 — 그대로 쓰고 바꾸지 마라)\n"
         f"생산일자: {production_date} (실제 존재하는 값 — 그대로 쓰고 바꾸지 마라)\n"
         f"담당자명·전화번호·금액·문서번호는 완전히 가상으로 지어내라. "
@@ -138,11 +193,14 @@ def generate_clause_document(
                 ),
             },
         ],
+        response_format={"type": "json_schema", "json_schema": _FALLBACK_RESPONSE_JSON_SCHEMA},
     )
-    body_text = response.choices[0].message.content
+    parsed = json.loads(response.choices[0].message.content)
+    title = _strip_synthetic_label(parsed["title"]) or scenario
+    body_text = parsed["body_text"]
 
     return Document(
-        title=f"[합성] {scenario}",
+        title=title,
         ordering_agency=ordering_agency,
         production_date=production_date,
         disclosure_status=_disclosure_status_for(clause),
