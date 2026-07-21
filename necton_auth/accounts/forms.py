@@ -1,6 +1,5 @@
 from django import forms
 from django.contrib.auth import authenticate
-from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 
 from .models import User
@@ -47,13 +46,32 @@ class LoginForm(forms.Form):
 class SignUpForm(forms.ModelForm):
     password = forms.CharField(
         label="비밀번호",
+        min_length=8,
+        max_length=255,
         strip=False,
         widget=forms.PasswordInput,
+        error_messages={
+            "min_length": "비밀번호는 8자 이상 입력해 주세요.",
+        },
     )
     password_confirm = forms.CharField(
         label="비밀번호 확인",
+        min_length=8,
+        max_length=255,
         strip=False,
         widget=forms.PasswordInput,
+        error_messages={
+            "min_length": "비밀번호는 8자 이상 입력해 주세요.",
+        },
+    )
+    phone = forms.RegexField(
+        label="핸드폰 번호",
+        regex=r"^[0-9]{11}$",
+        required=False,
+        max_length=11,
+        error_messages={
+            "invalid": "핸드폰 번호는 숫자 11자리로 입력해 주세요.",
+        },
     )
 
     class Meta:
@@ -66,10 +84,8 @@ class SignUpForm(forms.ModelForm):
             raise ValidationError("이미 가입된 이메일입니다.")
         return email
 
-    def clean_password(self):
-        password = self.cleaned_data["password"]
-        validate_password(password)
-        return password
+    def clean_phone(self):
+        return self.cleaned_data["phone"] or None
 
     def clean(self):
         cleaned_data = super().clean()
