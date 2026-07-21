@@ -51,8 +51,8 @@ def test_clause_5_7_8_pruned_keywords_stay_removed():
     않도록 하는 가드레일. 이유는 candidates.py 상단 주석 참고."""
     pruned = {
         "5": ["감사원", "실태점검", "인사발령"],
-        "7": ["특허"],
-        "8": ["도시재생", "용도변경"],
+        "7": ["특허", "영업"],
+        "8": ["도시재생", "용도변경", "부동산"],
     }
     for clause_no, words in pruned.items():
         for word in words:
@@ -64,6 +64,25 @@ def test_clause_5_7_8_pruned_keywords_stay_removed():
 def test_clause_5_matches_diversified_administrative_keywords():
     assert _matches_clause_5_or_7_or_8("다. 수의계약대상소액용역으로적격심사는하지않습니다.", "5") is True
     assert _matches_clause_5_or_7_or_8("7. 인사위원회", "5") is True
+
+
+def test_clause_5_short_keywords_ignore_unrelated_compound_words():
+    for text in (
+        "무기계약직 퇴직금",
+        "노고에 감사드리며 인사 합니다",
+        "감사원 지적사항",
+        "심사청구 안내",
+        "인사말",
+    ):
+        assert _matches_clause_5_or_7_or_8(text, "5") is False
+    assert _matches_clause_5_or_7_or_8("감사원 종합감사 결과", "5") is True
+
+
+def test_clause_7_and_8_reject_overbroad_single_words_but_keep_specific_compounds():
+    assert _matches_clause_5_or_7_or_8("영업인가를 취소할 수 있습니다", "7") is False
+    assert _matches_clause_5_or_7_or_8("법인의 영업비밀", "7") is True
+    assert _matches_clause_5_or_7_or_8("부동산 일반 현황", "8") is False
+    assert _matches_clause_5_or_7_or_8("부동산 재개발 계획", "8") is True
 
 
 def test_clause_7_matches_money_pattern():
@@ -109,6 +128,66 @@ def test_find_candidates_respects_per_document_cap():
     doc = _annotated_doc([_span(i, "입찰 계약 체결") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
     candidates = find_candidates(doc, "5")
     assert len(candidates) == _MAX_CANDIDATES_PER_DOC
+
+
+def test_find_candidates_ranks_strong_evidence_ahead_of_early_generic_matches():
+    spans = [_span(i, f"계약 사업비 {i + 1},000원") for i in range(_MAX_CANDIDATES_PER_DOC + 5)]
+    spans.append(_span(999, "수의계약 입찰 예정가격 46,000,000원"))
+    doc = _annotated_doc(spans)
+
+    candidates = find_candidates(doc, "5")
+
+    assert candidates[0]["span_id"] == 999
+    assert candidates[0]["rank"] == 1
+    assert "keyword:수의계약" in candidates[0]["matched_rules"]
+    assert "keyword:계약" not in candidates[0]["matched_rules"]
+    assert candidates[0]["match_score"] > candidates[-1]["match_score"]
+
+
+def test_find_candidates_rejects_money_only_without_clause_context():
+    doc = _annotated_doc(
+        [
+            _span(1, "사업 개요"),
+            _span(2, "총 사업비 46,000,000원"),
+            _span(3, "추진 일정"),
+        ]
+    )
+
+    assert find_candidates(doc, "5") == []
+    assert find_candidates(doc, "7") == []
+
+
+def test_find_candidates_keeps_money_span_when_neighbor_has_clause_context():
+    clause_5_doc = _annotated_doc(
+        [_span(1, "입찰 계약 예정"), _span(2, "예정가격 46,000,000원")]
+    )
+    clause_7_doc = _annotated_doc(
+        [_span(1, "납품단가 원가구조"), _span(2, "제안금액 46,000,000원")]
+    )
+
+    clause_5_money = next(c for c in find_candidates(clause_5_doc, "5") if c["span_id"] == 2)
+    clause_7_money = next(c for c in find_candidates(clause_7_doc, "7") if c["span_id"] == 2)
+
+    assert "keyword:입찰" in clause_5_money["context_rules"]
+    assert "keyword:납품단가" in clause_7_money["context_rules"]
+
+
+def test_find_candidates_preserves_non_boilerplate_neighbor_context():
+    doc = _annotated_doc(
+        [
+            _span(1, "사업 개요"),
+            _span(2, "반복 머리말", is_boilerplate=True),
+            _span(3, "입찰 계약 체결"),
+            _span(4, "예정가격은 5,000만원입니다."),
+        ]
+    )
+
+    candidate = next(candidate for candidate in find_candidates(doc, "5") if candidate["span_id"] == 3)
+
+    assert candidate["context_before"] == ["사업 개요"]
+    assert candidate["context_after"] == ["예정가격은 5,000만원입니다."]
+    assert "반복 머리말" not in candidate["context_text"]
+    assert "[대상] 입찰 계약 체결" in candidate["context_text"]
 
 
 def test_find_candidates_returns_empty_when_no_pages_key():

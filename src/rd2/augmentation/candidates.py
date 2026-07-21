@@ -49,14 +49,17 @@ from rd2.storage.naming import (
     DOC_TYPE_STATUS_REPORT,
 )
 
-# 5·7호는 금액 표현이 핵심 신호라 정규식으로 잡고, 조항별로 추가 키워드를 본다.
+# 5·7호의 금액 표현은 정규식으로 잡되, 금액만 있는 span은 앞뒤에 해당 조항
+# 키워드가 있을 때만 최종 후보로 채택한다. 금액 단독 매치는 일반 예산표를 너무
+# 넓게 잡으므로 조항별 키워드를 문맥 근거로 함께 요구한다.
 _MONEY_PATTERN = re.compile(r"\d[\d,]*\s*(원|만원|억원|백만원|천원)")
 
-# 실측(2026-07-15)으로 지나치게 광범위한 단어를 걸러냄:
+# 실측(2026-07-15, 2026-07-21 재검증)으로 지나치게 광범위한 단어를 걸러냄:
 # - "평가"/"검토"(5호)는 학생평가·교원평가 등 조항과 무관한 내용을 대량으로 잡음
-# - "수익"(7호)은 "수익자 부담"(교육사업 용어) 등 무관한 내용을 잡음
+# - "수익"/"영업"(7호)은 수익자 부담, 영업인가·영업용 주택 등 무관한 내용을 잡음
 # - "개발"/"지정"/"고시"/"수용"/"지구"(8호)는 커리큘럼 개발·부서 지정처럼 부동산과
-#   무관한 내용을 잡고, "지구"는 "복사지 구입"처럼 우연히 겹치는 오탐도 있었음
+#   무관한 내용을 잡고, 단독 "부동산"도 일반 현황·담당부서 회신을 대량으로 잡음.
+#   "지구"는 "복사지 구입"처럼 우연히 겹치는 오탐도 있었음
 # → 부동산·감사계약 맥락이 뚜렷한 복합어 위주로 좁힘(문서 수 실측 후 충분함 확인).
 #
 # 지금까지는 moe/mohw/molit(중앙부처 위주) 문서만 수집돼 있지만, 앞으로 다양한
@@ -86,20 +89,36 @@ _CLAUSE_KEYWORDS: dict[str, list[str]] = {
         "내부검토", "검토보고",
     ],
     "7": [
-        "원가", "단가", "영업", "매출", "계약금액", "낙찰가",
+        "원가", "단가", "매출", "계약금액", "낙찰가",
         # 영업·경영상 비밀 동의어
         "영업비밀", "기술이전", "로열티", "지식재산권",
         "원가구조", "납품단가", "수주금액", "용역대가",
     ],
     "8": [
         "택지", "공시지가", "용도지역", "택지개발", "재개발", "재건축", "도시개발",
-        "토지수용", "그린벨트", "개발제한구역", "부동산", "산업단지", "지구단위계획",
+        "토지수용", "그린벨트", "개발제한구역", "산업단지", "지구단위계획",
         "택지지구", "개발지구",
         # 지자체별 정비·보상·인허가 용어(재개발·재건축 외에 정비구역 지정 방식이 다양함)
         "정비구역", "지목변경",
         "토지보상", "손실보상", "수용재결", "개발행위허가",
         "공공주택지구", "매립지", "간척지", "분양가상한제", "미분양",
     ],
+}
+
+# 짧은 일반 키워드가 무관한 복합어 안에 포함되는 경우만 지운 뒤 매칭한다.
+# 같은 span에 별도의 실제 키워드가 있으면 그 occurrence는 그대로 남는다.
+_KEYWORD_EXCLUDED_PHRASES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("5", "계약"): ("무기계약직", "계약직"),
+    ("5", "감사"): (
+        "감사드립니다",
+        "감사드리",
+        "감사합니다",
+        "감사와 축하",
+        "감사의 말씀",
+        "감사원",
+    ),
+    ("5", "심사"): ("심사청구",),
+    ("5", "인사"): ("인사드립니다", "인사 합니다", "인사합니다", "인사말"),
 }
 _CLAUSE_6_LABEL_MAX_LEN = 40  # "라벨: 값" 패턴은 조금 더 길어도 허용
 # "담당자 :", "문의:" 처럼 라벨 뒤에 콜론이 오는 명확한 자리표시 패턴만 인정.
@@ -123,7 +142,9 @@ _CLAUSE_6_GOV_TITLE_PATTERN = re.compile(
     r"시장|군수|구청장|읍장|면장|동장|시의원|도의원|구의원|군의원|국회의원|조합장"
 )
 
-_MAX_CANDIDATES_PER_DOC = 20  # 문서 하나가 후보 풀을 독점하지 않게 하는 상한
+_MAX_CANDIDATES_PER_DOC = 60  # 정밀도순 선별 후에도 특정 문서가 후보 풀을 독점하지 않게 하는 상한
+_CONTEXT_SPAN_RADIUS = 2
+_MAX_CONTEXT_CHARS_PER_SPAN = 240
 
 
 @dataclass(frozen=True)
@@ -270,9 +291,8 @@ ADMIN_STATUS_RULES_BY_DOC_TYPE: dict[str, tuple[AdministrativeStatusRule, ...]] 
 
 
 def _matches_clause_5_or_7_or_8(text: str, clause_no: str) -> bool:
-    if clause_no in ("5", "7") and _MONEY_PATTERN.search(text):
-        return True
-    return any(kw in text for kw in _CLAUSE_KEYWORDS[clause_no])
+    matched_rules, _ = _clause_match_evidence(text, clause_no)
+    return bool(matched_rules)
 
 
 def _matches_clause_6(text: str) -> bool:
@@ -284,6 +304,91 @@ def _matches_clause_6(text: str) -> bool:
     if not _CLAUSE_6_LABEL_PATTERN.search(text) or len(text) > _CLAUSE_6_LABEL_MAX_LEN:
         return False
     return not _CLAUSE_6_GOV_TITLE_PATTERN.search(text)
+
+
+def _matched_keywords(text: str, clause_no: str) -> list[str]:
+    """텍스트에 실제로 등장한 키워드 중 더 긴 복합어에 포함된 일반어는 뺀다.
+
+    예를 들어 ``수의계약``이 잡혔을 때 ``계약``까지 별도 근거로 세면 같은 신호를
+    이중으로 점수화하게 된다. 복합어만 남겨 후보 점수가 과장되지 않게 한다.
+    """
+    matched: list[str] = []
+    for keyword in _CLAUSE_KEYWORDS[clause_no]:
+        searchable_text = text
+        for phrase in sorted(
+            _KEYWORD_EXCLUDED_PHRASES.get((clause_no, keyword), ()),
+            key=len,
+            reverse=True,
+        ):
+            searchable_text = searchable_text.replace(phrase, "")
+        if keyword in searchable_text:
+            matched.append(keyword)
+    return [
+        keyword
+        for keyword in matched
+        if not any(keyword != other and keyword in other for other in matched)
+    ]
+
+
+def _clause_match_evidence(text: str, clause_no: str) -> tuple[list[str], int]:
+    """후보 선정 근거와 근거 강도 점수를 함께 반환한다.
+
+    점수는 법적 확정도가 아니라 후보 우선순위다. 단순 금액 표현은 1점으로 두고,
+    조항 문맥이 명확한 키워드는 길이와 복합어 여부에 따라 2~4점을 부여한다.
+    """
+    if clause_no == "6":
+        if not _matches_clause_6(text):
+            return [], 0
+        return ["pattern:personal_information_label"], 5
+
+    rules: list[str] = []
+    score = 0
+    if clause_no in ("5", "7") and _MONEY_PATTERN.search(text):
+        rules.append("pattern:money")
+        score += 1
+
+    for keyword in _matched_keywords(text, clause_no):
+        rules.append(f"keyword:{keyword}")
+        score += min(4, 2 + len(keyword) // 4)
+    return rules, score
+
+
+def _eligible_spans(annotated_doc: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any], str]]:
+    """본문 순서를 보존한 비-boilerplate span 목록을 만든다."""
+    eligible: list[tuple[dict[str, Any], dict[str, Any], str]] = []
+    for page in annotated_doc.get("pages", []):
+        for span in page.get("spans", []):
+            if span.get("is_boilerplate"):
+                continue
+            text = str(span.get("cleaned_text") or "")
+            if text.strip():
+                eligible.append((page, span, text))
+    return eligible
+
+
+def _clip_context(text: str) -> str:
+    text = text.strip()
+    if len(text) <= _MAX_CONTEXT_CHARS_PER_SPAN:
+        return text
+    return f"{text[:_MAX_CONTEXT_CHARS_PER_SPAN - 1]}…"
+
+
+def _candidate_context(
+    spans: list[tuple[dict[str, Any], dict[str, Any], str]],
+    index: int,
+) -> tuple[list[str], list[str], str]:
+    before = [
+        _clip_context(text)
+        for _, _, text in spans[max(0, index - _CONTEXT_SPAN_RADIUS) : index]
+    ]
+    after = [
+        _clip_context(text)
+        for _, _, text in spans[index + 1 : index + 1 + _CONTEXT_SPAN_RADIUS]
+    ]
+    anchor = _clip_context(spans[index][2])
+    parts = [*(f"[이전] {text}" for text in before), f"[대상] {anchor}"]
+    parts.extend(f"[다음] {text}" for text in after)
+    return before, after, "\n".join(parts)
 
 
 def _base_candidate(annotated_doc: dict[str, Any], page: dict[str, Any], span: dict[str, Any]) -> dict[str, Any]:
@@ -301,28 +406,60 @@ def _base_candidate(annotated_doc: dict[str, Any], page: dict[str, Any], span: d
 
 def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[str, Any]]:
     """annotated_doc에서 clause_no(5/6/7/8) 조항 후보 span을 최대
-    _MAX_CANDIDATES_PER_DOC개까지 찾아 반환한다. 원본은 변경하지 않는다."""
+    _MAX_CANDIDATES_PER_DOC개까지 찾아 반환한다.
+
+    문서 앞에서부터 선착순으로 자르지 않고, 전체 후보를 먼저 수집한 뒤 근거가
+    강한 순으로 정렬한다. 각 후보에는 선택 근거와 앞뒤 문맥을 보존한다.
+    원본은 변경하지 않는다.
+    """
     if "pages" not in annotated_doc:
         return []
 
     candidates: list[dict[str, Any]] = []
-    for page in annotated_doc["pages"]:
-        for span in page["spans"]:
-            if span["is_boilerplate"]:
-                continue
-            text = span["cleaned_text"]
-            if not text.strip():
-                continue
+    spans = _eligible_spans(annotated_doc)
+    for document_index, (page, span, text) in enumerate(spans):
+        matched_rules, anchor_score = _clause_match_evidence(text, clause_no)
+        if not matched_rules:
+            continue
 
-            matched = _matches_clause_6(text) if clause_no == "6" else _matches_clause_5_or_7_or_8(text, clause_no)
-            if not matched:
-                continue
+        context_before, context_after, context_text = _candidate_context(spans, document_index)
+        context_rules: list[str] = []
+        context_score = 0
+        for context_part in (*context_before, *context_after):
+            part_rules, part_score = _clause_match_evidence(context_part, clause_no)
+            context_rules.extend(rule for rule in part_rules if rule not in context_rules)
+            context_score += part_score
 
-            candidates.append(_base_candidate(annotated_doc, page, span))
-            if len(candidates) >= _MAX_CANDIDATES_PER_DOC:
-                return candidates
+        # 단순 금액은 어느 공공문서에나 매우 흔하다. 같은 span에는 금액밖에 없더라도
+        # 앞뒤 두 span 안에 조항별 키워드가 있으면 그 문맥에 딸린 금액으로 보고 살린다.
+        # 반대로 문맥 근거도 없으면 후보 수만 부풀리는 오탐이므로 제외한다.
+        if matched_rules == ["pattern:money"] and not any(
+            rule.startswith("keyword:") for rule in context_rules
+        ):
+            continue
 
-    return candidates
+        candidate = _base_candidate(annotated_doc, page, span)
+        candidate.update(
+            {
+                "candidate_kind": "clause",
+                "clause": clause_no,
+                "matched_rules": matched_rules,
+                "context_rules": context_rules,
+                "match_score": anchor_score + min(2, context_score),
+                "context_before": context_before,
+                "context_after": context_after,
+                "context_text": context_text,
+                "_document_index": document_index,
+            }
+        )
+        candidates.append(candidate)
+
+    candidates.sort(key=lambda candidate: (-candidate["match_score"], candidate["_document_index"]))
+    selected = candidates[:_MAX_CANDIDATES_PER_DOC]
+    for rank, candidate in enumerate(selected, start=1):
+        candidate["rank"] = rank
+        candidate.pop("_document_index", None)
+    return selected
 
 
 def find_administrative_candidates(annotated_doc: dict[str, Any]) -> list[dict[str, Any]]:
