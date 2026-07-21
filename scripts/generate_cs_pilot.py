@@ -62,9 +62,12 @@ from openai import RateLimitError
 
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import (
+    MARKING_SPEC_AGENCY_WHITELIST,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
     sample_real_agency_and_date_for_fallback,
+    select_whitelisted_agency,
+    synthesize_plausible_date,
 )
 from rd2.generators.clause_data import CLAUSES
 from rd2.generators.doc_templates import find_template, validate_row
@@ -337,13 +340,19 @@ def generate_fallback_row(
     sampling_seed: int,
     ordering_agency: str,
     production_date: str,
+    agency_source: str = "real_db_sample",
 ) -> dict:
     """span 후보가 없는 조항(1~4호) 또는 span 후보가 부족한 조항의 나머지분을
     D1 4번(완전 독립 시나리오)으로 백필한다.
 
-    ordering_agency/production_date는 rd2 DB에 실제로 존재하는 값이어야 한다
-    (agency_resolver.sample_real_agency_and_date_for_fallback로 얻는다, R3) —
-    이 함수 자체는 그 값을 검증하지 않고 그대로 신뢰한다.
+    ordering_agency/production_date의 출처는 두 가지다: (1) 5~8호는 여전히
+    agency_resolver.sample_real_agency_and_date_for_fallback로 뽑은 rd2 DB의
+    실제 값(R3), (2) 1~4호는 agency_resolver.select_whitelisted_agency +
+    synthesize_plausible_date로 만든 화이트리스트 기반 값(2026-07-20
+    plan-eng-review, Approach D — rd2 DB에 안보/외교/수사 계열 실수집 이력이
+    없어 (1) 방식을 쓸 수 없다). agency_source로 어느 쪽인지 구분해 필드
+    출처를 정직하게 기록한다. 이 함수 자체는 전달받은 값을 검증하지 않고
+    그대로 신뢰한다.
     """
     clause = CLAUSES[clause_no]
     start = time.monotonic()
@@ -371,6 +380,8 @@ def generate_fallback_row(
     except Exception as exc:  # noqa: BLE001
         status = "llm_error"
         body_text = f"[에러: {exc}]"
+    if agency_source == "whitelist_synthetic":
+        non_disclosure_reason += " (화이트리스트 기반 합성 — rd2 DB 실수집 이력 없음)"
     gen_time_s = round(time.monotonic() - start, 2)
     doc_type = infer_doc_type(clause_no, keyword_text=title)
     subclause_key = infer_subclause_key(
@@ -403,8 +414,16 @@ def generate_fallback_row(
         "is_synthetic": True,
         "field_source": json.dumps(
             {
-                "ordering_agency": "sampled_from_real_db_value",
-                "production_date": "sampled_from_real_db_value",
+                "ordering_agency": (
+                    "whitelist_synthetic_no_db_history"
+                    if agency_source == "whitelist_synthetic"
+                    else "sampled_from_real_db_value"
+                ),
+                "production_date": (
+                    "synthesized_plausible_range"
+                    if agency_source == "whitelist_synthetic"
+                    else "sampled_from_real_db_value"
+                ),
                 "body_text": "synthesized",
             },
             ensure_ascii=False,
@@ -692,13 +711,24 @@ def main() -> None:
                         row_id = f"{clause_no}-fallback-{fidx}"
                         if row_id in resumed_row_ids:
                             continue
-                        agency, prod_date = sample_real_agency_and_date_for_fallback(
-                            rng, fallback_samples
-                        )
+                        # 1~4호(C트랙): rd2 DB에 안보/외교/수사 계열 실수집 이력이
+                        # 없어(agency_resolver.py MARKING_SPEC_AGENCY_WHITELIST
+                        # 주석 참고) 화이트리스트 기반으로 생성한다(Approach D).
+                        # 5~8호는 기존대로 rd2 DB의 실제 (기관, 날짜) 쌍을 쓴다.
+                        if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
+                            agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
+                            prod_date = synthesize_plausible_date(rng)
+                            agency_source = "whitelist_synthetic"
+                        else:
+                            agency, prod_date = sample_real_agency_and_date_for_fallback(
+                                rng, fallback_samples
+                            )
+                            agency_source = "real_db_sample"
                         row = generate_fallback_row(
                             row_id, clause_no, client=client, model=args.model,
                             sampling_seed=args.sampling_seed,
                             ordering_agency=agency, production_date=prod_date,
+                            agency_source=agency_source,
                         )
                         _apply_template_validation(row)
                         writer.writerow(row)

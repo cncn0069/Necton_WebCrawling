@@ -28,10 +28,14 @@ from _common import ensure_src_on_path
 
 ensure_src_on_path()
 
+import random
+
 from rd2.generators.agency_categories import get_agency_category  # noqa: E402
+from rd2.generators.agency_resolver import select_whitelisted_agency  # noqa: E402
 from rd2.generators.doc_templates import TEMPLATE_VARIANTS, find_template, validate_row  # noqa: E402
 from rd2.generators.template_matrix import TEMPLATE_TARGETS  # noqa: E402
 from rd2.generators.pdf_render import render_document_pdf  # noqa: E402
+from rd2.generators.security_mark import generate_classification_stamp  # noqa: E402
 from rd2.storage.naming import (  # noqa: E402
     DOC_TYPE_APPROVAL,
     DOC_TYPE_AUDIT_RESULT,
@@ -216,7 +220,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
     TemplateSample(
         template_id="T1-1", filename="T1-1_legal_confidential.pdf",
         row=_row(row_id="template-t1-1", clause_no="1", doc_type=DOC_TYPE_OFFICIAL_DOCUMENT,
-            title="법정 비공개 자료 열람 제한 검토", agency="한빛시청", department="법무담당관",
+            title="법정 비공개 자료 열람 제한 검토", agency="국가정보원", department="법무담당관",
             body_text="관계 법률에 따라 비공개로 관리되는 자료의 보호 대상과 열람 제한 범위를 검토함.\n인가된 담당자만 업무상 필요한 범위에서 열람하도록 관리함.",
             reason="제9조 제1항 제1호: 관계 법률에 따른 비공개 정보", document_status="내부검토중", classification="C"),
         sources=(_OFFICIAL_FORM_SOURCE,), provenance_level="partial_structural_reference",
@@ -225,7 +229,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
     TemplateSample(
         template_id="T2-1", filename="T2-1_national_security.pdf",
         row=_row(row_id="template-t2-1", clause_no="2", doc_type=DOC_TYPE_POLICY_MATERIAL,
-            title="대외 협력 현안 대응방향 검토", agency="가온정책원", department="국제협력과",
+            title="대외 협력 현안 대응방향 검토", agency="국가정보원", department="국제협력과",
             body_text="대외 협력 현안의 대응 방향과 국가이익 보호 대상을 검토함.\n공개 시 협상 관계와 외교상 신뢰에 미칠 우려를 분석함.",
             reason="제9조 제1항 제2호: 외교관계의 중대한 이익 보호", document_status="내부검토중", classification="C"),
         sources=(_OFFICIAL_FORM_SOURCE,), provenance_level="partial_structural_reference",
@@ -234,7 +238,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
     TemplateSample(
         template_id="T3-1", filename="T3-1_public_safety.pdf",
         row=_row(row_id="template-t3-1", clause_no="3", doc_type=DOC_TYPE_REPORT,
-            title="다중이용시설 안전 취약요인 점검보고", agency="누리안전공단", department="안전점검과",
+            title="다중이용시설 안전 취약요인 점검보고", agency="정부부처", department="안전점검과",
             body_text="다중이용시설의 보호 대상과 안전 취약요인을 점검함.\n세부 취약정보 공개가 국민의 생명·신체 보호에 미칠 위험과 제한 범위를 검토함.",
             reason="제9조 제1항 제3호: 국민의 생명·신체 보호 지장 우려", document_status="내부검토중", classification="C"),
         sources=(_OFFICIAL_FORM_SOURCE,), provenance_level="partial_structural_reference",
@@ -243,7 +247,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
     TemplateSample(
         template_id="T4-1", filename="T4-1_legal_proceeding.pdf",
         row=_row(row_id="template-t4-1", clause_no="4", doc_type=DOC_TYPE_MEETING_MINUTES,
-            title="진행 중 사건 대응회의 자료", agency="다솔시청", department="법무지원과",
+            title="진행 중 사건 대응회의 자료", agency="검찰청", department="법무지원과",
             body_text="진행 중인 사건의 절차 현황과 대응 쟁점을 검토함.\n공개 시 공정한 업무 수행에 영향을 줄 수 있는 정보의 범위를 논의함.",
             reason="제9조 제1항 제4호: 진행 중인 재판 관련 정보", document_status="결재진행중", classification="C"),
         sources=(_OFFICIAL_FORM_SOURCE,), provenance_level="partial_structural_reference",
@@ -257,7 +261,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="5",
             doc_type=DOC_TYPE_APPROVAL,
             title="2026년도 중점사업 추진방안 검토(안)",
-            agency="한빛시청 기획조정실",
+            agency="수원시청 기획조정실",
             department="기획조정과",
             body_text=(
                 "2026년도 중점사업 추진방안에 대한 관계 부서 의견을 수렴하고자 함.\n"
@@ -288,7 +292,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="5",
             doc_type=DOC_TYPE_AUDIT_RESULT,
             title="2026년 상반기 복무점검 중간보고",
-            agency="누리공단",
+            agency="근로복지공단",
             department="감사실",
             body_text=(
                 "상반기 복무점검 추진 현황을 중간 보고함.\n"
@@ -317,7 +321,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="5",
             doc_type=DOC_TYPE_BID_NOTICE,
             title="전자 행정서비스 통합운영 사업 제안요청서(안) 검토",
-            agency="가온정보원",
+            agency="한국지능정보사회진흥원",
             department="운영지원과",
             body_text="전자 행정서비스 통합운영 사업의 제안요청서와 평가기준을 검토 중임.",
             reason="제9조 제1항 제5호: 입찰공고 전 내부 검토 중",
@@ -401,7 +405,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="6",
             doc_type=DOC_TYPE_PERSONNEL,
             title="2026년 하반기 5급 공무원 인사발령",
-            agency="한빛시청",
+            agency="성남시청",
             department="총무과",
             body_text="인사발령 대상자 개인정보가 포함되어 있으며 비식별 처리 전 원본을 검토 중임.",
             reason="제9조 제1항 제6호: 개인정보 포함, 비식별 처리 진행 중",
@@ -427,7 +431,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="6",
             doc_type=DOC_TYPE_REPLY_NOTIFICATION,
             title="생활소음 민원 사실관계 확인 안내",
-            agency="다솔시청",
+            agency="고양시청",
             department="민원행정과",
             body_text=(
                 "인근 공사장 생활소음 관련 민원을 접수하였음.\n"
@@ -451,7 +455,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
             clause_no="7",
             doc_type=DOC_TYPE_BID_NOTICE,
             title="통합업무장비 납품단가 협상자료 공개심사 건",
-            agency="누리정보원",
+            agency="조달청",
             department="장비구매과",
             body_text="협력업체 납품단가가 포함된 협상자료의 공개 범위를 심사 중임.",
             reason="제9조 제1항 제7호: 업체 납품단가 등 영업상 비밀, 공개심사 중",
@@ -482,6 +486,14 @@ def _expanded_samples() -> tuple[TemplateSample, ...]:
         base = base_by_id.get(target.template_id)
         if base is None:
             classification = "C" if target.clause_no in {"1", "2", "3", "4"} else "S"
+            # 2026-07-21 plan-eng-review: SAMPLES에 손으로 정의 안 된 템플릿 타겟은
+            # 예전엔 가상 기관명("가온행정기관")을 썼다 — 실존하지 않는 이름이라 R3
+            # 위반. select_whitelisted_agency는 1~4호는 조항별 화이트리스트에서,
+            # 그 외/미매칭 조항은 실존하는 generic "정부부처"로 고른다. template_id로
+            # 시드를 고정해 같은 템플릿은 재실행해도 같은 기관명이 나온다.
+            fallback_agency, _logo = select_whitelisted_agency(
+                target.clause_no, random.Random(target.template_id)
+            )
             base = TemplateSample(
                 template_id=target.template_id,
                 filename="",
@@ -490,7 +502,7 @@ def _expanded_samples() -> tuple[TemplateSample, ...]:
                     clause_no=target.clause_no,
                     doc_type=target.doc_type,
                     title=f"{target.subclause_label} {_DOC_TYPE_TITLE[target.doc_type]}",
-                    agency="가온행정기관", department="업무담당과",
+                    agency=fallback_agency, department="업무담당과",
                     body_text=(
                         f"{target.subclause_label} 관련 검토 목적과 보호 대상을 확인함.\n"
                         "공개 제한 범위와 현재 처리 경과를 검토하고 후속 계획을 수립함."
@@ -591,11 +603,21 @@ def generate_samples(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # C(기밀) 샘플에는 실제 파이프라인(generate_cs_pilot.py)과 동일하게 대외비
+    # 분류 스탬프를 적용한다 — 2026-07-20 plan-eng-review에서 발견: 이 스크립트가
+    # 여태 stamp_path를 안 넘겨서 T2-1 등 C 샘플에 마킹이 전혀 없었다(Approach D).
+    stamp_path = output_dir / "_stamp_confidential.png"
+    generate_classification_stamp(stamp_path, seed=20260716)
+
     manifest: list[dict] = []
     for sample in _selected_samples(samples_per_template):
         output_path = output_dir / sample.filename
         category = get_agency_category(str(sample.row["ordering_agency"]))
-        render_document_pdf(sample.row, category, output_path)
+        is_confidential = str(sample.row.get("cso_classification") or "").upper() == "C"
+        render_document_pdf(
+            sample.row, category, output_path,
+            stamp_path=stamp_path if is_confidential else None,
+        )
 
         if output_path.read_bytes()[:4] != b"%PDF":
             raise RuntimeError(f"{sample.template_id}: PDF 헤더 검증 실패: {output_path}")

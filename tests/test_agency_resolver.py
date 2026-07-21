@@ -2,12 +2,18 @@ import random
 
 import pytest
 
+import datetime
+
 from rd2.generators.agency_resolver import (
+    AGENCY_LOGO_FILENAMES,
     FIXED_AGENCY_BY_SOURCE,
+    MARKING_SPEC_AGENCY_WHITELIST,
     PER_DOC_AGENCY_SOURCES,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
     sample_real_agency_and_date_for_fallback,
+    select_whitelisted_agency,
+    synthesize_plausible_date,
 )
 
 
@@ -139,3 +145,54 @@ class TestSampleRealAgencyAndDateForFallback:
     def test_empty_list_raises_runtime_error(self):
         with pytest.raises(RuntimeError, match="실제 \\(ordering_agency, production_date\\) 쌍이 비어"):
             sample_real_agency_and_date_for_fallback(random.Random(42), [])
+
+
+class TestSelectWhitelistedAgency:
+    def test_clause_1_to_4_have_whitelist_entries(self):
+        for clause_no in ("1", "2", "3", "4"):
+            assert MARKING_SPEC_AGENCY_WHITELIST.get(clause_no), (
+                f"clause {clause_no} has no whitelist entries"
+            )
+
+    def test_every_whitelist_agency_has_a_logo(self):
+        for clause_no, agencies in MARKING_SPEC_AGENCY_WHITELIST.items():
+            for agency in agencies:
+                assert agency in AGENCY_LOGO_FILENAMES, (
+                    f"clause {clause_no} whitelists {agency!r} but it has no logo mapping"
+                )
+
+    def test_returns_agency_from_clause_pool(self):
+        rng = random.Random(42)
+        agency, logo_filename = select_whitelisted_agency("2", rng)
+        assert agency in MARKING_SPEC_AGENCY_WHITELIST["2"]
+        assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
+
+    def test_unknown_clause_falls_back_to_generic_government(self):
+        rng = random.Random(42)
+        agency, logo_filename = select_whitelisted_agency("8", rng)
+        assert agency == "정부부처"
+        assert logo_filename == AGENCY_LOGO_FILENAMES["정부부처"]
+
+    def test_deterministic_given_fixed_seed(self):
+        result_a = select_whitelisted_agency("1", random.Random(7))
+        result_b = select_whitelisted_agency("1", random.Random(7))
+        assert result_a == result_b
+
+
+class TestSynthesizePlausibleDate:
+    def test_returns_iso_date_string_in_the_past(self):
+        rng = random.Random(1)
+        result = synthesize_plausible_date(rng)
+        parsed = datetime.date.fromisoformat(result)
+        assert parsed < datetime.date.today()
+
+    def test_stays_within_years_back_window(self):
+        rng = random.Random(1)
+        result = synthesize_plausible_date(rng, years_back=1)
+        parsed = datetime.date.fromisoformat(result)
+        assert (datetime.date.today() - parsed).days <= 366
+
+    def test_deterministic_given_fixed_seed(self):
+        result_a = synthesize_plausible_date(random.Random(3))
+        result_b = synthesize_plausible_date(random.Random(3))
+        assert result_a == result_b
