@@ -6,3 +6,4 @@ dependencies:
   - pip
   - pip:
       - Django==6.0.7
+      - mysqlclient==2.2.8
