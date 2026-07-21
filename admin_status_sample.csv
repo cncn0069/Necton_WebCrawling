@@ -1,4 +1,0 @@
-row_id,seed_type,seed_prism_id,clause_no,cso_classification,title,ordering_agency,department,unit_task,production_date,subject_category,content_summary,non_disclosure_reason,body_text,disclosure_status,document_status,source,source_url,doc_type,is_synthetic,field_source,status,model,tokens_in,tokens_out,gen_time_s,sampling_seed,prompt_version
-admin-status-attachment-missing-0,administrative_status,,,S,지역 생활SOC 조성사업 검토자료 공개 요청 건,가상광역시 도시정책과,도시정책과,정보공개 문서 등록,2026-07-16,행정 처리 상태,본문의 붙임 참조 자료가 전자문서시스템에 아직 등록되지 않아 공개를 보류한 문서,행정 처리 상태 — 붙임 참조 문서의 첨부파일 미등록으로 공개 보류,"지역 생활SOC 조성사업 관련 검토자료의 공개 요청을 접수하였음.
-본문에서 참조한 붙임 자료가 전자문서시스템에 등록되지 않아 문서 완결성을 확인 중임.
-붙임 등록 및 내용 확인 후 공개 범위를 재검토할 예정임.",부분공개,첨부미등록,synthetic-template,,official_document,True,"{""cso_sub_clause"": ""not_applicable"", ""document_status"": ""template"", ""all_other_fields"": ""template""}",ok,,,,0,42,administrative-status-v1-20260716

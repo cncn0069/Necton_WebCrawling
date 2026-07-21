@@ -24,3 +24,18 @@ data/
 *.bak-*
 .claude/settings.local.json
 .DS_Store
+*.seoul_opengov_checkpoint.json
+
+# 스크립트/테스트 실행 산출물 (커밋 대상 아님)
+.pytest_*/
+tmp/
+output/
+image/
+cs_pilot_pdfs/
+admin_status_sample_pdfs/
+*.sql.gz
+*.csv
+*.tsv
+scratch_*
+일일리포트_*.md
+비공식_*

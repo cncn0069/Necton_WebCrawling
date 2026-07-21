@@ -1,2 +1,0 @@
-row_id,seed_type,seed_span_id,clause_no,cso_subclause_key,cso_classification,title,ordering_agency,department,unit_task,production_date,subject_category,matched_span_text,non_disclosure_reason,body_text,disclosure_status,document_status,source,source_url,doc_type,is_synthetic,field_source,status,model,tokens_in,tokens_out,gen_time_s,sampling_seed,prompt_version,template_id,template_violations
-../outside,,,,,,,,,,,,,,,,,,,,,,ok,,,,,,,,
