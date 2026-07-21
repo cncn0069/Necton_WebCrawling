@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rd2.augmentation.candidates import ADMIN_STATUS_RULES_BY_DOC_TYPE
+
 
 @dataclass(frozen=True)
 class TemplateTarget:
@@ -93,6 +95,90 @@ def _build_targets() -> tuple[TemplateTarget, ...]:
 
 TEMPLATE_TARGETS = _build_targets()
 TARGET_BY_KEY = {(t.clause_no, t.subclause_key, t.doc_type): t for t in TEMPLATE_TARGETS}
+
+
+@dataclass(frozen=True)
+class TemplateStatusTarget:
+    """(조항, 세부조항, 문서유형, 행정상태) 셀 하나.
+
+    기존 ``TemplateTarget``/``TARGET_BY_KEY``는 그대로 두고(하위호환), 이 타입은
+    거기에 행정상태 축을 "additive"하게 덧붙인 뷰다. 문서유형마다 적용 가능한
+    행정상태 목록이 다르므로(``ADMIN_STATUS_RULES_BY_DOC_TYPE`` 참고), 모든
+    문서유형에 모든 상태를 곱하는 완전 3중 격자가 아니라 그 문서유형에 실제
+    등록된 상태 목록만 곱한 조건부 크로스다.
+
+    ``admin_status``가 ``None``이면 해당 (clause_no, subclause_key, doc_type)
+    조합의 문서유형이 ``ADMIN_STATUS_RULES_BY_DOC_TYPE``에 규칙 자체가 등록돼
+    있지 않다는 뜻이다 — 이 경우에도 (clause, subclause, doc_type) 자체는 조용히
+    누락시키지 않고 상태 없는 자리표시 행 하나를 남긴다.
+    """
+
+    clause_no: str
+    subclause_key: str
+    subclause_label: str
+    doc_type: str
+    template_id: str
+    admin_status: str | None
+
+
+def admin_statuses_for_doc_type(doc_type: str) -> tuple[str, ...] | None:
+    """문서유형 하나에 등록된 행정상태 라벨 목록을 조회한다.
+
+    반환값 3가지를 구분해서 쓴다(Lane A 측정에서 "규칙 자체가 없음"과 "규칙은
+    있는데 매치 0건"을 섞으면 안 되기 때문 — design doc 참고):
+      - ``None``: ``ADMIN_STATUS_RULES_BY_DOC_TYPE``에 이 doc_type 항목 자체가
+        없음(규칙 미정의, Lane A 표기로 ``no_rule_defined``).
+      - ``()``  : 규칙 항목은 있으나 상태 라벨이 0개(현재 데이터에서는 발생하지
+        않지만, "규칙 있음 + 매치 0건"을 표현할 수 있어야 한다).
+      - ``(label, ...)``: 규칙이 등록돼 있고 상태 라벨이 1개 이상 있음.
+    """
+    rules = ADMIN_STATUS_RULES_BY_DOC_TYPE.get(doc_type)
+    if rules is None:
+        return None
+    return tuple(rule.document_status for rule in rules)
+
+
+def _build_status_aware_targets() -> tuple[TemplateStatusTarget, ...]:
+    rows: list[TemplateStatusTarget] = []
+    for target in TEMPLATE_TARGETS:
+        statuses = admin_statuses_for_doc_type(target.doc_type)
+        if not statuses:
+            # 규칙이 아예 없거나(None) 등록됐지만 상태가 0개(())인 경우 — 두
+            # 경우 모두 크로스할 상태가 없으므로 자리표시 행 하나만 남긴다.
+            # (둘을 구분하는 정보는 TARGET_STATUSES_BY_KEY 쪽에 보존된다.)
+            rows.append(
+                TemplateStatusTarget(
+                    target.clause_no,
+                    target.subclause_key,
+                    target.subclause_label,
+                    target.doc_type,
+                    target.template_id,
+                    admin_status=None,
+                )
+            )
+            continue
+        for status in statuses:
+            rows.append(
+                TemplateStatusTarget(
+                    target.clause_no,
+                    target.subclause_key,
+                    target.subclause_label,
+                    target.doc_type,
+                    target.template_id,
+                    admin_status=status,
+                )
+            )
+    return tuple(rows)
+
+
+STATUS_AWARE_TARGETS = _build_status_aware_targets()
+
+# (clause_no, subclause_key, doc_type) -> admin_statuses_for_doc_type(doc_type)와 동일.
+# 매번 ADMIN_STATUS_RULES_BY_DOC_TYPE를 다시 조회하지 않도록 미리 계산해둔 캐시.
+TARGET_STATUSES_BY_KEY: dict[tuple[str, str, str], tuple[str, ...] | None] = {
+    (t.clause_no, t.subclause_key, t.doc_type): admin_statuses_for_doc_type(t.doc_type)
+    for t in TEMPLATE_TARGETS
+}
 
 _SUBCLAUSE_KEYWORDS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
     "2": (("unification_diplomacy", ("통일", "외교", "남북", "재외공관")),),
