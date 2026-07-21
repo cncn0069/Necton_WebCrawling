@@ -45,7 +45,10 @@ import os
 import random
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -83,7 +86,7 @@ from rd2.generators.security_mark import (
     generate_military_secret_mark,
     generate_page_watermark,
 )
-from rd2.generators.template_matrix import infer_subclause_key
+from rd2.generators.template_matrix import TARGET_BY_KEY, infer_subclause_key
 
 load_dotenv()
 
@@ -96,6 +99,11 @@ CSV_FIELDNAMES = [
     "field_source", "status", "model", "tokens_in", "tokens_out", "gen_time_s",
     "sampling_seed", "prompt_version", "template_id", "template_violations",
     "military_secret_grade",
+    # --target-matrix 모드 전용(2026-07-21 추가) — 기존 --per-clause 경로의 행은
+    # 이 세 필드가 빈 문자열로 남는다. "영구 0건 셀" 예외가 적용된 셀은 반드시
+    # cell_zero_candidate_exception="true"로 CSV에서 바로 보이게 한다(설계 문서
+    # Phase B 예외 규칙 — 조용히 묻히면 안 됨).
+    "cell_key", "cell_fallback_ratio", "cell_zero_candidate_exception",
 ]
 
 SPAN_SEEDED_PROMPT_VERSION = "span-seeded-v1-20260720"
@@ -103,6 +111,16 @@ FALLBACK_PROMPT_VERSION = "fallback-v2-20260720"
 DEFAULT_PER_CLAUSE = 8
 ADMIN_STATUS_PROMPT_VERSION = "administrative-status-v1-20260716"
 ADMIN_STATUS_SAMPLE_ROW_ID = "admin-status-attachment-missing-0"
+
+# --target-matrix 모드 기본값(2026-07-21 설계 문서 Phase B). 셀당 기본 목표는
+# 2000건이지만 --per-cell-target으로 오버라이드할 수 있다.
+DEFAULT_PER_CELL_TARGET = 2000
+# "영구 0건 셀" 예외(설계 문서 Phase B 예외 규칙): 실측 후보가 0건인 셀은 2000건을
+# 폴백만으로 채우도록 강제하지 않는다 — 대신 이 작은 기본값만큼만 폴백으로 채운다.
+# --force-full-target-for-zero-cells를 명시적으로 주면 이 예외를 끄고 원래
+# --per-cell-target 그대로 채운다(그래도 100% 폴백이라는 사실 자체는 계속 표시된다).
+DEFAULT_ZERO_CANDIDATE_TARGET = 50
+DEFAULT_CONCURRENCY = 4  # 설계 문서 "이슈 6" — LLM 호출 동시성, 보수적 기본값
 
 # candidates.py는 조항 5/6/7/8만 span 탐지 로직이 있다 — 1~4호는 항상 폴백.
 _SPAN_CLAUSES = ("5", "6", "7", "8")
@@ -275,14 +293,25 @@ def generate_span_seeded_row(
     sampling_seed: int,
     conn,
     annotated_root: Path,
+    db_lock: threading.Lock | None = None,
 ) -> dict | None:
     """candidate(find_candidates.py 결과 1건)로 문서 원문 근거 기반 행을 만든다.
 
     실제 기관명을 해석하지 못하거나 annotated 원문을 찾지 못하면 None을
     반환한다 — 호출자는 그 candidate를 스킵하고 폴백으로 보충해야 한다
     (가짜 기관명으로 채우지 않는다, R3).
+
+    db_lock: --target-matrix/--concurrency 경로에서 여러 스레드가 같은 pymysql
+    커넥션(conn)을 공유할 때만 넘긴다 — pymysql 커넥션 하나를 여러 스레드가
+    동시에 쓰면 안 되므로(스레드 안전하지 않음) DB 조회 구간만 잠깐 잠근다. LLM
+    호출(느린 부분)은 잠금 밖에서 그대로 동시 실행된다. None(기본값)이면 기존
+    --per-clause 경로처럼 잠금 없이 그대로 호출한다(하위호환, 단일 스레드 사용).
     """
-    agency = resolve_agency_for_candidate(candidate, conn)
+    if db_lock is not None:
+        with db_lock:
+            agency = resolve_agency_for_candidate(candidate, conn)
+    else:
+        agency = resolve_agency_for_candidate(candidate, conn)
     if agency is None:
         print(f"  [skip] {row_id}: 실제 기관명을 해석할 수 없어 스킵(R3 — 가짜 기관명 금지)")
         return None
@@ -376,6 +405,10 @@ def generate_span_seeded_row(
         "sampling_seed": sampling_seed,
         "prompt_version": SPAN_SEEDED_PROMPT_VERSION,
         "military_secret_grade": "",  # 5~8호 span-seeded 경로는 군사기밀 대상 기관이 없음
+        # --target-matrix 모드에서만 _apply_cell_metadata()가 실제 값으로 덮어쓴다.
+        "cell_key": "",
+        "cell_fallback_ratio": "",
+        "cell_zero_candidate_exception": "",
     }
 
 
@@ -492,6 +525,10 @@ def generate_fallback_row(
         "sampling_seed": sampling_seed,
         "prompt_version": FALLBACK_PROMPT_VERSION,
         "military_secret_grade": military_secret_grade or "",
+        # --target-matrix 모드에서만 _apply_cell_metadata()가 실제 값으로 덮어쓴다.
+        "cell_key": "",
+        "cell_fallback_ratio": "",
+        "cell_zero_candidate_exception": "",
     }
 
 
@@ -545,7 +582,325 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "sampling_seed": sampling_seed,
         "prompt_version": ADMIN_STATUS_PROMPT_VERSION,
         "military_secret_grade": "",
+        "cell_key": "",
+        "cell_fallback_ratio": "",
+        "cell_zero_candidate_exception": "",
     }
+
+
+# --- --target-matrix 모드: (조항, 세부조항, 문서유형, 행정상태) 4축 셀 ---
+#
+# 설계 문서(Phase B)는 template_matrix.py에 행정상태 축을 추가하고 candidates.py의
+# _ADMIN_STATUS_RULES_BY_DOC_TYPE를 공개 이름으로 바꾸는 작업을 별도 워크스트림
+# (이 세션에서는 "Lane B")으로 분리했다. 이 파일 구현 시점에 그 변경이 아직
+# 이 브랜치에 들어오지 않아서(template_matrix.TARGET_BY_KEY는 여전히 (clause_no,
+# subclause_key, doc_type) 3축뿐), 아래는 그 상태 축을 candidates.py의 문서유형별
+# 규칙에서 직접 읽어 이 파일 안에서만 4축으로 합성한다.
+#
+# TODO(Lane B 병합 후): template_matrix.py가 문서유형-조건부 상태 축을 가진 새
+# 구조(예: TARGET_BY_KEY_WITH_STATUS 류)를 노출하면 build_target_cells()를 그
+# 구조를 직접 쓰도록 교체하고, 아래 _load_admin_status_rules_by_doc_type()의
+# private-name 폴백은 제거해도 된다.
+def _load_admin_status_rules_by_doc_type() -> dict[str, tuple]:
+    """candidates.py의 문서유형별 행정상태 규칙 딕셔너리를 가져온다.
+
+    공개 이름(ADMIN_STATUS_RULES_BY_DOC_TYPE, Lane B가 붙일 이름)을 먼저 찾고,
+    아직 없으면 현재 이름(_ADMIN_STATUS_RULES_BY_DOC_TYPE)으로 폴백한다 — 어느
+    쪽이 로드됐는지와 무관하게 이후 로직은 완전히 동일하게 동작한다.
+    """
+    try:
+        from rd2.augmentation.candidates import (
+            ADMIN_STATUS_RULES_BY_DOC_TYPE as rules_by_doc_type,  # type: ignore[attr-defined]
+        )
+    except ImportError:
+        from rd2.augmentation.candidates import (
+            _ADMIN_STATUS_RULES_BY_DOC_TYPE as rules_by_doc_type,
+        )
+    return rules_by_doc_type
+
+
+@dataclass(frozen=True)
+class TargetCell:
+    """3중쌍(조항,세부조항,문서유형) + 그 문서유형에 등록된 행정상태 하나.
+
+    설계 문서 "조합 규모" 절: 행정상태는 세부조항이 아니라 문서유형에 종속되므로
+    모든 세부조항 × 모든 상태의 완전 격자가 아니다 — 이 클래스 자체가 이미
+    문서유형-조건부로 만들어진 셀 하나를 표현한다(build_target_cells 참고).
+    admin_status가 빈 문자열이면 그 문서유형에 등록된 행정상태 규칙 자체가
+    없다는 뜻이다(no_rule_defined) — 그래도 (조항,세부조항,문서유형) 삼중쌍은
+    매트릭스에서 빠지지 않도록 상태 축 없는 셀 1개로 남는다.
+    """
+
+    clause_no: str
+    subclause_key: str
+    doc_type: str
+    admin_status: str
+    template_id: str
+
+    @property
+    def cell_key(self) -> str:
+        return f"{self.clause_no}|{self.subclause_key}|{self.doc_type}|{self.admin_status or '-'}"
+
+
+def build_target_cells(clause_nos: tuple[str, ...] = _SPAN_CLAUSES) -> list[TargetCell]:
+    """template_matrix.TARGET_BY_KEY(3축)에 문서유형별 행정상태를 곱해 4축 셀을 만든다.
+
+    clause_nos 기본값은 candidates.py가 span 탐지를 지원하는 5~8호뿐이다(1~4호는
+    조항 후보 탐지 로직 자체가 없어 이 매트릭스 대상이 아니다 — R2/R3 참고).
+    """
+    rules_by_doc_type = _load_admin_status_rules_by_doc_type()
+    cells: list[TargetCell] = []
+    for (clause_no, subclause_key, doc_type), target in TARGET_BY_KEY.items():
+        if clause_no not in clause_nos:
+            continue
+        statuses = [rule.document_status for rule in rules_by_doc_type.get(doc_type, ())]
+        if statuses:
+            cells.extend(
+                TargetCell(clause_no, subclause_key, doc_type, status, target.template_id)
+                for status in statuses
+            )
+        else:
+            cells.append(TargetCell(clause_no, subclause_key, doc_type, "", target.template_id))
+    return cells
+
+
+def _bucket_span_candidates_by_subclause_doc_type(
+    candidates: list[dict], clause_no: str
+) -> dict[tuple[str, str], list[dict]]:
+    """조항 단위 span 후보를 (세부조항, 문서유형)로 재버킷팅해 셀별 실측 후보 수를 센다.
+
+    candidates.py가 만드는 clause 후보 dict 자체에는 doc_type/subclause_key가
+    없다 — 실제 생성 시점(generate_span_seeded_row)과 똑같이
+    infer_doc_type/infer_subclause_key를 candidate 텍스트에 적용해야 어느 셀에
+    속하는지 알 수 있다. admin_status는 이 버킷에 포함하지 않는다 — 행정상태
+    후보는 candidates.py에서 조항 후보와 완전히 별개 경로(find_administrative_candidates,
+    문서 단위)로 탐지되므로, span 하나당 상태를 1:1로 확정할 근거가 아직 없다
+    (Phase A가 다뤄야 할 갭 — 이 스코프에서는 실측 신호를 (세부조항,문서유형)
+    단위까지만 쓰고, admin_status 축은 목표 매트릭스 쪽에만 존재한다고 명시한다).
+    """
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for candidate in candidates:
+        text = candidate.get("text") or ""
+        doc_type = infer_doc_type(clause_no, keyword_text=text)
+        subclause_key = infer_subclause_key(clause_no, doc_type, keyword_text=text) or ""
+        buckets.setdefault((subclause_key, doc_type), []).append(candidate)
+    return buckets
+
+
+@dataclass(frozen=True)
+class CellPlan:
+    """셀 하나의 실측 후보 + 그로부터 결정된 유효 목표건수."""
+
+    cell: TargetCell
+    real_candidates: list[dict]
+    effective_target: int
+    is_zero_candidate_exception: bool
+
+
+def plan_cell(
+    cell: TargetCell,
+    real_candidates: list[dict],
+    *,
+    per_cell_target: int,
+    zero_candidate_target: int,
+    force_full_target_for_zero_cells: bool,
+) -> CellPlan:
+    """"영구 0건 셀" 예외 규칙(설계 문서 Phase B 예외 규칙)을 적용한다.
+
+    실측 후보가 0건이면 2000건(기본 per_cell_target)을 폴백만으로 채우도록
+    강제하지 않고 훨씬 작은 zero_candidate_target으로 목표를 낮춘다 —
+    force_full_target_for_zero_cells를 명시적으로 준 경우에만 원래 목표
+    그대로 채운다(그래도 is_zero_candidate_exception 플래그는 계속 True다 —
+    "실측 근거 0건으로 전량 폴백"이라는 사실 자체는 목표 크기와 무관하게
+    항상 리포트/CSV에 표시돼야 한다).
+    """
+    is_zero_candidate = len(real_candidates) == 0
+    if is_zero_candidate and not force_full_target_for_zero_cells:
+        effective_target = zero_candidate_target
+    else:
+        effective_target = per_cell_target
+    return CellPlan(
+        cell=cell,
+        real_candidates=real_candidates,
+        effective_target=effective_target,
+        is_zero_candidate_exception=is_zero_candidate,
+    )
+
+
+def _run_concurrently(tasks: list, *, concurrency: int) -> list:
+    """0-인자 콜러블 목록을 최대 concurrency개까지 동시 실행한다(설계 문서 "이슈 6").
+
+    ThreadPoolExecutor.map은 완료 순서가 아니라 제출 순서로 결과를 yield하므로,
+    동시성을 켜고 꺼도 반환되는 리스트의 순서(-> CSV 행 순서)는 그대로다. 각
+    태스크 내부의 실제 LLM 호출은 이미 _with_retry로 재시도/지수 백오프를 하고
+    있으므로(generate_span_seeded_row/generate_fallback_row 참고) 여기서는 그
+    로직을 우회하지 않고 그대로 감싸기만 한다. concurrency<=1이거나 태스크가
+    1개 이하면 스레드풀을 아예 만들지 않고 순차 실행한다(기존 --per-clause
+    경로의 단일 스레드 동작과 완전히 동일).
+    """
+    if concurrency <= 1 or len(tasks) <= 1:
+        return [task() for task in tasks]
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        return list(executor.map(lambda task: task(), tasks))
+
+
+def _apply_cell_metadata(
+    row: dict, cell: TargetCell, *, fallback_ratio: float, is_zero_candidate_exception: bool
+) -> None:
+    """--target-matrix 모드에서만 호출 — 어느 셀 소속인지와 폴백 비율을 CSV에 남긴다.
+
+    "영구 0건 셀" 예외가 적용된 셀은 cell_zero_candidate_exception이 반드시
+    "true"로 찍혀야 한다(요구사항: CSV 출력에서 조용히 묻히면 안 됨).
+    """
+    row["cell_key"] = cell.cell_key
+    row["cell_fallback_ratio"] = f"{fallback_ratio:.4f}"
+    row["cell_zero_candidate_exception"] = "true" if is_zero_candidate_exception else "false"
+
+
+def generate_cell_rows(
+    cell_plan: CellPlan,
+    *,
+    resumed_row_ids: set[str],
+    client,
+    model: str,
+    sampling_seed: int,
+    conn,
+    annotated_root: Path,
+    rng: random.Random,
+    fallback_samples: list[tuple[str, str]],
+    concurrency: int,
+    db_lock: threading.Lock,
+) -> tuple[list[dict], dict]:
+    """셀 하나(조항×세부조항×문서유형×행정상태)의 유효 목표건수를 span-seeded
+    우선 + 폴백 보충으로 채운다. --per-clause 경로와 같은 생성 함수·화이트리스트
+    규칙을 그대로 재사용하되, 조항 전체가 아니라 셀 하나 분량만 처리한다.
+
+    반환값: (CSV에 쓸 행 리스트, 셀 리포트 1행 dict). fallback_ratio는 이번 실행에서
+    "새로 생성한" 행만 기준으로 계산한다 — --resume으로 여러 번 나눠 돌리면 각
+    실행의 비율이 그 실행 몫만 반영하고 셀 누적 비율은 아니다(리포트에 한계로
+    명시).
+    """
+    cell = cell_plan.cell
+    clause_no = cell.clause_no
+    slug = f"{cell.clause_no}-{cell.subclause_key}-{cell.doc_type}-{cell.admin_status or 'none'}"
+
+    sampled_candidates = _sample_candidates(
+        cell_plan.real_candidates, cell_plan.effective_target, rng
+    )
+
+    span_task_specs: list[tuple[str, dict]] = []
+    resumed_span = 0
+    for idx, candidate in enumerate(sampled_candidates):
+        row_id = f"cell-{slug}-span-{idx}"
+        if row_id in resumed_row_ids:
+            resumed_span += 1
+            continue
+        span_task_specs.append((row_id, candidate))
+
+    def _make_span_task(row_id: str, candidate: dict):
+        return lambda: generate_span_seeded_row(
+            row_id, clause_no, candidate, client=client, model=model,
+            sampling_seed=sampling_seed, conn=conn, annotated_root=annotated_root,
+            db_lock=db_lock,
+        )
+
+    span_tasks = [_make_span_task(row_id, candidate) for row_id, candidate in span_task_specs]
+    span_results = _run_concurrently(span_tasks, concurrency=concurrency)
+
+    rows: list[dict] = []
+    produced_span = 0
+    for row in span_results:
+        if row is None:
+            continue  # 스킵된 candidate(기관 해석 실패 등) — 폴백으로 보충
+        rows.append(row)
+        produced_span += 1
+
+    produced_so_far = resumed_span + produced_span
+    n_fallback = max(0, cell_plan.effective_target - produced_so_far)
+
+    fallback_specs: list[tuple[str, str, str, str, str | None]] = []
+    for fidx in range(n_fallback):
+        row_id = f"cell-{slug}-fallback-{fidx}"
+        if row_id in resumed_row_ids:
+            continue
+        if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
+            agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
+            prod_date = synthesize_plausible_date(rng)
+            agency_source = "whitelist_synthetic"
+        else:
+            agency, prod_date = sample_real_agency_and_date_for_fallback(rng, fallback_samples)
+            agency_source = "real_db_sample"
+        military_secret_grade = (
+            select_military_secret_grade(rng) if is_military_secret_agency(agency) else None
+        )
+        fallback_specs.append((row_id, agency, prod_date, agency_source, military_secret_grade))
+
+    def _make_fallback_task(
+        row_id: str, agency: str, prod_date: str, agency_source: str, military_secret_grade: str | None
+    ):
+        return lambda: generate_fallback_row(
+            row_id, clause_no, client=client, model=model, sampling_seed=sampling_seed,
+            ordering_agency=agency, production_date=prod_date, agency_source=agency_source,
+            military_secret_grade=military_secret_grade,
+        )
+
+    fallback_tasks = [_make_fallback_task(*spec) for spec in fallback_specs]
+    fallback_results = _run_concurrently(fallback_tasks, concurrency=concurrency)
+    rows.extend(fallback_results)
+
+    produced_fallback = len(fallback_results)
+    denom = produced_span + produced_fallback
+    if denom > 0:
+        fallback_ratio = produced_fallback / denom
+    else:
+        # 이번 실행에서 새로 생성한 행이 0건(전부 --resume으로 스킵됨) — 실측
+        # 후보가 0건인 셀이면 "0건 셀 예외"라는 사실 자체는 계속 100%로 표시한다.
+        fallback_ratio = 1.0 if cell_plan.is_zero_candidate_exception else 0.0
+
+    for row in rows:
+        _apply_template_validation(row)
+        _apply_cell_metadata(
+            row, cell, fallback_ratio=fallback_ratio,
+            is_zero_candidate_exception=cell_plan.is_zero_candidate_exception,
+        )
+
+    report_row = {
+        "cell_key": cell.cell_key,
+        "clause_no": cell.clause_no,
+        "subclause_key": cell.subclause_key,
+        "doc_type": cell.doc_type,
+        "admin_status": cell.admin_status,
+        "template_id": cell.template_id,
+        "real_candidates": len(cell_plan.real_candidates),
+        "effective_target": cell_plan.effective_target,
+        "produced_span_seeded": produced_span,
+        "produced_fallback": produced_fallback,
+        "fallback_ratio": f"{fallback_ratio:.4f}",
+        "zero_candidate_exception": "true" if cell_plan.is_zero_candidate_exception else "false",
+    }
+    return rows, report_row
+
+
+CELL_REPORT_FIELDNAMES = [
+    "cell_key", "clause_no", "subclause_key", "doc_type", "admin_status", "template_id",
+    "real_candidates", "effective_target", "produced_span_seeded", "produced_fallback",
+    "fallback_ratio", "zero_candidate_exception",
+]
+
+
+def write_cell_report(report_path: Path, cell_results: list[dict]) -> None:
+    """셀별 실측 후보/유효목표/생성건수/폴백비율을 CSV와 별개인 리포트로 남긴다.
+
+    "영구 0건 셀" 예외가 CSV 안에서도 행별로 보이긴 하지만(cell_zero_candidate_exception),
+    셀 단위로 한눈에 몇 개 셀이 예외 적용됐는지 보려면 행 단위 CSV를 그룹핑해야
+    한다 — 이 리포트는 그 집계를 미리 해서 별도 파일로 남긴다(요구사항: "CSV
+    출력이나 부속 리포트에 명시적으로 드러나야 한다").
+    """
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CELL_REPORT_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(cell_results)
 
 
 def _apply_template_validation(row: dict) -> None:
@@ -701,6 +1056,40 @@ def main() -> None:
         "--admin-status-sample-only", action="store_true",
         help="제9조 조항과 무관한 행정상태 부분공개 샘플 1건만 생성(DB/LLM 미사용)",
     )
+    parser.add_argument(
+        "--target-matrix", action="store_true",
+        help=(
+            "--per-clause 대신 (조항,세부조항,문서유형,행정상태) 4축 셀 단위로 "
+            "5~8호 목표를 채운다(설계 문서 Phase B). --per-clause와 동시에 쓸 수 "
+            "없고, 이 플래그를 주지 않으면 기존 --per-clause 경로가 그대로 동작한다."
+        ),
+    )
+    parser.add_argument(
+        "--per-cell-target", type=int, default=DEFAULT_PER_CELL_TARGET,
+        help=f"--target-matrix 셀당 목표 건수 (기본 {DEFAULT_PER_CELL_TARGET})",
+    )
+    parser.add_argument(
+        "--zero-candidate-target", type=int, default=DEFAULT_ZERO_CANDIDATE_TARGET,
+        help=(
+            "실측 후보 0건인 셀(영구 0건 셀 예외)에 적용할 축소 목표 건수 "
+            f"(기본 {DEFAULT_ZERO_CANDIDATE_TARGET}) — 폴백만으로 채운다."
+        ),
+    )
+    parser.add_argument(
+        "--force-full-target-for-zero-cells", action="store_true",
+        help=(
+            "실측 후보 0건인 셀도 --zero-candidate-target 대신 --per-cell-target "
+            "그대로(전량 폴백) 채운다 — 명시적으로 요청했을 때만 켠다."
+        ),
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=DEFAULT_CONCURRENCY,
+        help=f"LLM 생성 호출 동시 실행 수 (기본 {DEFAULT_CONCURRENCY}, 1이면 순차 실행과 동일)",
+    )
+    parser.add_argument(
+        "--cell-report", default=None,
+        help="--target-matrix 셀별 리포트 CSV 경로 (기본: <output>_cell_report.csv)",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent
@@ -744,6 +1133,7 @@ def main() -> None:
             client = _default_client()
             print("Connecting to MariaDB (read-only)...")
             conn = connect_mariadb()
+            db_lock = threading.Lock()  # --target-matrix/--concurrency에서 conn 공유 시에만 쓰임
             try:
                 span_buckets = fetch_all_span_candidates(candidates_dir)
                 fallback_samples = fetch_real_agency_date_samples(conn)
@@ -754,77 +1144,141 @@ def main() -> None:
 
                 rng = random.Random(args.sampling_seed)
 
-                for clause_no in clause_nos:
-                    all_candidates = span_buckets.get(clause_no, [])
-                    sampled_candidates = _sample_candidates(all_candidates, args.per_clause, rng)
+                if args.target_matrix:
+                    # 5~8호(S트랙)만 대상 — candidates.py는 그 외 조항에 span 탐지가
+                    # 없다(_SPAN_CLAUSES). --clauses를 줬다면 그 교집합만 처리한다.
+                    target_clauses = tuple(c for c in clause_nos if c in _SPAN_CLAUSES)
+                    cells = build_target_cells(target_clauses)
+                    print(f"--target-matrix: {len(cells)}개 셀 (조항 {','.join(target_clauses) or '없음'})")
 
-                    produced = 0
-                    for idx, candidate in enumerate(sampled_candidates):
-                        row_id = f"{clause_no}-span-{idx}"
-                        if row_id in resumed_row_ids:
-                            produced += 1
-                            continue
-                        row = generate_span_seeded_row(
-                            row_id, clause_no, candidate, client=client, model=args.model,
-                            sampling_seed=args.sampling_seed, conn=conn, annotated_root=annotated_root,
+                    cell_buckets_by_clause = {
+                        clause_no: _bucket_span_candidates_by_subclause_doc_type(
+                            span_buckets.get(clause_no, []), clause_no
                         )
-                        if row is None:
-                            continue  # 스킵된 candidate — 폴백으로 보충
+                        for clause_no in target_clauses
+                    }
 
-                        _apply_template_validation(row)
-                        writer.writerow(row)
-                        f.flush()
-                        total_ok += row["status"] == "ok"
-                        total_error += row["status"] != "ok"
-                        print(f"  [{row['status']}] {row_id}: {row['ordering_agency']}")
-                        produced += 1
+                    cell_reports: list[dict] = []
+                    zero_candidate_cells = 0
+                    for cell in cells:
+                        bucket = cell_buckets_by_clause[cell.clause_no].get(
+                            (cell.subclause_key, cell.doc_type), []
+                        )
+                        cell_plan = plan_cell(
+                            cell, bucket,
+                            per_cell_target=args.per_cell_target,
+                            zero_candidate_target=args.zero_candidate_target,
+                            force_full_target_for_zero_cells=args.force_full_target_for_zero_cells,
+                        )
+                        if cell_plan.is_zero_candidate_exception:
+                            zero_candidate_cells += 1
 
-                    n_fallback = max(0, args.per_clause - produced)
-                    if n_fallback:
+                        rows, report_row = generate_cell_rows(
+                            cell_plan, resumed_row_ids=resumed_row_ids,
+                            client=client, model=args.model, sampling_seed=args.sampling_seed,
+                            conn=conn, annotated_root=annotated_root, rng=rng,
+                            fallback_samples=fallback_samples, concurrency=args.concurrency,
+                            db_lock=db_lock,
+                        )
+                        for row in rows:
+                            writer.writerow(row)
+                            f.flush()
+                            total_ok += row["status"] == "ok"
+                            total_error += row["status"] != "ok"
+                        cell_reports.append(report_row)
+                        exception_note = (
+                            "  [영구 0건 셀 예외]" if cell_plan.is_zero_candidate_exception else ""
+                        )
                         print(
-                            f"clause {clause_no}: span 근거 {produced}건 + "
-                            f"폴백 {n_fallback}건(후보 부족 또는 span 탐지 미지원 조항)"
+                            f"  [cell] {cell.cell_key}: 실측 {report_row['real_candidates']}건, "
+                            f"목표 {report_row['effective_target']}건, "
+                            f"span {report_row['produced_span_seeded']}+"
+                            f"폴백 {report_row['produced_fallback']}건"
+                            f"{exception_note}"
                         )
 
-                    for fidx in range(n_fallback):
-                        row_id = f"{clause_no}-fallback-{fidx}"
-                        if row_id in resumed_row_ids:
-                            continue
-                        # 1~4호(C트랙): rd2 DB에 안보/외교/수사 계열 실수집 이력이
-                        # 없어(agency_resolver.py MARKING_SPEC_AGENCY_WHITELIST
-                        # 주석 참고) 화이트리스트 기반으로 생성한다(Approach D).
-                        # 5~8호는 기존대로 rd2 DB의 실제 (기관, 날짜) 쌍을 쓴다.
-                        if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
-                            agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
-                            prod_date = synthesize_plausible_date(rng)
-                            agency_source = "whitelist_synthetic"
-                        else:
-                            agency, prod_date = sample_real_agency_and_date_for_fallback(
-                                rng, fallback_samples
+                    print()
+                    print(
+                        f"{len(cells)}개 셀 중 {zero_candidate_cells}개가 영구 0건 셀 예외 적용됨"
+                    )
+                    cell_report_path = (
+                        Path(args.cell_report) if args.cell_report
+                        else output_path.with_name(output_path.stem + "_cell_report.csv")
+                    )
+                    write_cell_report(cell_report_path, cell_reports)
+                    print(f"셀별 리포트 -> {cell_report_path}")
+                else:
+                    for clause_no in clause_nos:
+                        all_candidates = span_buckets.get(clause_no, [])
+                        sampled_candidates = _sample_candidates(all_candidates, args.per_clause, rng)
+
+                        produced = 0
+                        for idx, candidate in enumerate(sampled_candidates):
+                            row_id = f"{clause_no}-span-{idx}"
+                            if row_id in resumed_row_ids:
+                                produced += 1
+                                continue
+                            row = generate_span_seeded_row(
+                                row_id, clause_no, candidate, client=client, model=args.model,
+                                sampling_seed=args.sampling_seed, conn=conn, annotated_root=annotated_root,
                             )
-                            agency_source = "real_db_sample"
-                        # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급
-                        # 마크 대상이다(2026-07-21 사용자 결정) — 등급은 여기서 한 번만
-                        # 뽑아 본문 생성 프롬프트와 render_pdfs_for_csv()의 마크 선택
-                        # 양쪽에 그대로 넘긴다(마크·본문 불일치 방지).
-                        military_secret_grade = (
-                            select_military_secret_grade(rng)
-                            if is_military_secret_agency(agency)
-                            else None
-                        )
-                        row = generate_fallback_row(
-                            row_id, clause_no, client=client, model=args.model,
-                            sampling_seed=args.sampling_seed,
-                            ordering_agency=agency, production_date=prod_date,
-                            agency_source=agency_source,
-                            military_secret_grade=military_secret_grade,
-                        )
-                        _apply_template_validation(row)
-                        writer.writerow(row)
-                        f.flush()
-                        total_ok += row["status"] == "ok"
-                        total_error += row["status"] != "ok"
-                        print(f"  [{row['status']}] {row_id}: (fallback, {agency})")
+                            if row is None:
+                                continue  # 스킵된 candidate — 폴백으로 보충
+
+                            _apply_template_validation(row)
+                            writer.writerow(row)
+                            f.flush()
+                            total_ok += row["status"] == "ok"
+                            total_error += row["status"] != "ok"
+                            print(f"  [{row['status']}] {row_id}: {row['ordering_agency']}")
+                            produced += 1
+
+                        n_fallback = max(0, args.per_clause - produced)
+                        if n_fallback:
+                            print(
+                                f"clause {clause_no}: span 근거 {produced}건 + "
+                                f"폴백 {n_fallback}건(후보 부족 또는 span 탐지 미지원 조항)"
+                            )
+
+                        for fidx in range(n_fallback):
+                            row_id = f"{clause_no}-fallback-{fidx}"
+                            if row_id in resumed_row_ids:
+                                continue
+                            # 1~4호(C트랙): rd2 DB에 안보/외교/수사 계열 실수집 이력이
+                            # 없어(agency_resolver.py MARKING_SPEC_AGENCY_WHITELIST
+                            # 주석 참고) 화이트리스트 기반으로 생성한다(Approach D).
+                            # 5~8호는 기존대로 rd2 DB의 실제 (기관, 날짜) 쌍을 쓴다.
+                            if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
+                                agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
+                                prod_date = synthesize_plausible_date(rng)
+                                agency_source = "whitelist_synthetic"
+                            else:
+                                agency, prod_date = sample_real_agency_and_date_for_fallback(
+                                    rng, fallback_samples
+                                )
+                                agency_source = "real_db_sample"
+                            # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급
+                            # 마크 대상이다(2026-07-21 사용자 결정) — 등급은 여기서 한 번만
+                            # 뽑아 본문 생성 프롬프트와 render_pdfs_for_csv()의 마크 선택
+                            # 양쪽에 그대로 넘긴다(마크·본문 불일치 방지).
+                            military_secret_grade = (
+                                select_military_secret_grade(rng)
+                                if is_military_secret_agency(agency)
+                                else None
+                            )
+                            row = generate_fallback_row(
+                                row_id, clause_no, client=client, model=args.model,
+                                sampling_seed=args.sampling_seed,
+                                ordering_agency=agency, production_date=prod_date,
+                                agency_source=agency_source,
+                                military_secret_grade=military_secret_grade,
+                            )
+                            _apply_template_validation(row)
+                            writer.writerow(row)
+                            f.flush()
+                            total_ok += row["status"] == "ok"
+                            total_error += row["status"] != "ok"
+                            print(f"  [{row['status']}] {row_id}: (fallback, {agency})")
             finally:
                 conn.close()
 
