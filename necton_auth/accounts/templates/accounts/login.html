@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Admin Console 로그인{% endblock %}
+{% block title %}Necton RD 로그인{% endblock %}
 
 {% block extra_css %}
   <link rel="stylesheet" href="{% static 'accounts/css/login.css' %}">
@@ -11,8 +11,8 @@
   <main class="auth-page">
     <section class="auth-card" aria-labelledby="login-title">
       <header class="auth-header">
-        <h1 class="auth-title" id="login-title">Admin Console</h1>
-        <p class="auth-subtitle">관리자 계정으로 로그인해 주세요</p>
+        <h1 class="auth-title" id="login-title">Necton RD</h1>
+        <p class="auth-subtitle">등록된 계정으로 로그인해 주세요</p>
       </header>
 
       {% for message in messages %}
