@@ -53,6 +53,9 @@ _CONFIDENTIAL_MARK_ASSET = _LOGO_DIR / "대외비.png"
 _PAGE_SIZE_PX = (1240, 1754)
 _STAMP_SIZE_PX = (260, 100)
 _WATERMARK_FONT_SIZE = 620
+_LETTERHEAD_MARK_SIZE_PX = (170, 170)  # 좌상단 기관 마크(레터헤드) 캔버스
+_AGENCY_WATERMARK_BOX_PX = (900, 900)  # 배경 워터마크용 기관 마크 캔버스
+_AGENCY_WATERMARK_ALPHA = 60  # 글자 워터마크 fill=(140,140,140,60)과 같은 톤
 
 
 def _load_font(path: str, size: int) -> ImageFont.ImageFont:
@@ -81,16 +84,24 @@ def _draw_single_character_watermark(seed: int) -> Image.Image:
     return img
 
 
-def _load_mark_asset(asset_path: Path) -> Image.Image:
-    """logo/ 폴더의 실제 마크 원본을 표준 스탬프 캔버스 크기로 맞춘다(비율 유지, 중앙 배치)."""
+def _load_mark_asset(asset_path: Path, canvas_size: tuple[int, int] = _STAMP_SIZE_PX) -> Image.Image:
+    """logo/ 폴더의 실제 마크 원본을 지정 캔버스 크기로 맞춘다(비율 유지, 중앙 배치)."""
     source = Image.open(asset_path).convert("RGBA")
-    canvas = Image.new("RGBA", _STAMP_SIZE_PX, (255, 255, 255, 0))
-    scale = min(_STAMP_SIZE_PX[0] / source.width, _STAMP_SIZE_PX[1] / source.height)
+    canvas = Image.new("RGBA", canvas_size, (255, 255, 255, 0))
+    scale = min(canvas_size[0] / source.width, canvas_size[1] / source.height)
     new_size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
     resized = source.resize(new_size, Image.LANCZOS)
-    offset = ((_STAMP_SIZE_PX[0] - new_size[0]) // 2, (_STAMP_SIZE_PX[1] - new_size[1]) // 2)
-    canvas.paste(resized, offset, resized)
+    offset = ((canvas_size[0] - new_size[0]) // 2, (canvas_size[1] - new_size[1]) // 2)
+    canvas.paste(resized, offset)  # mask 인자를 또 주면 resized의 알파가 제곱으로 감쇠된다
     return canvas
+
+
+def _fade_to_watermark_tone(img: Image.Image) -> Image.Image:
+    """기관 마크를 흑백 처리 후 알파를 낮춰, 기존 글자 워터마크와 같은 옅은 회색 톤으로 만든다."""
+    gray = img.convert("L")
+    alpha = img.split()[3]
+    faded_alpha = alpha.point(lambda v: v * _AGENCY_WATERMARK_ALPHA // 255)
+    return Image.merge("RGBA", (gray, gray, gray, faded_alpha))
 
 
 def _apply_noise(img: Image.Image, *, seed: int, angle_range: float = 3.0) -> Image.Image:
@@ -136,7 +147,7 @@ def generate_classification_stamp(output_path: Path, *, seed: int = 0) -> Path:
     이 마크 대신 generate_military_secret_mark()를 써야 한다.
     """
     base = _load_mark_asset(_CONFIDENTIAL_MARK_ASSET)
-    noisy = _apply_noise(base, seed=seed, angle_range=8.0)
+    noisy = _apply_noise(base, seed=seed, angle_range=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     noisy.save(output_path)
     return output_path
@@ -155,7 +166,46 @@ def generate_military_secret_mark(output_path: Path, grade: str, *, seed: int = 
         raise ValueError(f"알 수 없는 군사기밀 등급: {grade!r}")
     asset_path = _LOGO_DIR / MILITARY_SECRET_MARK_FILENAMES[grade]
     base = _load_mark_asset(asset_path)
-    noisy = _apply_noise(base, seed=seed, angle_range=8.0)
+    noisy = _apply_noise(base, seed=seed, angle_range=0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
+
+
+def generate_agency_letterhead_mark(output_path: Path, logo_filename: str, *, seed: int = 0) -> Path:
+    """문서 좌상단에 한 번 표시할 기관 마크 PNG를 만든다(C 문서 전용).
+
+    logo_filename은 agency_resolver.AGENCY_LOGO_FILENAMES의 값(logo/ 폴더 실제
+    파일명)이다. 대외비/군사기밀 마크와 마찬가지로 회전은 적용하지 않는다
+    (2026-07-21 사용자 결정 — 마크는 항상 수평 유지).
+    """
+    asset_path = _LOGO_DIR / logo_filename
+    base = _load_mark_asset(asset_path, canvas_size=_LETTERHEAD_MARK_SIZE_PX)
+    noisy = _apply_noise(base, seed=seed, angle_range=0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
+
+
+def generate_agency_watermark(output_path: Path, logo_filename: str, *, seed: int = 0) -> Path:
+    """가/나/다/라... 글자 워터마크 대신, 기관 마크를 크게 옅게 키워 배경에 한 번 찍는다.
+
+    _draw_single_character_watermark와 같은 톤(연한 회색, 알파 60)으로 맞춰
+    문서 배경에서 자연스럽게 보이도록 흑백+저알파 처리한다.
+    """
+    asset_path = _LOGO_DIR / logo_filename
+    boxed = _load_mark_asset(asset_path, canvas_size=_AGENCY_WATERMARK_BOX_PX)
+    faded = _fade_to_watermark_tone(boxed)
+
+    width, height = _PAGE_SIZE_PX
+    canvas = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    offset = (
+        (width - _AGENCY_WATERMARK_BOX_PX[0]) // 2,
+        (height - _AGENCY_WATERMARK_BOX_PX[1]) // 2,
+    )
+    canvas.paste(faded, offset)  # mask 인자를 또 주면 faded의 알파(이미 60)가 제곱으로 감쇠된다
+
+    noisy = _apply_noise(canvas, seed=seed, angle_range=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     noisy.save(output_path)
     return output_path

@@ -71,7 +71,9 @@ def test_generate_clause_document_builds_expected_document():
     assert doc.is_synthetic is True
     assert doc.disclosure_status == DisclosureStatus.CLOSED
     assert doc.non_disclosure_reason is not None
-    assert doc.title.startswith("[합성]")
+    # 2026-07-21 사용자 결정: "[합성]" 같은 라벨이 문서 제목(=PDF 파일명 소스)에
+    # 섞여 나가면 안 된다 — title은 scenario 원문 그대로여야 한다.
+    assert doc.title == CLAUSES["1"].scenario_prompts[0]
     # R3(2026-07-20): 기관명/생산일자는 실제 값을 그대로 보존해야 한다 —
     # "가상기관(합성)" 같은 가짜 이름으로 되돌아가면 안 된다.
     assert doc.ordering_agency == "실제기관명"

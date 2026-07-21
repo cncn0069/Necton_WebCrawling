@@ -13,7 +13,11 @@ from rd2.generators.pdf_render import (
     LAYOUT_SPECS,
     render_document_pdf,
 )
-from rd2.generators.security_mark import generate_classification_stamp, generate_page_watermark
+from rd2.generators.security_mark import (
+    generate_agency_letterhead_mark,
+    generate_classification_stamp,
+    generate_page_watermark,
+)
 from rd2.storage.naming import DOC_TYPE_AUDIT_RESULT, DOC_TYPE_OFFICIAL_DOCUMENT
 import fitz
 
@@ -122,7 +126,7 @@ class TestRenderDocumentPdf:
     def test_all_template_variants_use_declared_source_form(self, tmp_path, monkeypatch, spec):
         rendered: dict[str, str] = {}
 
-        def fake_html_to_pdf(html, output_path, layout):
+        def fake_html_to_pdf(html, output_path, layout, **_kwargs):
             rendered["html"] = html
             output_path.write_bytes(b"%PDF-test")
 
@@ -192,6 +196,24 @@ class TestClassificationGatedMarking:
             watermark_path=watermark_path, stamp_path=stamp_path,
         )
         assert output.exists()
+
+    def test_agency_mark_only_applied_for_c_classification(self, tmp_path):
+        """agency_mark_path(좌상단 기관 마크)도 대외비/워터마크와 같은 C 전용 게이팅을 따른다."""
+        agency_mark_path = generate_agency_letterhead_mark(tmp_path / "mark.png", "국정원.png", seed=1)
+
+        c_output = tmp_path / "c_doc.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="C"), CATEGORY_METRO_LOCAL_GOVERNMENT, c_output,
+            agency_mark_path=agency_mark_path,
+        )
+
+        s_output = tmp_path / "s_doc.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="S"), CATEGORY_METRO_LOCAL_GOVERNMENT, s_output,
+            agency_mark_path=agency_mark_path,
+        )
+
+        assert c_output.stat().st_size > s_output.stat().st_size
 
 
 class TestRenderedBodyStructure:

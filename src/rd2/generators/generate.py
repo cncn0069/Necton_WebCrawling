@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -142,7 +143,7 @@ def generate_clause_document(
     body_text = response.choices[0].message.content
 
     return Document(
-        title=f"[합성] {scenario}",
+        title=scenario,
         ordering_agency=ordering_agency,
         production_date=production_date,
         disclosure_status=_disclosure_status_for(clause),

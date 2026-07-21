@@ -518,6 +518,34 @@ class TestConnectMariadb:
             pilot.connect_mariadb()
 
 
+class TestFilenameFromTitle:
+    def test_strips_brackets_and_converts_spaces_and_dashes(self):
+        result = pilot._filename_from_title("[문서 근거] 국가안보 관련 사안 — 국방부", fallback="fallback-id")
+        assert result == "문서_근거_국가안보_관련_사안_-_국방부"
+
+    def test_removes_commas_and_other_disallowed_punctuation(self):
+        result = pilot._filename_from_title("보고서, 요약(안)", fallback="fallback-id")
+        assert result == "보고서_요약안"
+
+    def test_empty_title_falls_back(self):
+        assert pilot._filename_from_title("", fallback="5-span-0") == "5-span-0"
+
+    def test_title_of_only_disallowed_chars_falls_back(self):
+        assert pilot._filename_from_title("···///", fallback="5-span-0") == "5-span-0"
+
+
+class TestUniquePdfOutputPath:
+    def test_duplicate_titles_get_disambiguating_suffix(self, tmp_path):
+        used: dict[str, int] = {}
+        row_a = {"title": "대북 접경지역 군사대비태세 강화", "row_id": "1-fallback-0"}
+        row_b = {"title": "대북 접경지역 군사대비태세 강화", "row_id": "1-fallback-1"}
+        path_a = pilot._unique_pdf_output_path(tmp_path, row_a, used)
+        path_b = pilot._unique_pdf_output_path(tmp_path, row_b, used)
+        assert path_a != path_b
+        assert path_a.name == "대북_접경지역_군사대비태세_강화.pdf"
+        assert path_b.name == "대북_접경지역_군사대비태세_강화_2.pdf"
+
+
 class TestRenderPdfsForCsv:
     def _write_sample_csv(self, csv_path):
         rows = [
@@ -561,20 +589,26 @@ class TestRenderPdfsForCsv:
         rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 2
-        assert (pdf_dir / "5-span-0.pdf").exists()  # S — 마크 없음
-        assert (pdf_dir / "1-fallback-0.pdf").exists()  # C — 워터마크+스탬프 적용
+        # 2026-07-21 사용자 결정: PDF 파일명은 row_id가 아니라 문서 제목(title)
+        # 기반이어야 한다 — row_id는 여전히 CSV 컬럼으로만 남는다.
+        assert (pdf_dir / "테스트_문서.pdf").exists()  # S — 마크 없음
+        assert (pdf_dir / "합성_폴백_문서.pdf").exists()  # C — 워터마크+스탬프+기관마크 적용
         assert (pdf_dir / "_stamp_confidential.png").exists()
-        # 워터마크는 row별 캐시 파일(_watermark_char_N.png)로 생성된다 —
-        # C 행이 하나뿐이므로 정확히 1개가 생겨야 한다.
-        watermark_files = list(pdf_dir.glob("_watermark_char_*.png"))
+        # 워터마크/좌상단 기관마크는 기관 로고 파일명별 캐시 파일로 생성된다 —
+        # agency_logo_filename이 비어 있으면 정부부처 공용 마크로 폴백하므로
+        # C 행이 하나뿐이면 정확히 1개씩 생겨야 한다.
+        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
         assert len(watermark_files) == 1
+        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
+        assert len(letterhead_files) == 1
 
-    def test_watermark_cache_reused_across_c_rows_sharing_same_character(self, tmp_path):
-        """워터마크 문자는 row별로 다시 그리되, 같은 문자가 나오는 행끼리는
-        캐시를 재사용해 중복 파일을 만들지 않는다."""
+    def test_watermark_cache_reused_across_c_rows_sharing_same_agency_logo(self, tmp_path):
+        """워터마크/기관마크는 기관 로고 파일명별로 캐시된다 — 같은 로고를 쓰는
+        행끼리는 재사용하고, 다른 로고는 별도 파일을 만든다."""
         csv_path = tmp_path / "cs_pilot_output.csv"
+        logo_filenames = ["국정원.png"] * 3 + ["정부부처.png"] * 2
         rows = []
-        for i in range(5):
+        for i, logo_filename in enumerate(logo_filenames):
             row = {name: "" for name in pilot.CSV_FIELDNAMES}
             row.update(
                 {
@@ -586,6 +620,7 @@ class TestRenderPdfsForCsv:
                     "ordering_agency": "실제기관명",
                     "body_text": "폴백 본문입니다.",
                     "status": "ok",
+                    "agency_logo_filename": logo_filename,
                 }
             )
             rows.append(row)
@@ -598,20 +633,11 @@ class TestRenderPdfsForCsv:
         rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 5
-        # 문자는 최대 7종류(security_mark._WATERMARK_CHARS)뿐이므로
-        # 워터마크 캐시 파일 개수는 5개를 넘을 수 없다(캐시가 안 됐다면 5개).
-        watermark_files = list(pdf_dir.glob("_watermark_char_*.png"))
-        assert 1 <= len(watermark_files) <= 5
-
-    def test_watermark_seed_for_row_is_deterministic(self):
-        row = {"row_id": "5-span-0", "seed_span_id": "123"}
-        seed_a = pilot._watermark_seed_for_row(row, sampling_seed=42)
-        seed_b = pilot._watermark_seed_for_row(row, sampling_seed=42)
-        assert seed_a == seed_b
-
-    def test_watermark_seed_has_stable_expected_value(self):
-        row = {"row_id": "5-span-0", "seed_span_id": "123"}
-        assert pilot._watermark_seed_for_row(row, sampling_seed=42) == 158676051
+        # 로고는 2종류(국정원/정부부처)뿐이므로 캐시가 재사용되면 파일도 2개여야 한다.
+        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
+        assert len(watermark_files) == 2
+        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
+        assert len(letterhead_files) == 2
 
     def test_rejects_row_id_path_traversal(self, tmp_path):
         csv_path = tmp_path / "unsafe.csv"

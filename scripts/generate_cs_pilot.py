@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import random
@@ -62,12 +61,13 @@ from openai import RateLimitError
 
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import (
+    AGENCY_LOGO_FILENAMES,
     MARKING_SPEC_AGENCY_WHITELIST,
     MILITARY_SECRET_MARK_FILENAMES,
     fetch_real_agency_date_samples,
     is_military_secret_agency,
     resolve_agency_for_candidate,
-    sample_real_agency_and_date_for_fallback,
+    sample_diverse_agency_and_date_for_fallback,
     select_military_secret_grade,
     select_whitelisted_agency,
     synthesize_plausible_date,
@@ -78,10 +78,10 @@ from rd2.generators.doc_type_inference import infer_doc_type
 from rd2.generators.generate import SpanSeedInput, generate_clause_document, generate_span_seeded_body
 from rd2.generators.pdf_render import render_document_pdf
 from rd2.generators.security_mark import (
-    WATERMARK_VARIANT_COUNT,
+    generate_agency_letterhead_mark,
+    generate_agency_watermark,
     generate_classification_stamp,
     generate_military_secret_mark,
-    generate_page_watermark,
 )
 from rd2.generators.template_matrix import infer_subclause_key
 
@@ -95,7 +95,7 @@ CSV_FIELDNAMES = [
     "disclosure_status", "document_status", "source", "source_url", "doc_type", "is_synthetic",
     "field_source", "status", "model", "tokens_in", "tokens_out", "gen_time_s",
     "sampling_seed", "prompt_version", "template_id", "template_violations",
-    "military_secret_grade",
+    "military_secret_grade", "agency_logo_filename",
 ]
 
 SPAN_SEEDED_PROMPT_VERSION = "span-seeded-v1-20260720"
@@ -376,6 +376,7 @@ def generate_span_seeded_row(
         "sampling_seed": sampling_seed,
         "prompt_version": SPAN_SEEDED_PROMPT_VERSION,
         "military_secret_grade": "",  # 5~8호 span-seeded 경로는 군사기밀 대상 기관이 없음
+        "agency_logo_filename": "",  # 5~8호(S)는 마크를 안 그리므로 기관 로고가 필요 없음
     }
 
 
@@ -390,18 +391,27 @@ def generate_fallback_row(
     production_date: str,
     agency_source: str = "real_db_sample",
     military_secret_grade: str | None = None,
+    agency_logo_filename: str = "",
+    scenario_index: int | None = None,
 ) -> dict:
     """span 후보가 없는 조항(1~4호) 또는 span 후보가 부족한 조항의 나머지분을
     D1 4번(완전 독립 시나리오)으로 백필한다.
 
-    ordering_agency/production_date의 출처는 두 가지다: (1) 5~8호는 여전히
-    agency_resolver.sample_real_agency_and_date_for_fallback로 뽑은 rd2 DB의
-    실제 값(R3), (2) 1~4호는 agency_resolver.select_whitelisted_agency +
+    ordering_agency/production_date의 출처는 두 가지다: (1) 5~8호는
+    agency_resolver.sample_diverse_agency_and_date_for_fallback로 뽑은 rd2 DB의
+    실제 값(균등 추출 + 보충 화이트리스트, R3), (2) 1~4호는 agency_resolver.select_whitelisted_agency +
     synthesize_plausible_date로 만든 화이트리스트 기반 값(2026-07-20
     plan-eng-review, Approach D — rd2 DB에 안보/외교/수사 계열 실수집 이력이
     없어 (1) 방식을 쓸 수 없다). agency_source로 어느 쪽인지 구분해 필드
     출처를 정직하게 기록한다. 이 함수 자체는 전달받은 값을 검증하지 않고
     그대로 신뢰한다.
+
+    scenario_index는 호출자가 select_whitelisted_agency(clause_no, rng,
+    scenario_index=...)에 넘긴 것과 같은 값이어야 한다 — 그래야 본문이 실제로
+    그 시나리오(예: "대북 접경지역 군사대비태세 강화")로 생성되고, ordering_agency도
+    같은 시나리오에 맞는 기관(예: 국방부)이 되어 마크·본문·기관이 서로 어긋나지
+    않는다(2026-07-21 사용자 지적 — 이전엔 기관과 시나리오가 서로 무관하게
+    독립적으로 뽑혔다).
 
     military_secret_grade("1급"/"2급"/"3급")는 ordering_agency가 국방부/국가정보원일
     때만 호출자가 채워 넘긴다(agency_resolver.is_military_secret_agency) — 본문
@@ -412,7 +422,7 @@ def generate_fallback_row(
     clause = CLAUSES[clause_no]
     start = time.monotonic()
     status = "ok"
-    title = f"[합성 폴백] {clause.title}"
+    title = clause.title
     non_disclosure_reason = f"제{clause_no}호 — {clause.title}"
     disclosure_status = "비공개"
     body_text = ""
@@ -425,6 +435,7 @@ def generate_fallback_row(
                 client=client,
                 model=model,
                 military_secret_grade=military_secret_grade,
+                scenario_index=scenario_index,
             )
         )
         title = doc.title
@@ -492,6 +503,7 @@ def generate_fallback_row(
         "sampling_seed": sampling_seed,
         "prompt_version": FALLBACK_PROMPT_VERSION,
         "military_secret_grade": military_secret_grade or "",
+        "agency_logo_filename": agency_logo_filename,
     }
 
 
@@ -545,6 +557,7 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "sampling_seed": sampling_seed,
         "prompt_version": ADMIN_STATUS_PROMPT_VERSION,
         "military_secret_grade": "",
+        "agency_logo_filename": "",
     }
 
 
@@ -573,31 +586,59 @@ def _existing_row_ids(csv_path: Path) -> set[str]:
         return {row["row_id"] for row in csv.DictReader(f)}
 
 
-def _watermark_seed_for_row(row: dict, sampling_seed: int) -> int:
-    """행마다 다른 워터마크 문자(가/나/다/라...)가 나오도록 row별 결정적 seed를 만든다."""
-    basis = row.get("seed_span_id") or row.get("row_id") or ""
-    digest = hashlib.blake2b(str(basis).encode("utf-8"), digest_size=8).digest()
-    return (sampling_seed + int.from_bytes(digest, "big")) % (2**31)
-
-
-def _safe_pdf_output_path(pdf_dir: Path, row_id: str) -> Path:
-    """CSV row_id를 디렉터리 탈출이 불가능한 PDF 파일명으로 검증한다."""
-    normalized = str(row_id or "").strip()
+def _safe_pdf_output_path(pdf_dir: Path, filename: str) -> Path:
+    """PDF 파일명(문서 제목 기반, 안전하지 않으면 row_id로 폴백된 값)을 디렉터리
+    탈출이 불가능한 경로로 검증한다."""
+    normalized = str(filename or "").strip()
     if (
         not normalized
         or len(normalized) > 200
         or normalized in {".", ".."}
         or re.fullmatch(r"[\w.-]+", normalized) is None
     ):
-        raise ValueError(f"안전하지 않은 row_id: {row_id!r}")
+        raise ValueError(f"안전하지 않은 row_id: {filename!r}")
 
     root = pdf_dir.resolve()
     output_path = (root / f"{normalized}.pdf").resolve()
     try:
         output_path.relative_to(root)
     except ValueError as exc:
-        raise ValueError(f"PDF 출력 경로가 지정 디렉터리를 벗어남: {row_id!r}") from exc
+        raise ValueError(f"PDF 출력 경로가 지정 디렉터리를 벗어남: {filename!r}") from exc
     return output_path
+
+
+def _filename_from_title(title: str, *, fallback: str) -> str:
+    """문서 제목(row["title"])을 PDF 파일명으로 정규화한다.
+
+    괄호류는 지우고, 대시류는 하이픈으로, 공백은 밑줄로 바꾼 뒤 나머지 비허용
+    문자(쉼표 등)는 제거해 _safe_pdf_output_path가 요구하는 [\\w.-]+ 형식을
+    만든다. 제목이 비어 있거나 정규화 후 빈 문자열이 되면(예: 특수문자뿐인
+    제목) row_id로 폴백한다 — 파일명이 사람이 알아볼 제목과 다르더라도 최소한
+    row마다 달라야 하기 때문이다.
+    """
+    normalized = str(title or "").strip()
+    normalized = re.sub(r"[\[\]()（）]", "", normalized)
+    normalized = re.sub(r"[—–]", "-", normalized)
+    normalized = re.sub(r"\s+", "_", normalized.strip())
+    sanitized = re.sub(r"[^\w.-]", "", normalized).strip("._-")
+    sanitized = sanitized[:120].strip("._-")
+    return sanitized or fallback
+
+
+def _unique_pdf_output_path(pdf_dir: Path, row: dict, used_filenames: dict[str, int]) -> Path:
+    """row 제목 기반 파일명을 만들되, 같은 파일명이 이미 이번 렌더링에서 쓰였으면
+    "_2", "_3"... 을 붙여 겹치지 않게 한다.
+
+    fallback 문서(1~4호 화이트리스트, 5~8호 부족분)는 시나리오 문구를 제목으로
+    그대로 쓰는데 조항당 시나리오가 3~5개뿐이라 목표 건수(per_clause 5~10건)를
+    채우면 같은 제목이 반복되는 게 정상이다 — 그래도 파일명은 겹치면 안 되므로
+    여기서 겹침을 해소한다.
+    """
+    base = _filename_from_title(row.get("title") or "", fallback=row.get("row_id") or "")
+    count = used_filenames.get(base, 0)
+    used_filenames[base] = count + 1
+    candidate = base if count == 0 else f"{base}_{count + 1}"
+    return _safe_pdf_output_path(pdf_dir, candidate)
 
 
 def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) -> int:
@@ -607,11 +648,18 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
     전체가 공유하는 이미지 하나로 충분하다(문구가 항상 "대외비"로 고정).
     military_secret_grade가 있는 행(국방부/국가정보원, 2026-07-21 추가)은 대신
     [별표 2] 등급 마크를 상단·하단 양쪽에 붙인다 — 등급별 마크는 3종류뿐이라
-    등급마다 하나씩만 만들어 재사용한다. 워터마크(가/나/다/라... 중 하나를 크게)는
-    문서마다 다른 문자가 나오도록 row별로 다시 그린다 — 같은 문자가 나오는 행끼리는
-    캐시를 재사용해 중복 렌더링하지 않는다. S 문서는 마크 없음(2026-07-14 결정).
-    LLM을 다시 호출하지 않으므로 --resume과 함께 쓰면 기존 CSV를 그대로
-    재사용해 비용 없이 PDF만 새로 만들 수 있다.
+    등급마다 하나씩만 만들어 재사용한다. 배경 워터마크는 가/나/다/라... 글자 대신
+    문서를 발행한 기관의 마크(agency_logo_filename)를 옅게 키워 쓴다(2026-07-21
+    사용자 결정) — 같은 기관끼리는 캐시를 재사용한다. 좌상단에는 같은 기관 마크를
+    작게 한 번 더 찍는다(레터헤드). agency_logo_filename이 비어 있으면(예: 이 컬럼이
+    없던 옛 CSV로 --resume) 정부부처 공용 마크로 폴백한다. S 문서는 마크 없음
+    (2026-07-14 결정). LLM을 다시 호출하지 않으므로 --resume과 함께 쓰면 기존
+    CSV를 그대로 재사용해 비용 없이 PDF만 새로 만들 수 있다.
+
+    PDF 파일명은 row_id가 아니라 문서 제목(row["title"])에서 만든다(2026-07-21
+    사용자 결정, _filename_from_title/_unique_pdf_output_path 참고) — row_id는
+    CSV 컬럼으로만 남는다. 같은 제목이 반복되면(조항당 시나리오가 3~5개뿐이라
+    fallback 문서에서 흔함) "_2", "_3"... 을 붙여 파일명 충돌을 막는다.
     """
     if not csv_path.exists():
         raise RuntimeError(f"CSV 파일이 없습니다: {csv_path} — 먼저 파일럿을 실행하세요.")
@@ -631,29 +679,47 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
         military_mark_cache[grade] = mark_path
         return mark_path
 
-    watermark_cache: dict[int, Path] = {}
+    letterhead_cache: dict[str, Path] = {}
+    agency_watermark_cache: dict[str, Path] = {}
 
-    def _watermark_for_row(row: dict) -> Path:
-        row_seed = _watermark_seed_for_row(row, sampling_seed)
-        char_index = row_seed % WATERMARK_VARIANT_COUNT
-        cached = watermark_cache.get(char_index)
+    def _logo_filename_for_row(row: dict) -> str:
+        raw = (row.get("agency_logo_filename") or "").strip()
+        if raw:
+            return raw
+        return AGENCY_LOGO_FILENAMES["정부부처"]
+
+    def _letterhead_for_row(row: dict) -> Path:
+        logo_filename = _logo_filename_for_row(row)
+        cached = letterhead_cache.get(logo_filename)
         if cached is not None:
             return cached
-        wm_path = pdf_dir / f"_watermark_char_{char_index}.png"
-        generate_page_watermark(wm_path, seed=row_seed)
-        watermark_cache[char_index] = wm_path
+        mark_path = pdf_dir / f"_letterhead_{Path(logo_filename).stem}.png"
+        generate_agency_letterhead_mark(mark_path, logo_filename, seed=sampling_seed)
+        letterhead_cache[logo_filename] = mark_path
+        return mark_path
+
+    def _agency_watermark_for_row(row: dict) -> Path:
+        logo_filename = _logo_filename_for_row(row)
+        cached = agency_watermark_cache.get(logo_filename)
+        if cached is not None:
+            return cached
+        wm_path = pdf_dir / f"_watermark_{Path(logo_filename).stem}.png"
+        generate_agency_watermark(wm_path, logo_filename, seed=sampling_seed)
+        agency_watermark_cache[logo_filename] = wm_path
         return wm_path
 
     rendered = 0
+    used_filenames: dict[str, int] = {}
     with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             if row.get("status") == "template_violation" or row.get("template_violations"):
                 print(f"  [skip-pdf] {row.get('row_id')}: 템플릿 검증 위반")
                 continue
             category = get_agency_category(row.get("ordering_agency"))
-            output_path = _safe_pdf_output_path(pdf_dir, row.get("row_id") or "")
+            output_path = _unique_pdf_output_path(pdf_dir, row, used_filenames)
             is_confidential = (row.get("cso_classification") or "").upper() == "C"
-            watermark_path = _watermark_for_row(row) if is_confidential else None
+            watermark_path = _agency_watermark_for_row(row) if is_confidential else None
+            agency_mark_path = _letterhead_for_row(row) if is_confidential else None
             grade = (row.get("military_secret_grade") or "").strip()
             if grade and grade in MILITARY_SECRET_MARK_FILENAMES:
                 military_mark = _military_mark_for_grade(grade)
@@ -665,7 +731,7 @@ def render_pdfs_for_csv(csv_path: Path, pdf_dir: Path, *, sampling_seed: int) ->
             render_document_pdf(
                 row, category, output_path,
                 watermark_path=watermark_path, stamp_path=row_stamp_path,
-                stamp_top_path=row_stamp_top_path,
+                stamp_top_path=row_stamp_top_path, agency_mark_path=agency_mark_path,
             )
             rendered += 1
             print(f"  [pdf] {row['row_id']} -> {category} -> {mark} -> {output_path.name}")
@@ -701,7 +767,24 @@ def main() -> None:
         "--admin-status-sample-only", action="store_true",
         help="제9조 조항과 무관한 행정상태 부분공개 샘플 1건만 생성(DB/LLM 미사용)",
     )
+    parser.add_argument(
+        "--run-tag", default="",
+        help=(
+            "여러 EC2 인스턴스에서 사이트별로 나눠 병렬 실행한 뒤 CSV를 합칠 때 "
+            "row_id 충돌을 막는 태그(예: --run-tag moel). row_id 순번(span-{idx}/"
+            "fallback-{fidx})은 로컬 data/annotated 커버리지에 따라 인스턴스마다 "
+            "달라질 수 있어 태그 없이 합치면 서로 다른 문서가 같은 row_id를 갖게 "
+            "된다. 지정하면 row_id 앞에 붙는다(예: 'moel-5-span-0'). [\\w.-]만 허용."
+        ),
+    )
     args = parser.parse_args()
+
+    run_tag = args.run_tag.strip()
+    if run_tag and re.fullmatch(r"[\w.-]+", run_tag) is None:
+        parser.error(f"--run-tag는 [\\w.-]+ 형식이어야 합니다: {run_tag!r}")
+
+    def _tag_row_id(row_id: str) -> str:
+        return f"{run_tag}-{row_id}" if run_tag else row_id
 
     repo_root = Path(__file__).parent.parent
     output_path = Path(args.output) if args.output else repo_root / "cs_pilot_output.csv"
@@ -760,7 +843,7 @@ def main() -> None:
 
                     produced = 0
                     for idx, candidate in enumerate(sampled_candidates):
-                        row_id = f"{clause_no}-span-{idx}"
+                        row_id = _tag_row_id(f"{clause_no}-span-{idx}")
                         if row_id in resumed_row_ids:
                             produced += 1
                             continue
@@ -787,22 +870,38 @@ def main() -> None:
                         )
 
                     for fidx in range(n_fallback):
-                        row_id = f"{clause_no}-fallback-{fidx}"
+                        row_id = _tag_row_id(f"{clause_no}-fallback-{fidx}")
                         if row_id in resumed_row_ids:
                             continue
                         # 1~4호(C트랙): rd2 DB에 안보/외교/수사 계열 실수집 이력이
                         # 없어(agency_resolver.py MARKING_SPEC_AGENCY_WHITELIST
                         # 주석 참고) 화이트리스트 기반으로 생성한다(Approach D).
-                        # 5~8호는 기존대로 rd2 DB의 실제 (기관, 날짜) 쌍을 쓴다.
+                        # 5~8호는 rd2 DB의 실제 (기관, 날짜) 쌍을 쓰되, 문서 건수
+                        # 가중 추출 대신 기관 하나당 한 표로 균등 추출해 소수
+                        # 기관(고용노동부 등) 쏠림을 완화한다(2026-07-21 사용자
+                        # 결정 — agency_resolver.GENERAL_TRACK_SUPPLEMENTARY_AGENCIES
+                        # 주석 참고).
                         if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
-                            agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
+                            # scenario_index를 기관 선택보다 먼저 뽑아 둘 다 같은
+                            # 시나리오를 가리키게 한다 — 그래야 select_whitelisted_agency가
+                            # 본문과 어울리는 기관 풀로 좁힐 수 있고, 아래
+                            # generate_fallback_row에도 같은 값을 넘겨 실제 생성되는
+                            # 본문도 그 시나리오가 되게 한다(2026-07-21 사용자 지적:
+                            # 예전엔 기관과 시나리오가 서로 무관하게 독립적으로 뽑혀
+                            # "외교부가 대북 군사대비태세 문서를 쓴다" 같은 조합이 나왔다).
+                            n_scenarios = len(CLAUSES[clause_no].scenario_prompts)
+                            scenario_index = rng.randrange(n_scenarios) if n_scenarios else None
+                            agency, logo_filename = select_whitelisted_agency(
+                                clause_no, rng, scenario_index=scenario_index
+                            )
                             prod_date = synthesize_plausible_date(rng)
                             agency_source = "whitelist_synthetic"
                         else:
-                            agency, prod_date = sample_real_agency_and_date_for_fallback(
+                            scenario_index = None
+                            agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
                                 rng, fallback_samples
                             )
-                            agency_source = "real_db_sample"
+                            logo_filename = ""
                         # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급
                         # 마크 대상이다(2026-07-21 사용자 결정) — 등급은 여기서 한 번만
                         # 뽑아 본문 생성 프롬프트와 render_pdfs_for_csv()의 마크 선택
@@ -818,6 +917,8 @@ def main() -> None:
                             ordering_agency=agency, production_date=prod_date,
                             agency_source=agency_source,
                             military_secret_grade=military_secret_grade,
+                            agency_logo_filename=logo_filename,
+                            scenario_index=scenario_index,
                         )
                         _apply_template_validation(row)
                         writer.writerow(row)
