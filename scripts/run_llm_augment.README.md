@@ -1,93 +1,106 @@
-# run_llm_augment.py — LLM 텍스트 치환(Hard-example 증강) 실행
+# run_llm_augment.py — LLM 텍스트 치환
 
-`find_candidates.py`가 찾아둔 후보 span(`data/candidates/clause_{N}.jsonl`)을 문서
-단위로 묶어 LLM에 보내고, 일부 span을 "기밀도가 상승한 문구"로 실제로 치환해
-`data/augmented/llm/`에 저장한다. 이게 실제 **원문 → 치환 텍스트 변환**을 수행하는
-스크립트다 — `find_candidates.py`는 "어디를 바꿀 후보인지"만 찾을 뿐, 실제로 무엇으로
-바꿀지는 여기서 LLM이 결정한다.
+`find_candidates.py`가 만든 v2 후보를 문서 단위로 묶어 LLM에 보내고, 채택된
+원문→합성문 치환 결정을 `data/augmented/llm/`에 저장한다. 원본 파일과 canonical
+추출본은 수정하지 않는다.
 
-전체 파이프라인은 5단계다:
-```
-1. extract_pdf_text.py    data/*.pdf              → data/extracted/   (텍스트+위치 추출)
-2. extract_structured_documents.py PDF/HWP/HWPX   → data/structured/  (본문+표, OCR/격리 상태)
-3. annotate_documents.py  data/extracted/          → data/annotated/  (반복헤더 등 주석)
-4. find_candidates.py     data/annotated/          → data/candidates/ (조항별 후보 탐지)
-5. run_llm_augment.py     data/candidates/         → data/augmented/llm/  (← 이 문서)
+기본 경로는 세 단계다.
+
+```text
+extract_documents.py  -> data/extracted/*.json.gz
+find_candidates.py    -> data/candidates/*.jsonl + _manifest.json
+run_llm_augment.py     -> data/augmented/llm/*.json
 ```
 
-**각 단계를 매번 따로 실행하기 번거로우면 `scripts/run_pipeline.py`가 4~5번(필요하면
-1~3번까지)을 한 번에 이어서 실행해준다** — 아래 각 스크립트를 개별로 돌리는 법도
-알아두면 디버깅할 때 유용하니 이 문서에는 그대로 남겨두지만, 평소에는 그냥
-`run_pipeline.py`를 쓰면 된다:
-```bash
-python scripts/run_pipeline.py --clause 5 --limit 1 --dry-run   # 프롬프트만 확인
-python scripts/run_pipeline.py --clause 5 --limit 3             # 실제 3건 치환(과금)
-```
-
-## 사전 준비
-
-1. 최상위 [`README.md`](../README.md)의 설치 절차(venv+`requirements.txt`) 완료.
-2. **`data/candidates/clause_{N}.jsonl`이 이미 있어야 한다.** 없으면 먼저
-   [`find_candidates.README.md`](./find_candidates.README.md) 절차대로
-   `python scripts/find_candidates.py --clause N`(또는 `all`)을 실행해서 만든다.
-3. **`.env`에 `OPENAI_API_KEY`가 설정돼 있어야 한다** — `--dry-run`이 아니면 실제로
-   OpenAI API를 호출해서 **비용이 발생한다**(문서당 요청 1회, 참고: 전체 코퍼스
-   처리해도 실측상 $1~3 수준 — `AUGMENTATION_STATUS.md` "주요 설계 결정 요약" 참고).
-4. **로컬 MariaDB가 켜져 있어야 한다**(`--dry-run`이 아닐 때만). 원본 O트랙 문서의
-   실제 메타데이터(제목/기관/생산일자)를 `origin_document` 필드에 참고용으로 붙이기
-   위해 `DocumentStore`로 DB를 조회한다 — 최상위 README의 "로컬 MariaDB 설치" 절차
-   참고. EC2라면 `.env`의 `MARIADB_HOST`를 RDS 엔드포인트로 맞춰야 한다
-   (`deploy/README.md` 참고).
+`data/annotated/` 사본과 `data/structured/`는 기본 단계가 아니다.
 
 ## 실행
 
-먼저 실제 호출 없이 프롬프트만 확인(비용 없음, DB 연결도 안 함):
+실제 호출 없이 프롬프트와 검증 결과만 확인:
+
 ```bash
 python scripts/run_llm_augment.py --clause 5 --limit 1 --dry-run
 ```
 
-실제로 1개 문서만 처리해서 결과를 눈으로 확인(과금 발생, 소액):
+실제 호출:
+
 ```bash
 python scripts/run_llm_augment.py --clause 5 --limit 1
-```
-
-여러 문서 처리(예: 10개):
-```bash
-python scripts/run_llm_augment.py --clause 5 --limit 10
-```
-
-이미 처리된 문서(출력 파일이 이미 존재)는 기본적으로 건너뛴다. 다시 돌리려면:
-```bash
 python scripts/run_llm_augment.py --clause 5 --limit 10 --force
 ```
 
-`--clause`는 5/6/7/8 중 하나만 지정 가능(`all` 없음 — 조항마다 시스템 프롬프트가
-달라 한 번에 하나씩 처리). 전체 조항을 다 돌리려면 4번 반복 실행한다:
+`--clause`는 5/6/7/8 중 하나다. 실제 호출에는 `OPENAI_API_KEY`와 원본 메타데이터
+조회를 위한 MariaDB 연결이 필요하다. `--dry-run`은 DB나 API를 호출하지 않는다.
+
+통합 실행:
+
 ```bash
-for c in 5 6 7 8; do
-  python scripts/run_llm_augment.py --clause "$c" --limit 999999
-done
+python scripts/run_pipeline.py --clause 5 --limit 1 --dry-run
+python scripts/run_pipeline.py --clause all --limit 3
+python scripts/run_pipeline.py --clause 8 --from-scratch --source all --limit 5
 ```
+
+## 호출 전 무결성 검사
+
+첫 유료 호출 전에 선택된 batch 전체를 검증한다.
+
+- candidate manifest가 `complete`인지
+- 모든 candidate record의 `run_id`가 manifest와 같은지
+- `source_path`가 `data/` 밖을 가리키지 않는지
+- 원본 SHA-256이 canonical artifact의 `source_sha256`과 같은지
+- candidate의 `extraction_id`가 현재 artifact와 같은지
+- `line_ids`, page, reconstructed text, `text_sha256`가 모두 같은지
+
+하나라도 다르면 batch를 중단한다. 조사 목적으로 partial 후보를 읽어야 할 때만
+`--allow-partial-candidates`를 명시한다. 이 옵션은 불일치를 무시하지 않으며 manifest
+status만 허용한다.
+
+기존 증강 JSON을 건너뛸 때도 저장된 extraction ID, candidate run/rule version,
+조항과 각 selection의 candidate ID·line IDs·page·text hash를 현재 후보와 대조한다.
+오래됐거나 손상된 결과는 자동으로 유료 재호출하지 않고 중단하며, 확인 후 `--force`로
+재생성한다.
+
+## 모델 입력
+
+현재 모델에는 다음 두 값만 보낸다.
+
+```json
+{"candidate_id": "...", "text": "..."}
+```
+
+`line_ids`, bbox, style, extraction/text hash는 로컬 검증과 미래 layout 실험용이며 현재
+프롬프트에는 넣지 않는다. 따라서 v2 저장 전환 자체가 모델 판단을 바꾸지는 않는다.
 
 ## 출력
 
-`data/augmented/llm/{source}/{doc_type}/{파일명}_clause{N}.json`:
+원본 확장자를 보존해 같은 stem의 서로 다른 포맷이 충돌하지 않게 한다.
+
+```text
+data/augmented/llm/{source}/{doc_type}/sample.pdf.clause5.json
+data/augmented/llm/{source}/{doc_type}/sample.hwp.clause5.json
+```
 
 ```json
 {
-  "source_pdf_path": "data/moe/budget_material/77151_....pdf",
+  "source_path": "data/moe/budget_material/77151_sample.pdf",
   "source": "moe",
   "doc_type": "budget_material",
   "doc_id": "77151",
+  "extraction_id": "sha256...",
+  "candidate_run_id": "...",
+  "candidate_rule_version": "...",
   "clause_no": "5",
-  "origin_document": {"title": "...", "ordering_agency": "...", "production_date": "..."},
+  "origin_document": {},
   "selections": [
     {
-      "span_id": 78,
-      "page_no": 6,
+      "candidate_id": "sha256...",
+      "line_ids": [78, 79],
+      "page": 6,
       "clause": "5",
-      "original": "▪ 수의계약(2천만원 초과, 5천만원 이하)",
-      "synthetic": "▪ 내부예정가(2천180만원 초과, 4천850만원 이하)",
+      "extraction_id": "sha256...",
+      "text_sha256": "sha256...",
+      "original": "수의계약 검토 기준액",
+      "synthetic": "내부 협상 예정 기준액",
       "transformation": "internal_bid_estimate",
       "reason": "..."
     }
@@ -95,21 +108,18 @@ done
 }
 ```
 
-`selections`는 LLM이 실제로 채택한 것만 남는다 — 후보로 보냈다고 다 바뀌는 게
-아니라, `_passes_validation`(길이비 0.5~1.5배, 원문 잔존 금지)을 통과한 것만
-포함된다. 문서 하나가 후보를 갖고 있어도 LLM이 아무것도 안 고르면 selections가
-비고 출력 파일 자체가 안 만들어진다(콘솔에 "LLM이 아무것도 선택하지 않음" 출력).
+LLM이 반환한 ID가 실제 후보에 없거나, 합성문이 길이·원문 잔존 검증을 통과하지
+못하면 해당 선택은 버린다. `line_ids`, extraction ID, text hash는 LLM 응답을 믿지
+않고 검증된 입력 후보에서 복사한다. 선택이 하나도 없을 때도 현재 run identity와
+`selections: []`를 저장하므로, `--force` 재실행 뒤 오래된 선택이 남지 않는다.
 
-각 selection의 `clause` 필드는 현재 항상 `clause_no`(파일명의 `_clauseN`)와 같은
-값이다 — 파일명에만 의존하지 않고 selection 자체로도 조항을 식별할 수 있게 하기
-위한 필드다.
+PDF에 실제로 반영하는 파일럿은 v2 line bbox를 읽는다.
 
-## 다음 단계 (이 스크립트 다음)
-
-`data/augmented/llm/...`의 치환 결과는 아직 "이 span을 무엇으로 바꿀지 결정"만 된
-상태다. 실제로 원본 PDF에 반영해 완성된 문서를 만드는 건 `scripts/test_reconstruct_pdf.py`
-(파일럿 단계, `AUGMENTATION_STATUS.md` "다음에 할 일" 참고)가 담당한다:
 ```bash
 python scripts/test_reconstruct_pdf.py \
-  --augmented "data/augmented/llm/moe/budget_material/77151_..._clause5.json"
+  --augmented "data/augmented/llm/moe/budget_material/sample.pdf.clause5.json"
 ```
+
+재구성기는 현재 candidate manifest의 run/rule version과 candidate JSONL까지 다시
+검증한다. 새 규칙에서 후보가 0개가 되어 목록에서 사라진 문서의 예전 증강 JSON도
+현재 후보에 속하지 않으므로 재사용되지 않는다.

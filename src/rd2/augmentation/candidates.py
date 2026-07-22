@@ -1,9 +1,10 @@
-"""annotate된 문서에서 조항별 또는 행정상태별 "기밀도 상승 후보" span을
-정규식/키워드로 탐지한다.
+"""Detect clause and administrative candidates from extraction-v2 lines.
 
-`is_boilerplate=false`인 span만 검사 대상이다(annotate.py가 이미 표시해둔
-반복 헤더·쪽번호는 애초에 후보가 될 수 없음 — annotate.py 참고). 원본 span은
-여기서도 전혀 바꾸지 않는다 — 후보 목록만 뽑아낼 뿐이다.
+Canonical extraction stores physical lines in ``pages[].lines``. PDF lines that
+are adjacent inside one block are merged only for candidate analysis; the
+persisted extraction remains unchanged and candidate records retain the source
+``line_ids`` needed to resolve the derived segment. Geometry-null HWP lines are
+already logical lines and are never merged here.
 
 제6호(개인정보)만 다른 조항과 메커니즘이 다르다: 실제 공개문서에는 진짜
 개인정보가 거의 없으므로, "이미 있는 개인정보를 찾는" 게 아니라 "이 자리를
@@ -19,6 +20,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import heapq
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -145,6 +149,10 @@ _CLAUSE_6_GOV_TITLE_PATTERN = re.compile(
 _MAX_CANDIDATES_PER_DOC = 60  # 정밀도순 선별 후에도 특정 문서가 후보 풀을 독점하지 않게 하는 상한
 _CONTEXT_SPAN_RADIUS = 2
 _MAX_CONTEXT_CHARS_PER_SPAN = 240
+_MERGE_MAX_CHAIN = 40
+_MERGE_GAP_RATIO = 0.8
+_CLAUSE_NOS = ("5", "6", "7", "8")
+CANDIDATE_RULE_VERSION = "candidate-rules-v2-20260722"
 
 
 @dataclass(frozen=True)
@@ -353,17 +361,127 @@ def _clause_match_evidence(text: str, clause_no: str) -> tuple[list[str], int]:
     return rules, score
 
 
-def _eligible_spans(annotated_doc: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any], str]]:
-    """본문 순서를 보존한 비-boilerplate span 목록을 만든다."""
-    eligible: list[tuple[dict[str, Any], dict[str, Any], str]] = []
-    for page in annotated_doc.get("pages", []):
-        for span in page.get("spans", []):
-            if span.get("is_boilerplate"):
+@dataclass(frozen=True)
+class _DerivedSegment:
+    page: int
+    line_ids: tuple[object, ...]
+    text: str
+    bbox_pt: tuple[float, float, float, float] | None
+    block_id: object
+
+
+def _require_v2(document: dict[str, Any]) -> None:
+    if document.get("schema_version") != 2:
+        raise ValueError("candidate detection requires extraction schema_version=2")
+    if not document.get("extraction_id"):
+        raise ValueError("candidate detection requires extraction_id")
+    if not document.get("source_path"):
+        raise ValueError("candidate detection requires source_path")
+    if not document.get("source") or not document.get("doc_type"):
+        raise ValueError("candidate detection requires source and doc_type")
+    pages = document.get("pages")
+    if not isinstance(pages, list):
+        raise ValueError("candidate detection requires pages[]")
+    line_ids: set[object] = set()
+    required_line_fields = {"line_id", "block_id", "order", "text", "bbox_pt"}
+    for page in pages:
+        if "page" not in page or not isinstance(page.get("lines"), list):
+            raise ValueError("candidate detection requires pages[].page and pages[].lines[]")
+        for line in page["lines"]:
+            missing = required_line_fields - line.keys()
+            if missing:
+                raise ValueError(f"candidate detection missing v2 line fields: {sorted(missing)}")
+            line_id = line["line_id"]
+            if line_id in line_ids:
+                raise ValueError(f"duplicate extraction-v2 line_id: {line_id!r}")
+            line_ids.add(line_id)
+
+
+def _line_bbox(line: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    value = line.get("bbox_pt")
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != 4:
+        raise ValueError(f"invalid bbox_pt for line_id={line.get('line_id')!r}")
+    return (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
+
+
+def _can_merge_wrapped(segment: _DerivedSegment, line: dict[str, Any]) -> bool:
+    """Apply the established vertical-gap/x-overlap merge rule to PDF lines."""
+    if len(segment.line_ids) >= _MERGE_MAX_CHAIN:
+        return False
+    next_bbox = _line_bbox(line)
+    if segment.bbox_pt is None or next_bbox is None:
+        return False  # geometry-null HWP/HWPX lines are already logical lines
+    if segment.block_id is None or line.get("block_id") != segment.block_id:
+        return False
+
+    x0a, y0a, x1a, y1a = segment.bbox_pt
+    x0b, y0b, x1b, y1b = next_bbox
+    line_height = max(y1a - y0a, 1.0)
+    gap = y0b - y1a
+    is_below_and_close = -0.5 <= gap <= line_height * _MERGE_GAP_RATIO
+    x_overlaps = min(x1a, x1b) - max(x0a, x0b) > 0
+    return is_below_and_close and x_overlaps
+
+
+def _start_segment(page_no: int, line: dict[str, Any], text: str) -> _DerivedSegment:
+    if "line_id" not in line:
+        raise ValueError("candidate detection requires a line_id on every line")
+    return _DerivedSegment(
+        page=page_no,
+        line_ids=(line["line_id"],),
+        text=text,
+        bbox_pt=_line_bbox(line),
+        block_id=line.get("block_id"),
+    )
+
+
+def _append_line(segment: _DerivedSegment, line: dict[str, Any], text: str) -> _DerivedSegment:
+    assert segment.bbox_pt is not None
+    next_bbox = _line_bbox(line)
+    assert next_bbox is not None
+    x0a, y0a, x1a, _y1a = segment.bbox_pt
+    x0b, _y0b, x1b, y1b = next_bbox
+    needs_space = not segment.text.endswith(" ") and not text.startswith(" ")
+    return _DerivedSegment(
+        page=segment.page,
+        line_ids=(*segment.line_ids, line["line_id"]),
+        text=segment.text + (" " if needs_space else "") + text,
+        bbox_pt=(min(x0a, x0b), y0a, max(x1a, x1b), y1b),
+        block_id=segment.block_id,
+    )
+
+
+def _eligible_segments(document: dict[str, Any]) -> list[_DerivedSegment]:
+    """Build non-boilerplate derived segments once, preserving document order."""
+    segments: list[_DerivedSegment] = []
+    for page in document["pages"]:
+        page_no = int(page["page"])
+        lines = sorted(page["lines"], key=lambda line: int(line.get("order", 0)))
+        current: _DerivedSegment | None = None
+        for line in lines:
+            if "cleaned_text" not in line or "is_boilerplate" not in line:
+                raise ValueError(
+                    "candidate detection requires annotate_document_in_place() first"
+                )
+            text = str(line.get("cleaned_text") or "")
+            if line["is_boilerplate"] or not text.strip():
+                if current is not None:
+                    segments.append(current)
+                    current = None
                 continue
-            text = str(span.get("cleaned_text") or "")
-            if text.strip():
-                eligible.append((page, span, text))
-    return eligible
+
+            if current is None:
+                current = _start_segment(page_no, line, text)
+            elif _can_merge_wrapped(current, line):
+                current = _append_line(current, line, text)
+            else:
+                segments.append(current)
+                current = _start_segment(page_no, line, text)
+        if current is not None:
+            segments.append(current)
+    return segments
 
 
 def _clip_context(text: str) -> str:
@@ -374,135 +492,201 @@ def _clip_context(text: str) -> str:
 
 
 def _candidate_context(
-    spans: list[tuple[dict[str, Any], dict[str, Any], str]],
+    segments: list[_DerivedSegment],
     index: int,
 ) -> tuple[list[str], list[str], str]:
     before = [
-        _clip_context(text)
-        for _, _, text in spans[max(0, index - _CONTEXT_SPAN_RADIUS) : index]
+        _clip_context(segment.text)
+        for segment in segments[max(0, index - _CONTEXT_SPAN_RADIUS) : index]
     ]
     after = [
-        _clip_context(text)
-        for _, _, text in spans[index + 1 : index + 1 + _CONTEXT_SPAN_RADIUS]
+        _clip_context(segment.text)
+        for segment in segments[index + 1 : index + 1 + _CONTEXT_SPAN_RADIUS]
     ]
-    anchor = _clip_context(spans[index][2])
+    anchor = _clip_context(segments[index].text)
     parts = [*(f"[이전] {text}" for text in before), f"[대상] {anchor}"]
     parts.extend(f"[다음] {text}" for text in after)
     return before, after, "\n".join(parts)
 
 
-def _base_candidate(annotated_doc: dict[str, Any], page: dict[str, Any], span: dict[str, Any]) -> dict[str, Any]:
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _candidate_id(
+    document: dict[str, Any],
+    segment: _DerivedSegment,
+    *,
+    candidate_kind: str,
+    qualifier: str,
+) -> str:
+    identity = {
+        "candidate_kind": candidate_kind,
+        "extraction_id": document["extraction_id"],
+        "line_ids": list(segment.line_ids),
+        "qualifier": qualifier,
+        # extraction_id is content/config based, so byte-identical files can
+        # share it. source_path keeps their candidate identities distinct.
+        "source_path": document["source_path"],
+    }
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _base_candidate(
+    document: dict[str, Any],
+    segment: _DerivedSegment,
+    *,
+    candidate_kind: str,
+    qualifier: str,
+) -> dict[str, Any]:
     return {
-        "source_pdf_path": annotated_doc.get("source_pdf_path"),
-        "source": annotated_doc.get("source"),
-        "doc_type": annotated_doc.get("doc_type"),
-        "doc_id": annotated_doc.get("doc_id"),
-        "span_id": span["span_id"],
-        "text": span["text"],
-        "bbox": span.get("bbox"),  # HWP 유래 span은 좌표 개념이 없어 None
-        "page_no": page["page_no"],
+        "candidate_id": _candidate_id(
+            document,
+            segment,
+            candidate_kind=candidate_kind,
+            qualifier=qualifier,
+        ),
+        "extraction_id": document["extraction_id"],
+        "source_path": document["source_path"],
+        "source": document.get("source"),
+        "doc_type": document.get("doc_type"),
+        "doc_id": document.get("doc_id"),
+        "line_ids": list(segment.line_ids),
+        "text": segment.text,
+        "text_sha256": _sha256_text(segment.text),
+        "page": segment.page,
+        "candidate_kind": candidate_kind,
     }
 
 
-def find_candidates(annotated_doc: dict[str, Any], clause_no: str) -> list[dict[str, Any]]:
-    """annotated_doc에서 clause_no(5/6/7/8) 조항 후보 span을 최대
-    _MAX_CANDIDATES_PER_DOC개까지 찾아 반환한다.
+def _push_top_candidate(
+    heap: list[tuple[tuple[int, int, str], dict[str, Any]]],
+    candidate: dict[str, Any],
+    document_index: int,
+) -> None:
+    quality = (candidate["match_score"], -document_index, candidate["candidate_id"])
+    item = (quality, candidate)
+    if len(heap) < _MAX_CANDIDATES_PER_DOC:
+        heapq.heappush(heap, item)
+    elif quality > heap[0][0]:
+        heapq.heapreplace(heap, item)
 
-    문서 앞에서부터 선착순으로 자르지 않고, 전체 후보를 먼저 수집한 뒤 근거가
-    강한 순으로 정렬한다. 각 후보에는 선택 근거와 앞뒤 문맥을 보존한다.
-    원본은 변경하지 않는다.
-    """
-    if "pages" not in annotated_doc:
-        return []
 
-    candidates: list[dict[str, Any]] = []
-    spans = _eligible_spans(annotated_doc)
-    for document_index, (page, span, text) in enumerate(spans):
-        matched_rules, anchor_score = _clause_match_evidence(text, clause_no)
-        if not matched_rules:
-            continue
-
-        context_before, context_after, context_text = _candidate_context(spans, document_index)
-        context_rules: list[str] = []
-        context_score = 0
-        for context_part in (*context_before, *context_after):
-            part_rules, part_score = _clause_match_evidence(context_part, clause_no)
-            context_rules.extend(rule for rule in part_rules if rule not in context_rules)
-            context_score += part_score
-
-        # 단순 금액은 어느 공공문서에나 매우 흔하다. 같은 span에는 금액밖에 없더라도
-        # 앞뒤 두 span 안에 조항별 키워드가 있으면 그 문맥에 딸린 금액으로 보고 살린다.
-        # 반대로 문맥 근거도 없으면 후보 수만 부풀리는 오탐이므로 제외한다.
-        if matched_rules == ["pattern:money"] and not any(
-            rule.startswith("keyword:") for rule in context_rules
-        ):
-            continue
-
-        candidate = _base_candidate(annotated_doc, page, span)
-        candidate.update(
-            {
-                "candidate_kind": "clause",
-                "clause": clause_no,
-                "matched_rules": matched_rules,
-                "context_rules": context_rules,
-                "match_score": anchor_score + min(2, context_score),
-                "context_before": context_before,
-                "context_after": context_after,
-                "context_text": context_text,
-                "_document_index": document_index,
-            }
+def _finalize_clause_heap(
+    heap: list[tuple[tuple[int, int, str], dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    candidates = [candidate for _quality, candidate in heap]
+    candidates.sort(
+        key=lambda candidate: (
+            -candidate["match_score"],
+            candidate["_document_index"],
+            candidate["candidate_id"],
         )
-        candidates.append(candidate)
-
-    candidates.sort(key=lambda candidate: (-candidate["match_score"], candidate["_document_index"]))
-    selected = candidates[:_MAX_CANDIDATES_PER_DOC]
-    for rank, candidate in enumerate(selected, start=1):
+    )
+    for rank, candidate in enumerate(candidates, start=1):
         candidate["rank"] = rank
-        candidate.pop("_document_index", None)
-    return selected
-
-
-def find_administrative_candidates(annotated_doc: dict[str, Any]) -> list[dict[str, Any]]:
-    """문서유형별 행정상태 신호를 가진 원본 span 후보를 반환한다.
-
-    조항 후보와 달리 ``document_status``와 그 상태를 확정하기 전에 확인할
-    메타데이터 요건을 함께 기록한다. 이 함수는 상태를 사실로 단정하지 않는다.
-    """
-    if "pages" not in annotated_doc:
-        return []
-
-    rules = ADMIN_STATUS_RULES_BY_DOC_TYPE.get(annotated_doc.get("doc_type") or "", ())
-    if not rules:
-        return []
-
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[int, str]] = set()
-    for page in annotated_doc["pages"]:
-        for span in page["spans"]:
-            if span["is_boilerplate"]:
-                continue
-            text = span["cleaned_text"]
-            if not text.strip():
-                continue
-
-            for rule in rules:
-                if not any(keyword in text for keyword in rule.keywords):
-                    continue
-                key = (span["span_id"], rule.document_status)
-                if key in seen:
-                    continue
-                seen.add(key)
-                candidate = _base_candidate(annotated_doc, page, span)
-                candidate.update(
-                    {
-                        "candidate_kind": "administrative_status",
-                        "document_status": rule.document_status,
-                        "status_evidence": text,
-                        "verification_requirement": rule.verification_requirement,
-                    }
-                )
-                candidates.append(candidate)
-                if len(candidates) >= _MAX_CANDIDATES_PER_DOC:
-                    return candidates
-
+        candidate.pop("_document_index")
     return candidates
+
+
+def find_all_candidates(document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Evaluate all four clauses and administrative rules in one segment traversal."""
+    _require_v2(document)
+    results: dict[str, list[dict[str, Any]]] = {
+        clause_no: [] for clause_no in _CLAUSE_NOS
+    }
+    results["administrative"] = []
+    if not document["pages"]:
+        return results
+
+    segments = _eligible_segments(document)
+    clause_heaps: dict[str, list[tuple[tuple[int, int, str], dict[str, Any]]]] = {
+        clause_no: [] for clause_no in _CLAUSE_NOS
+    }
+    admin_rules = ADMIN_STATUS_RULES_BY_DOC_TYPE.get(document.get("doc_type") or "", ())
+    seen_admin: set[tuple[tuple[object, ...], str]] = set()
+
+    for document_index, segment in enumerate(segments):
+        context_before, context_after, context_text = _candidate_context(
+            segments, document_index
+        )
+
+        for clause_no in _CLAUSE_NOS:
+            matched_rules, anchor_score = _clause_match_evidence(segment.text, clause_no)
+            if not matched_rules:
+                continue
+
+            context_rules: list[str] = []
+            context_score = 0
+            for context_part in (*context_before, *context_after):
+                part_rules, part_score = _clause_match_evidence(context_part, clause_no)
+                context_rules.extend(rule for rule in part_rules if rule not in context_rules)
+                context_score += part_score
+
+            if matched_rules == ["pattern:money"] and not any(
+                rule.startswith("keyword:") for rule in context_rules
+            ):
+                continue
+
+            candidate = _base_candidate(
+                document,
+                segment,
+                candidate_kind="clause",
+                qualifier=clause_no,
+            )
+            candidate.update(
+                {
+                    "clause": clause_no,
+                    "matched_rules": matched_rules,
+                    "context_rules": context_rules,
+                    "match_score": anchor_score + min(2, context_score),
+                    "context_before": context_before,
+                    "context_after": context_after,
+                    "context_text": context_text,
+                    "_document_index": document_index,
+                }
+            )
+            _push_top_candidate(clause_heaps[clause_no], candidate, document_index)
+
+        if len(results["administrative"]) >= _MAX_CANDIDATES_PER_DOC:
+            continue
+        for rule in admin_rules:
+            if not any(keyword in segment.text for keyword in rule.keywords):
+                continue
+            key = (segment.line_ids, rule.document_status)
+            if key in seen_admin:
+                continue
+            seen_admin.add(key)
+            candidate = _base_candidate(
+                document,
+                segment,
+                candidate_kind="administrative_status",
+                qualifier=rule.document_status,
+            )
+            candidate.update(
+                {
+                    "document_status": rule.document_status,
+                    "status_evidence": segment.text,
+                    "verification_requirement": rule.verification_requirement,
+                }
+            )
+            results["administrative"].append(candidate)
+            if len(results["administrative"]) >= _MAX_CANDIDATES_PER_DOC:
+                break
+
+    for clause_no, heap in clause_heaps.items():
+        results[clause_no] = _finalize_clause_heap(heap)
+    return results
+
+
+def find_candidates(document: dict[str, Any], clause_no: str) -> list[dict[str, Any]]:
+    """Compatibility entry point for v2 unit callers and single-clause use."""
+    if clause_no not in _CLAUSE_NOS:
+        raise ValueError(f"unsupported clause: {clause_no}")
+    return find_all_candidates(document)[clause_no]
+
+
+def find_administrative_candidates(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compatibility entry point for v2 unit callers."""
+    return find_all_candidates(document)["administrative"]

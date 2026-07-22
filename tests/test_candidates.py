@@ -1,11 +1,16 @@
+import pytest
+
+from rd2.augmentation.annotate import annotate_document_in_place
 from rd2.augmentation.candidates import (
     _CLAUSE_KEYWORDS,
     _MAX_CANDIDATES_PER_DOC,
     _matches_clause_5_or_7_or_8,
     _matches_clause_6,
     find_administrative_candidates,
+    find_all_candidates,
     find_candidates,
 )
+from rd2.extraction.pdf_text import _merge_wrapped_lines
 
 
 def test_clause_6_rejects_bare_department_title():
@@ -93,24 +98,170 @@ def test_clause_8_matches_real_estate_keywords():
     assert _matches_clause_5_or_7_or_8("신규 정비구역 지정 검토", "8") is True
 
 
-def _annotated_doc(spans: list[dict], *, doc_type: str = "budget_material") -> dict:
+def _annotated_doc(lines: list[dict], *, doc_type: str = "budget_material") -> dict:
     return {
-        "source_pdf_path": "data/moe/budget_material/test.pdf",
+        "schema_version": 2,
+        "extraction_id": f"extract-{doc_type}-1",
+        "source_path": f"data/moe/{doc_type}/test.pdf",
         "source": "moe",
         "doc_type": doc_type,
         "doc_id": "1",
-        "pages": [{"page_no": 1, "spans": spans}],
+        "source_format": "pdf",
+        "pages": [{"page": 1, "width_pt": 595.0, "height_pt": 842.0, "lines": lines}],
     }
 
 
 def _span(span_id: int, text: str, *, is_boilerplate: bool = False) -> dict:
     return {
-        "span_id": span_id,
+        "line_id": span_id,
+        "block_id": span_id,
+        "order": span_id,
         "text": text,
         "cleaned_text": text,
-        "bbox": [0, 0, 10, 10],
+        "bbox_pt": [0.0, float(span_id * 20), 10.0, float(span_id * 20 + 10)],
+        "style_runs": [],
         "is_boilerplate": is_boilerplate,
     }
+
+
+def _raw_v2_document(pages: list[dict], *, source_format: str = "pdf") -> dict:
+    return {
+        "schema_version": 2,
+        "extraction_id": f"raw-{source_format}-1",
+        "source_path": f"data/moe/report/raw.{source_format}",
+        "source": "moe",
+        "doc_type": "report",
+        "doc_id": "raw",
+        "source_format": source_format,
+        "pages": pages,
+    }
+
+
+def test_annotation_mutates_loaded_lines_only_and_returns_same_document():
+    line = {
+        "line_id": 0,
+        "block_id": 0,
+        "order": 0,
+        "text": "본문\ufffd\ue000",
+        "bbox_pt": [10.0, 20.0, 100.0, 30.0],
+        "style_runs": [],
+    }
+    document = _raw_v2_document(
+        [{"page": 1, "width_pt": 595.0, "height_pt": 842.0, "lines": [line]}]
+    )
+    original_document_keys = set(document)
+    original_line_keys = set(line)
+
+    result = annotate_document_in_place(document)
+
+    assert result is document
+    assert document["pages"][0]["lines"][0] is line
+    assert set(document) == original_document_keys
+    assert set(line) - original_line_keys == {"cleaned_text", "is_boilerplate"}
+    assert line["cleaned_text"] == "본문"
+    assert line["is_boilerplate"] is False
+
+
+def test_annotation_uses_pdf_geometry_slots_for_repeated_boilerplate():
+    pages = []
+    for page_no in range(1, 4):
+        pages.append(
+            {
+                "page": page_no,
+                "width_pt": 595.0,
+                "height_pt": 842.0,
+                "lines": [
+                    {
+                        "line_id": page_no,
+                        "block_id": 0,
+                        "order": 0,
+                        "text": "반복 머리말",
+                        "bbox_pt": [10.1, 20.1, 100.0, 30.0],
+                        "style_runs": [],
+                    }
+                ],
+            }
+        )
+    document = _raw_v2_document(pages)
+
+    annotate_document_in_place(document)
+
+    assert all(page["lines"][0]["is_boilerplate"] for page in document["pages"])
+
+
+def test_annotation_uses_text_repetition_when_all_geometry_is_null():
+    pages = []
+    for page_no in range(1, 4):
+        pages.append(
+            {
+                "page": page_no,
+                "width_pt": None,
+                "height_pt": None,
+                "lines": [
+                    {
+                        "line_id": page_no,
+                        "block_id": None,
+                        "order": 0,
+                        "text": "반복 문구",
+                        "bbox_pt": None,
+                        "style_runs": [],
+                    }
+                ],
+            }
+        )
+    document = _raw_v2_document(pages, source_format="hwp")
+
+    annotate_document_in_place(document)
+
+    assert all(page["lines"][0]["is_boilerplate"] for page in document["pages"])
+
+
+def test_candidate_layer_merges_adjacent_wrapped_pdf_lines_within_one_block():
+    first = _span(1, "입찰 계약")
+    second = _span(2, "예정가격 5,000만원")
+    first.update(block_id=7, order=0, bbox_pt=[10.0, 10.0, 200.0, 20.0])
+    second.update(block_id=7, order=1, bbox_pt=[10.0, 20.2, 200.0, 30.2])
+    document = _annotated_doc([first, second])
+
+    candidate = find_candidates(document, "5")[0]
+    legacy_segment = _merge_wrapped_lines(
+        [
+            {"text": first["text"], "bbox": first["bbox_pt"]},
+            {"text": second["text"], "bbox": second["bbox_pt"]},
+        ]
+    )[0]
+
+    assert candidate["line_ids"] == [1, 2]
+    assert candidate["text"] == legacy_segment["text"] == "입찰 계약 예정가격 5,000만원"
+    assert "bbox" not in candidate
+    assert "span_id" not in candidate
+    assert "source_pdf_path" not in candidate
+
+
+def test_candidate_layer_keeps_geometry_null_hwp_lines_separate():
+    first = _span(1, "입찰")
+    second = _span(2, "계약")
+    for order, line in enumerate((first, second)):
+        line.update(block_id=None, order=order, bbox_pt=None)
+    document = _annotated_doc([first, second])
+    document["source_format"] = "hwp"
+
+    candidates = find_candidates(document, "5")
+
+    assert {tuple(candidate["line_ids"]) for candidate in candidates} == {(1,), (2,)}
+
+
+def test_find_all_candidates_matches_compatibility_entrypoints_and_ids_are_stable():
+    document = _annotated_doc([_span(1, "입찰 계약 검토안")], doc_type="approval")
+
+    all_first = find_all_candidates(document)
+    all_second = find_all_candidates(document)
+
+    assert all_first == all_second
+    assert all_first["5"] == find_candidates(document, "5")
+    assert all_first["administrative"] == find_administrative_candidates(document)
+    assert all_first["5"][0]["candidate_id"] != all_first["administrative"][0]["candidate_id"]
+    assert all_first["5"][0]["text_sha256"]
 
 
 def test_find_candidates_skips_boilerplate_spans():
@@ -121,13 +272,26 @@ def test_find_candidates_skips_boilerplate_spans():
         ]
     )
     candidates = find_candidates(doc, "5")
-    assert [c["span_id"] for c in candidates] == [2]
+    assert [c["line_ids"] for c in candidates] == [[2]]
 
 
 def test_find_candidates_respects_per_document_cap():
     doc = _annotated_doc([_span(i, "입찰 계약 체결") for i in range(_MAX_CANDIDATES_PER_DOC + 5)])
     candidates = find_candidates(doc, "5")
     assert len(candidates) == _MAX_CANDIDATES_PER_DOC
+
+
+def test_find_all_candidates_50k_line_stress_keeps_outputs_bounded():
+    line_count = 50_000
+    doc = _annotated_doc([_span(i, "입찰 계약 체결") for i in range(line_count)])
+
+    results = find_all_candidates(doc)
+
+    assert len(results["5"]) == _MAX_CANDIDATES_PER_DOC
+    assert all(len(results[target]) <= _MAX_CANDIDATES_PER_DOC for target in results)
+    assert [candidate["rank"] for candidate in results["5"]] == list(
+        range(1, _MAX_CANDIDATES_PER_DOC + 1)
+    )
 
 
 def test_find_candidates_ranks_strong_evidence_ahead_of_early_generic_matches():
@@ -137,7 +301,7 @@ def test_find_candidates_ranks_strong_evidence_ahead_of_early_generic_matches():
 
     candidates = find_candidates(doc, "5")
 
-    assert candidates[0]["span_id"] == 999
+    assert candidates[0]["line_ids"] == [999]
     assert candidates[0]["rank"] == 1
     assert "keyword:수의계약" in candidates[0]["matched_rules"]
     assert "keyword:계약" not in candidates[0]["matched_rules"]
@@ -165,8 +329,8 @@ def test_find_candidates_keeps_money_span_when_neighbor_has_clause_context():
         [_span(1, "납품단가 원가구조"), _span(2, "제안금액 46,000,000원")]
     )
 
-    clause_5_money = next(c for c in find_candidates(clause_5_doc, "5") if c["span_id"] == 2)
-    clause_7_money = next(c for c in find_candidates(clause_7_doc, "7") if c["span_id"] == 2)
+    clause_5_money = next(c for c in find_candidates(clause_5_doc, "5") if c["line_ids"] == [2])
+    clause_7_money = next(c for c in find_candidates(clause_7_doc, "7") if c["line_ids"] == [2])
 
     assert "keyword:입찰" in clause_5_money["context_rules"]
     assert "keyword:납품단가" in clause_7_money["context_rules"]
@@ -182,7 +346,7 @@ def test_find_candidates_preserves_non_boilerplate_neighbor_context():
         ]
     )
 
-    candidate = next(candidate for candidate in find_candidates(doc, "5") if candidate["span_id"] == 3)
+    candidate = next(candidate for candidate in find_candidates(doc, "5") if candidate["line_ids"] == [3])
 
     assert candidate["context_before"] == ["사업 개요"]
     assert candidate["context_after"] == ["예정가격은 5,000만원입니다."]
@@ -190,8 +354,9 @@ def test_find_candidates_preserves_non_boilerplate_neighbor_context():
     assert "[대상] 입찰 계약 체결" in candidate["context_text"]
 
 
-def test_find_candidates_returns_empty_when_no_pages_key():
-    assert find_candidates({}, "5") == []
+def test_find_candidates_rejects_non_v2_document():
+    with pytest.raises(ValueError, match="schema_version=2"):
+        find_candidates({}, "5")
 
 
 def test_administrative_candidates_use_document_form_specific_attachment_rule():

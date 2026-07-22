@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from _common import ensure_src_on_path
 
@@ -31,6 +32,22 @@ _REPO_ROOT = Path(__file__).parent.parent
 _DATA_ROOT = _REPO_ROOT / "data"
 _EXTRACTED_ROOT = _DATA_ROOT / "extracted"
 _LOG_PATH = _EXTRACTED_ROOT / "_extraction_log.jsonl"
+
+# bbox/size 좌표를 PyMuPDF가 주는 float64 풀정밀도 그대로 저장하면 파일이
+# 불필요하게 커진다(예: 121.37422180175781). 레이아웃 배치 용도로는 소수점
+# 1자리(0.1pt ≈ 0.035mm)면 충분해 정보 손실 없이 저장 용량을 줄일 수 있다
+# (실측: indent=2 + 풀정밀도 112MB → compact + 1자리 반올림 39MB, -65%).
+_COORD_PRECISION = 1
+
+
+def _round_floats(value: Any) -> Any:
+    if isinstance(value, float):
+        return round(value, _COORD_PRECISION)
+    if isinstance(value, list):
+        return [_round_floats(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _round_floats(v) for k, v in value.items()}
+    return value
 
 # data/ 바로 아래에 있지만 실제 PDF 출처 폴더가 아니라 파이프라인 산출물이 쌓이는
 # 디렉터리 — "--source all"로 전체를 훑을 때 이런 폴더까지 "출처"로 오인해 도는 걸
@@ -89,7 +106,7 @@ def _process_one(pdf_path: Path, *, force: bool) -> str:
     return status
 
 
-def main() -> None:
+def _legacy_v1_main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source",
@@ -124,5 +141,28 @@ def main() -> None:
     print(f"\n완료: {counts}")
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Translate the legacy CLI to the canonical unified extractor.
+
+    The old implementation is intentionally left importable for local analysis,
+    but executing this file must never write a v1 ``.json`` artifact.
+    """
+    import sys
+
+    from extract_documents import main as extract_documents_main
+
+    raw_args = sys.argv[1:] if argv is None else list(argv)
+    translated = []
+    for arg in raw_args:
+        if arg == "--pdf":
+            translated.append("--document")
+        elif arg.startswith("--pdf="):
+            translated.append("--document=" + arg.split("=", 1)[1])
+        else:
+            translated.append(arg)
+    translated.extend(["--format", "pdf"])
+    return extract_documents_main(translated)
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

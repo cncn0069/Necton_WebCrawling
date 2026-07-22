@@ -1,5 +1,5 @@
-"""조항별 후보 span 중 일부를 LLM으로 골라 "기밀도 상승" 문구로 치환한다
-(Hard-example 증강). 문서 원본은 건드리지 않고, "어떤 span을 무엇으로
+"""조항별 후보 중 일부를 LLM으로 골라 "기밀도 상승" 문구로 치환한다
+(Hard-example 증강). 문서 원본은 건드리지 않고, "어떤 후보를 무엇으로
 바꿀지"에 대한 결정만 만든다 — 실제 문서 재구성은 다음 단계(오늘 범위 아님).
 
 `generators/generate.py`와 같은 OpenAI 클라이언트 패턴을 재사용하되, 자유
@@ -8,16 +8,143 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from rd2.augmentation.annotate import annotate_document_in_place
+from rd2.extraction.storage import (
+    compute_source_sha256,
+    extraction_output_path,
+    read_json_gz,
+)
 from rd2.generators.clause_data import CLAUSES, ClauseDefinition
 
 load_dotenv()
+
+
+class CandidateValidationError(ValueError):
+    """후보가 현재 canonical 추출 문서와 일치하지 않을 때 발생한다."""
+
+
+def _join_candidate_line_texts(texts: list[str]) -> str:
+    combined = ""
+    for text in texts:
+        needs_space = bool(combined) and not combined.endswith(" ") and not text.startswith(" ")
+        combined += (" " if needs_space else "") + text
+    return combined
+
+
+def _resolve_source_file(source_path: str, data_root: Path) -> Path:
+    normalized = source_path.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise CandidateValidationError(f"absolute source_path는 허용되지 않음: {source_path}")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise CandidateValidationError(f"잘못된 source_path: {source_path}")
+    source_file = data_root.parent.joinpath(*parts).resolve()
+    try:
+        source_file.relative_to(data_root.resolve())
+    except ValueError as exc:
+        raise CandidateValidationError(f"source_path가 data root 밖을 가리킴: {source_path}") from exc
+    return source_file
+
+
+def validate_candidates_for_document(
+    candidates_for_doc: list[dict[str, Any]],
+    *,
+    data_root: Path,
+    extracted_root: Path,
+) -> None:
+    """유료 호출 전에 v2 후보를 현재 canonical 추출본과 대조한다."""
+    if not candidates_for_doc:
+        return
+    first = candidates_for_doc[0]
+    source_path = first.get("source_path")
+    extraction_id = first.get("extraction_id")
+    if not isinstance(source_path, str) or not source_path:
+        raise CandidateValidationError("candidate source_path가 없음")
+    if not isinstance(extraction_id, str) or not extraction_id:
+        raise CandidateValidationError("candidate extraction_id가 없음")
+
+    source_file = _resolve_source_file(source_path, data_root)
+    output_path = extraction_output_path(source_file, data_root, extracted_root)
+    document = read_json_gz(output_path)
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        raise CandidateValidationError(f"v2 추출 문서가 아님: {output_path}")
+    if document.get("status") not in {"ok", "needs_ocr"}:
+        raise CandidateValidationError(
+            f"정상 추출 문서가 아님(status={document.get('status')!r}): {output_path}"
+        )
+    normalized_source = source_path.replace("\\", "/")
+    if str(document.get("source_path") or "").replace("\\", "/") != normalized_source:
+        raise CandidateValidationError(f"source_path 불일치: {source_path}")
+    if document.get("extraction_id") != extraction_id:
+        raise CandidateValidationError(
+            f"stale candidate extraction_id: candidate={extraction_id!r}, "
+            f"current={document.get('extraction_id')!r}"
+        )
+    artifact_source_sha256 = document.get("source_sha256")
+    if not isinstance(artifact_source_sha256, str) or not artifact_source_sha256:
+        raise CandidateValidationError(f"source_sha256가 없는 추출 문서: {output_path}")
+    try:
+        current_source_sha256 = compute_source_sha256(source_file)
+    except OSError as exc:
+        raise CandidateValidationError(f"원본 파일을 읽을 수 없음: {source_file}") from exc
+    if current_source_sha256 != artifact_source_sha256:
+        raise CandidateValidationError(
+            f"stale extraction source_sha256: artifact={artifact_source_sha256!r}, "
+            f"current={current_source_sha256!r}"
+        )
+
+    annotate_document_in_place(document)
+    lines_by_id: dict[object, tuple[object, str, bool]] = {}
+    for page in document.get("pages", []):
+        page_number = page.get("page")
+        for line in page.get("lines", []):
+            line_id = line.get("line_id")
+            if line_id is None or line_id in lines_by_id:
+                raise CandidateValidationError(f"누락 또는 중복 line_id: {line_id!r}")
+            lines_by_id[line_id] = (
+                page_number,
+                str(line.get("cleaned_text") or ""),
+                bool(line.get("is_boilerplate")),
+            )
+
+    for candidate in candidates_for_doc:
+        if candidate.get("source_path") != source_path or candidate.get("extraction_id") != extraction_id:
+            raise CandidateValidationError("한 문서 후보 묶음에 다른 source/extraction이 섞임")
+        candidate_id = candidate.get("candidate_id")
+        line_ids = candidate.get("line_ids")
+        text = candidate.get("text")
+        expected_hash = candidate.get("text_sha256")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise CandidateValidationError("candidate_id가 없음")
+        if not isinstance(line_ids, list) or not line_ids:
+            raise CandidateValidationError(f"{candidate_id}: line_ids가 없음")
+        if not isinstance(text, str) or not isinstance(expected_hash, str):
+            raise CandidateValidationError(f"{candidate_id}: text/text_sha256가 없음")
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+            raise CandidateValidationError(f"{candidate_id}: text_sha256 불일치")
+        try:
+            selected = [lines_by_id[line_id] for line_id in line_ids]
+        except (KeyError, TypeError) as exc:
+            raise CandidateValidationError(
+                f"{candidate_id}: line_ids를 현재 추출본에서 찾지 못함"
+            ) from exc
+        if any(is_boilerplate for _, _, is_boilerplate in selected):
+            raise CandidateValidationError(f"{candidate_id}: boilerplate line을 가리킴")
+        if _join_candidate_line_texts([line_text for _, line_text, _ in selected]) != text:
+            raise CandidateValidationError(f"{candidate_id}: 현재 line text와 불일치")
+        page = candidate.get("page")
+        if any(line_page != page for line_page, _, _ in selected):
+            raise CandidateValidationError(f"{candidate_id}: page 불일치")
 
 # strict JSON Schema 모드 — 단순 프롬프트 지시만으로는 transformation 필드가
 # 종종 빈 값으로 오는 걸 실측(2026-07-16)으로 확인해서, 스키마로 필드 존재 자체를
@@ -25,7 +152,7 @@ load_dotenv()
 _RESPONSE_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "span_selections",
+        "name": "candidate_selections",
         "strict": True,
         "schema": {
             "type": "object",
@@ -35,12 +162,12 @@ _RESPONSE_SCHEMA = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "span_id": {"type": "integer"},
+                            "candidate_id": {"type": "string"},
                             "synthetic": {"type": "string"},
                             "transformation": {"type": "string"},
                             "reason": {"type": "string"},
                         },
-                        "required": ["span_id", "synthetic", "transformation", "reason"],
+                        "required": ["candidate_id", "synthetic", "transformation", "reason"],
                         "additionalProperties": False,
                     },
                 }
@@ -67,7 +194,7 @@ _SYSTEM_PROMPT_UPGRADE = (
     "'아직 확정 전이거나 내부에서만 아는 사실'로 바꿔야 기밀도가 실제로 올라간다.\n\n"
     "각 치환 문구는 원문과 길이가 비슷해야 한다(문서 레이아웃 보존 목적). "
     "실제로 존재하는 기관·인물·사건을 지칭하지 말고 그럴듯한 가상의 내용으로 작성하라. "
-    'JSON으로만 응답하라: {"selections": [{"span_id": int, "synthetic": str, '
+    'JSON으로만 응답하라: {"selections": [{"candidate_id": str, "synthetic": str, '
     '"transformation": str, "reason": str}]}. transformation 필드는 절대 비워두지 말고 '
     '항상 채워라 — 영문 스네이크케이스 짧은 카테고리 라벨이다(예: '
     '"contract_negotiation_info", "pre_disclosure_appraisal", "internal_bid_estimate"). '
@@ -109,7 +236,7 @@ _SYSTEM_PROMPT_CLAUSE_6 = (
     '- 원문이 길면(15자 이상): 이름+연락처, 이름+주민등록번호 등 더 구체적인 '
     '조합(예: "이민준(830512-1234567)", 레이블 없이 압축된 형태)을 써도 된다.\n'
     "치환 문구 길이는 항상 원문과 비슷해야 한다 — 원문보다 몇 배 길어지면 안 된다.\n\n"
-    'JSON으로만 응답하라: {"selections": [{"span_id": int, "synthetic": str, '
+    'JSON으로만 응답하라: {"selections": [{"candidate_id": str, "synthetic": str, '
     '"transformation": str, "reason": str}]}. transformation은 항상 '
     '"fabricated_personal_info"로 고정하라. reason 필드에는 이 span이 왜 개인정보에 '
     "해당하는지(예: 주변 맥락과 결합해 특정 개인 식별 가능 여부) 한국어 1문장으로 설명하라."
@@ -117,8 +244,17 @@ _SYSTEM_PROMPT_CLAUSE_6 = (
 
 
 def build_user_prompt(candidates_for_doc: list[dict[str, Any]], clause: ClauseDefinition) -> str:
+    """모델에는 선택용 ID와 텍스트만 보낸다.
+
+    ``line_ids``/``page``/좌표/스타일/추출 해시는 로컬 무결성 검증과 결과
+    추적에만 필요하다. 모델 입력에 섞으면 아직 사용하지 않는 레이아웃 토큰만
+    늘고, 모델이 좌표를 의미 정보처럼 과해석할 수 있어 의도적으로 제외한다.
+    """
     candidates_json = json.dumps(
-        [{"span_id": c["span_id"], "text": c["text"]} for c in candidates_for_doc],
+        [
+            {"candidate_id": c["candidate_id"], "text": c["text"]}
+            for c in candidates_for_doc
+        ],
         ensure_ascii=False,
     )
     return (
@@ -168,12 +304,11 @@ def augment_document(
     client: OpenAI | None = None,
     model: str = "gpt-5.6-sol",
 ) -> list[dict[str, Any]]:
-    """문서 1개의 후보 span 목록을 LLM에 보내 일부를 치환한 결과를 반환한다.
+    """문서 1개의 후보 목록을 LLM에 보내 일부를 치환한 결과를 반환한다.
 
-    반환값: [{span_id, page_no, original, synthetic, transformation, reason}] —
-    LLM이 하나도 고르지 않았거나 응답이 후보에 없는 span_id만 골랐다면 빈 리스트를
-    반환한다. page_no는 candidates jsonl(추출 단계)에 이미 있던 값을 그대로 실어
-    보낸다 — 검토할 때 몇 쪽인지 바로 알 수 있게.
+    반환값은 candidate_id/line_ids/page와 치환 내용을 함께 가진다. LLM이
+    후보 목록에 없는 candidate_id를 고르면 환각으로 간주해 버린다. line_ids와
+    page는 모델 응답을 신뢰하지 않고 입력 후보에서 그대로 복사한다.
     """
     if not candidates_for_doc:
         return []
@@ -192,22 +327,26 @@ def augment_document(
     except (json.JSONDecodeError, KeyError, TypeError):
         return []
 
-    candidates_by_id = {c["span_id"]: c for c in candidates_for_doc}
+    candidates_by_id = {c["candidate_id"]: c for c in candidates_for_doc}
     results: list[dict[str, Any]] = []
     for sel in selections:
-        span_id = sel.get("span_id")
-        if span_id not in candidates_by_id:
-            continue  # 환각 방지 — 실제 후보 목록에 없는 span_id는 채택 안 함
+        candidate_id = sel.get("candidate_id")
+        if candidate_id not in candidates_by_id:
+            continue  # 환각 방지 — 실제 후보 목록에 없는 candidate_id는 채택 안 함
         synthetic = sel.get("synthetic")
         if not synthetic:
             continue
-        original = candidates_by_id[span_id]["text"]  # LLM이 다시 쓰지 않고 원본에서 그대로 가져옴
+        candidate = candidates_by_id[candidate_id]
+        original = candidate["text"]  # LLM이 다시 쓰지 않고 원본에서 그대로 가져옴
         if not _passes_validation(original, synthetic):
             continue
         results.append(
             {
-                "span_id": span_id,
-                "page_no": candidates_by_id[span_id].get("page_no"),
+                "candidate_id": candidate_id,
+                "extraction_id": candidate.get("extraction_id"),
+                "text_sha256": candidate.get("text_sha256"),
+                "line_ids": list(candidate.get("line_ids") or []),
+                "page": candidate.get("page"),
                 "clause": clause_no,  # 파일명(_clauseN)에만 의존하지 않고 selection 자체로도 조항을 알 수 있게
                 "original": original,
                 "synthetic": synthetic,

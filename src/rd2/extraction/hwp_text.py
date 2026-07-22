@@ -18,13 +18,26 @@ PDF(좌표 슬롯 기반)/HWP(텍스트 반복 기반) 판정 방식을 자동�
 from __future__ import annotations
 
 import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Iterator
 
 from rd2.extractors.hwp import extract_hwp
+from rd2.extraction.storage import (
+    EXTRACTION_PROFILE,
+    SCHEMA_VERSION,
+    build_extraction_id,
+    compute_source_sha256,
+    source_metadata,
+)
 
 _HWP_SUFFIXES = (".hwp", ".hwpx")
 _SCANNED_AVG_CHARS_THRESHOLD = 5  # pdf_text.py의 스캔본 판정과 동일한 기준
+_HWP_EXTRACTION_CONFIG = {
+    "line_mode": "logical_newline",
+    "geometry": "unavailable",
+    "style_runs": "unavailable",
+}
 
 
 def iter_hwp_files(data_root: Path, source: str | None = None) -> Iterator[Path]:
@@ -52,6 +65,118 @@ def _source_and_doc_type(path: Path, data_root: Path) -> tuple[str, str]:
     source = rel_parts[0] if len(rel_parts) > 0 else "_unclassified"
     doc_type = rel_parts[1] if len(rel_parts) > 2 else "_unclassified"
     return source, doc_type
+
+
+def hwp_extraction_metadata() -> dict[str, Any]:
+    """Return the extractor identity/configuration used by canonical v2."""
+
+    try:
+        extractor_version = version("hwp-hwpx-parser")
+    except PackageNotFoundError:
+        extractor_version = "unknown"
+    return {
+        "profile": EXTRACTION_PROFILE,
+        "extractor": "hwp-hwpx-parser",
+        "extractor_version": extractor_version,
+        "config": dict(_HWP_EXTRACTION_CONFIG),
+    }
+
+
+def _canonical_hwp_base(
+    hwp_path: Path,
+    *,
+    data_root: Path,
+    source_sha256: str,
+) -> dict[str, Any]:
+    extraction = hwp_extraction_metadata()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "extraction_id": build_extraction_id(source_sha256, extraction),
+        "source_sha256": source_sha256,
+        **source_metadata(hwp_path, data_root),
+        "extraction": extraction,
+        "status": "error",
+        "error": None,
+        "quality": {
+            "has_text_layer": False,
+            "needs_ocr": False,
+            "needs_quarantine": False,
+            "pages_needing_ocr": [],
+            "avg_chars_per_page": None,
+            "warnings": [],
+        },
+        "pages": [],
+    }
+
+
+def _logical_hwp_lines(text: str) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for line in (candidate for candidate in text.split("\n") if candidate.strip()):
+        order = len(lines)
+        lines.append(
+            {
+                "line_id": order,
+                "block_id": None,
+                "order": order,
+                "text": line,
+                "bbox_pt": None,
+                "style_runs": [],
+            }
+        )
+    return lines
+
+
+def extract_hwp_document(
+    hwp_path: Path,
+    *,
+    data_root: Path,
+    source_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Extract canonical v2 HWP/HWPX logical lines without fake geometry."""
+
+    hwp_path = Path(hwp_path)
+    digest = source_sha256 or compute_source_sha256(hwp_path)
+    result = _canonical_hwp_base(hwp_path, data_root=data_root, source_sha256=digest)
+
+    try:
+        document = extract_hwp(hwp_path)
+    except Exception as exc:  # noqa: BLE001 - one bad source must not stop a batch
+        result["error"] = f"extraction failed: {exc}"
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["extraction_failed"]
+        return result
+
+    if document.is_encrypted or not document.is_valid:
+        result["status"] = "quarantine"
+        result["error"] = document.error or (
+            "encrypted (no password)" if document.is_encrypted else "invalid/corrupt or oversized"
+        )
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["encrypted" if document.is_encrypted else "invalid_document"]
+        return result
+
+    lines = _logical_hwp_lines(document.text)
+    character_count = sum(len(line["text"]) for line in lines)
+    has_text_layer = character_count >= _SCANNED_AVG_CHARS_THRESHOLD
+    result["pages"] = [
+        {
+            "page": 1,
+            "width_pt": None,
+            "height_pt": None,
+            "rotation": None,
+            "lines": lines,
+        }
+    ]
+    result["status"] = "ok"
+    result["quality"] = {
+        "has_text_layer": has_text_layer,
+        "needs_ocr": False,
+        "needs_quarantine": False,
+        "pages_needing_ocr": [],
+        "avg_chars_per_page": None,
+        "warnings": [] if has_text_layer else ["little_or_no_text"],
+    }
+    return result
 
 
 def _text_to_spans(text: str) -> list[dict[str, Any]]:
