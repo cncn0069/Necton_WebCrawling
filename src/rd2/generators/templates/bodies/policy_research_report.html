@@ -1,0 +1,12 @@
+<p class="section">정책연구 활용결과 보고서</p>
+<table>
+<tr><th>정책연구과제명</th><td>{{ subject }}</td><th>연구기관/책임연구원</th><td>{{ research_org }}/{{ research_lead }}</td></tr>
+<tr><th>부서/과제담당관</th><td>{{ department }}/{{ dept_manager }}</td><th>담당공무원</th><td>{{ dept_officer }}</td></tr>
+<tr><th>연구기간</th><td colspan="3">{{ production_date }} ~ (진행중)</td></tr>
+<tr><th>활용구분</th><td colspan="3">[ ] 법령 제·개정&nbsp; [ ] 제도개선 및 정책반영&nbsp; [ ] 정책참조&nbsp; [v] 미활용(연구 진행 중)</td></tr>
+<tr><th>연구목적</th><td colspan="3">{{ purpose }}</td></tr>
+<tr><th>연구주요내용</th><td colspan="3">{% for p in progress %}{{ p }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>
+<tr><th>활용목적</th><td colspan="3">연구 완료 후 정책 반영 여부를 검토할 예정임.</td></tr>
+<tr><th>활용결과</th><td colspan="3">연구 진행 중으로 활용 결과는 연구 종료 후 별도 보고 예정.</td></tr>
+</table>
+<p>{{ ending }}</p>

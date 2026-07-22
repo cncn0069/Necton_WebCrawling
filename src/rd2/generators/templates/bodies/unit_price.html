@@ -1,1 +1,10 @@
-<p>{{ supplier }}와의 납품단가 협상 결과를 아래와 같이 보고합니다.</p><div class="divider">－ 협 상 단 가 －</div><table><tr><th>품목</th><th>규격</th><th>수량</th><th>단가(원)</th><th>금액(원)</th></tr>{% for r in price_rows %}<tr>{% for c in r %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}<tr><td>합계</td><td></td><td></td><td></td><td>{{ price_total }}</td></tr></table><p>○ 상기 단가는 협상 결과로서 해당 업체의 영업상 비밀에 해당함.</p><p>{{ ending }}</p>
+<p class="section">용역계약서 개요</p>
+<table><tr><th>계약건명</th><td colspan="3">{{ subject }}</td></tr>
+<tr><th>계약상대자</th><td>{{ supplier }}</td><th>대표자</th><td>{{ supplier_rep }}</td></tr>
+<tr><th>계약번호</th><td>{{ contract_no }}</td><th>계약일자</th><td>{{ production_date }}</td></tr>
+<tr><th>계약금액</th><td>일금 {{ price_total }}원</td><th>계약방법</th><td>수의계약</td></tr>
+</table>
+<p class="section">품목·규격 내역</p>
+<table><tr><th>품목</th><th>규격</th><th>수량</th><th>단가(원)</th><th>금액(원)</th></tr>{% for r in price_rows %}<tr>{% for c in r %}<td>{{ c }}</td>{% endfor %}</tr>{% endfor %}<tr><td>합계</td><td></td><td></td><td></td><td>{{ price_total }}</td></tr></table>
+<p>○ 상기 계약금액·단가 내역은 계약상대자({{ supplier }})의 영업상 비밀에 해당하여, 공개할 경우 정당한 이익을 해할 우려가 있음.</p>
+<p>붙임&nbsp;&nbsp;과업지시서, 산출내역서 각 1부.&nbsp;&nbsp;{{ ending }}</p>

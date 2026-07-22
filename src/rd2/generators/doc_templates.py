@@ -253,7 +253,7 @@ TEMPLATES: dict[tuple[str, str], DocTemplateSpec] = {
         template_id="T4-1", clause_no="4", doc_type=DOC_TYPE_MEETING_MINUTES,
         approval_state=ApprovalState.PENDING, approval_signed_count=1,
         recipient="내부결재", disclosure_label="비공개(4)",
-        body_format="legal_proceeding",
+        body_format="legal_proceeding", form_format="meeting_record_form",
         forbidden_phrases=("수사 완료", "판결 확정", "사건 종결"),
         description="진행 중인 재판·수사·공소유지·교정·보안처분 관련 회의자료.",
     ),
@@ -340,7 +340,7 @@ TEMPLATES: dict[tuple[str, str], DocTemplateSpec] = {
         approval_signed_count=1,
         recipient="내부결재",
         disclosure_label="비공개(5)",
-        body_format="meeting_pending",
+        body_format="meeting_pending", form_format="meeting_record_form",
         # 실제 molit 수도권정비실무위원회 회의록에서 확인한 결과 표기 관례가
         # <조건부의결>/<보류> — 5호(의사결정 과정)는 결론이 미확정이어야
         # 하므로 확정 의결 표현이 본문에 있으면 모순이다.
@@ -435,6 +435,12 @@ _DOC_FORM_FORMAT = {
     DOC_TYPE_POLICY_MATERIAL: "policy_brief_form",
     DOC_TYPE_MEETING_MINUTES: "meeting_record_form",
 }
+# TEMPLATES는 (조항, doc_type) 키라 같은 조항·문서유형을 공유하는 여러 세부조항
+# (예: "5"+report=T5-8 감사·검사, T5-16 기술개발)을 동시에 선언할 수 없다. 이런
+# template_id별 예외적인 본문 골격만 이 사전으로 덮어써 fallback 기본값과 분리한다.
+_TEMPLATE_ID_BODY_FORMAT_OVERRIDE = {
+    "T5-16": "policy_research_report",  # 정책연구 활용결과 보고서(서식 8) 전용 표
+}
 def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
     existing = {spec.template_id: spec for spec in TEMPLATES.values()}
     variants: dict[tuple[str, str, str], DocTemplateSpec] = {}
@@ -453,7 +459,10 @@ def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
                 subclause_key=target.subclause_key,
                 approval_signed_count=1 if state is ApprovalState.PENDING else 0,
                 recipient="내부결재", disclosure_label=f"비공개({target.clause_no})",
-                body_format=_DOC_BODY_FORMAT.get(target.doc_type, _CLAUSE_BODY_FORMAT[target.clause_no]),
+                body_format=_TEMPLATE_ID_BODY_FORMAT_OVERRIDE.get(
+                    target.template_id,
+                    _DOC_BODY_FORMAT.get(target.doc_type, _CLAUSE_BODY_FORMAT[target.clause_no]),
+                ),
                 form_format=_DOC_FORM_FORMAT.get(target.doc_type, "official_form"),
                 description=f"{target.subclause_label} 관련 {target.doc_type} 전용 템플릿.",
             )

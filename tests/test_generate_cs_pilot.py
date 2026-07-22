@@ -597,9 +597,12 @@ class TestRenderPdfsForCsv:
         self._write_sample_csv(csv_path)
         pdf_dir = tmp_path / "pdfs"
 
-        rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 2
+        assert inserted == 0  # store를 안 넘겼으니 RDS 삽입 없음
+        assert dup_skipped == 0
+        assert rds_errors == 0
         # 2026-07-21 사용자 결정: PDF 파일명은 row_id가 아니라 문서 제목(title)
         # 기반이어야 한다 — row_id는 여전히 CSV 컬럼으로만 남는다.
         assert (pdf_dir / "테스트_문서.pdf").exists()  # S — 마크 없음
@@ -641,9 +644,12 @@ class TestRenderPdfsForCsv:
             writer.writerows(rows)
 
         pdf_dir = tmp_path / "pdfs"
-        rendered = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
 
         assert rendered == 5
+        assert inserted == 0
+        assert dup_skipped == 0
+        assert rds_errors == 0
         # 로고는 2종류(국정원/정부부처)뿐이므로 캐시가 재사용되면 파일도 2개여야 한다.
         watermark_files = list(pdf_dir.glob("_watermark_*.png"))
         assert len(watermark_files) == 2
@@ -677,14 +683,140 @@ class TestRenderPdfsForCsv:
             writer.writeheader()
             writer.writerow(row)
 
-        rendered = pilot.render_pdfs_for_csv(csv_path, tmp_path / "pdfs", sampling_seed=42)
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42
+        )
 
         assert rendered == 0
+        assert inserted == 0
+        assert dup_skipped == 0
+        assert rds_errors == 0
         assert not (tmp_path / "pdfs" / "5-span-0.pdf").exists()
 
     def test_missing_csv_raises_clear_error(self, tmp_path):
         with pytest.raises(RuntimeError, match="CSV 파일이 없습니다"):
             pilot.render_pdfs_for_csv(tmp_path / "does_not_exist.csv", tmp_path / "pdfs", sampling_seed=42)
+
+
+class _FakeDocumentStore:
+    """render_pdfs_for_csv(store=...) 테스트용 — 실제 RDS 연결 없이 upsert 호출만 기록한다."""
+
+    def __init__(self, dup_source_urls: set | None = None):
+        self.upserted: list = []
+        self._dup_source_urls = dup_source_urls or set()
+
+    def upsert(self, doc) -> bool:
+        if doc.source_url in self._dup_source_urls:
+            return False
+        self.upserted.append(doc)
+        return True
+
+
+class TestRenderPdfsForCsvCommitsToRds:
+    """2026-07-21: render_pdfs_for_csv(store=...)가 렌더링 시점에 바로 RDS에
+    upsert하는 경로(별도 반영 스크립트 없이 --commit-to-rds로 통합)."""
+
+    def _write_csv(self, csv_path, rows):
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=pilot.CSV_FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _row(self, **overrides):
+        row = {name: "" for name in pilot.CSV_FIELDNAMES}
+        row.update(
+            {
+                "row_id": "5-span-0",
+                "clause_no": "5",
+                "cso_classification": "S",
+                "title": "테스트 문서",
+                "ordering_agency": "경상북도",
+                "body_text": "본문 내용입니다.",
+                "disclosure_status": "비공개",
+                "non_disclosure_reason": "제5호 — 감사·감독·검사",
+                "source": "synthetic-llm",
+                "status": "ok",
+            }
+        )
+        row.update(overrides)
+        return row
+
+    def test_inserts_ok_rows_with_deterministic_source_url(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        store = _FakeDocumentStore()
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42, store=store, repo_root=tmp_path
+        )
+
+        assert rendered == 1
+        assert inserted == 1
+        assert dup_skipped == 0
+        assert rds_errors == 0
+        assert len(store.upserted) == 1
+        doc = store.upserted[0]
+        assert doc.source_url == "synthetic://cs-pilot/5-span-0"
+        assert doc.body_file_path == str((tmp_path / "pdfs" / "테스트_문서.pdf").relative_to(tmp_path))
+
+    def test_skips_non_ok_rows(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row(status="empty_body", body_text="")])
+        store = _FakeDocumentStore()
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42, store=store, repo_root=tmp_path
+        )
+
+        assert rendered == 1  # PDF 렌더링 자체는 status와 무관(기존 동작 유지)
+        assert inserted == 0
+        assert store.upserted == []
+
+    def test_duplicate_row_is_skipped_not_reinserted(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        store = _FakeDocumentStore(dup_source_urls={"synthetic://cs-pilot/5-span-0"})
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42, store=store, repo_root=tmp_path
+        )
+
+        assert inserted == 0
+        assert dup_skipped == 1
+        assert rds_errors == 0
+
+    def test_malformed_row_records_error_without_aborting_batch(self, tmp_path):
+        """disclosure_status가 비어있으면 Document 생성이 실패한다(잘못된 enum
+        값) — 이 행은 rds_errors로 세고, 다음 행 렌더링/삽입은 계속돼야 한다."""
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        rows = [
+            self._row(row_id="5-span-0", disclosure_status=""),
+            self._row(row_id="5-span-1"),
+        ]
+        self._write_csv(csv_path, rows)
+        store = _FakeDocumentStore()
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42, store=store, repo_root=tmp_path
+        )
+
+        assert rendered == 2  # 두 행 다 PDF는 렌더링됨
+        assert rds_errors == 1
+        assert inserted == 1
+        assert len(store.upserted) == 1
+
+    def test_no_store_means_no_rds_calls(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42
+        )
+
+        assert rendered == 1
+        assert inserted == 0
+        assert dup_skipped == 0
+        assert rds_errors == 0
 
 
 class TestExistingRowIds:

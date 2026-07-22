@@ -145,7 +145,7 @@ class TestRenderDocumentPdf:
         marker = {
             "official_form": 'class="official-fields"',
             "policy_brief_form": 'class="brief-heading"',
-            "meeting_record_form": 'class="meeting-title"',
+            "meeting_record_form": 'class="assembly-registry"',
         }[spec.form_format]
         assert marker in rendered["html"]
 
