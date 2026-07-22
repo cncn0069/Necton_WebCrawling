@@ -88,10 +88,10 @@ def extract_hwp_spans(hwp_path: Path, *, data_root: Path) -> dict[str, Any]:
         return result
 
     if doc.is_encrypted:
-        result["error"] = "encrypted (no password)"
+        result["error"] = doc.error or "encrypted (no password)"
         return result
     if not doc.is_valid:
-        result["error"] = "invalid/corrupt or oversized"
+        result["error"] = doc.error or "invalid/corrupt or oversized"
         return result
 
     spans = _text_to_spans(doc.text)
