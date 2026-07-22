@@ -170,12 +170,18 @@ def extract_hwp(path: Path) -> ExtractedHwpDocument:
     environment["PYTHONPATH"] = (
         source_root if not current_pythonpath else os.pathsep.join((source_root, current_pythonpath))
     )
+    # 자식 프로세스의 stdout이 OS 로케일 코드페이지(Windows 한글 환경의 cp949 등)를
+    # 쓰면 ★ 같은 본문 특수기호를 print(json.dumps(..., ensure_ascii=False))가
+    # 인코딩하지 못해 자식이 비정상 종료된다 — 그러면 멀쩡한 문서가 worker_exit로
+    # 격리 처리된다. 자식 stdout과 부모의 디코딩을 모두 UTF-8로 고정해 방지한다.
+    environment["PYTHONIOENCODING"] = "utf-8"
     command = [sys.executable, "-m", "rd2.extractors.hwp", "--worker", str(path.resolve())]
     try:
         completed = subprocess.run(
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=_HWP_PARSE_TIMEOUT_SECONDS,
             check=False,
             env=environment,
