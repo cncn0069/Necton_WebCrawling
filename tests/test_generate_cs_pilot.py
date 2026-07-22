@@ -597,7 +597,11 @@ class TestRenderPdfsForCsv:
         self._write_sample_csv(csv_path)
         pdf_dir = tmp_path / "pdfs"
 
-        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
+        # pre_mark_ratio=0.0: 이 테스트는 마크없는 변형(별도 기능, DEFAULT_PRE_MARK_RATIO=1.0)이
+        # 아니라 기본 렌더링·워터마크 캐시 동작만 검증한다.
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=0.0
+        )
 
         assert rendered == 2
         assert inserted == 0  # store를 안 넘겼으니 RDS 삽입 없음
@@ -644,7 +648,11 @@ class TestRenderPdfsForCsv:
             writer.writerows(rows)
 
         pdf_dir = tmp_path / "pdfs"
-        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(csv_path, pdf_dir, sampling_seed=42)
+        # pre_mark_ratio=0.0: 이 테스트는 로고별 워터마크/레터헤드 캐시 재사용만
+        # 검증한다 — 마크없는 변형(DEFAULT_PRE_MARK_RATIO=1.0)은 별도 테스트에서 다룬다.
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=0.0
+        )
 
         assert rendered == 5
         assert inserted == 0
@@ -817,6 +825,131 @@ class TestRenderPdfsForCsvCommitsToRds:
         assert inserted == 0
         assert dup_skipped == 0
         assert rds_errors == 0
+
+
+class TestSelectPreMarkVariant:
+    def test_ratio_zero_never_selects(self):
+        assert pilot._select_pre_mark_variant("5-span-0", 42, 0.0) is False
+
+    def test_ratio_one_always_selects(self):
+        assert pilot._select_pre_mark_variant("5-span-0", 42, 1.0) is True
+
+    def test_deterministic_for_same_row_id_and_seed(self):
+        results = {pilot._select_pre_mark_variant("1-fallback-3", 42, 0.5) for _ in range(20)}
+        assert len(results) == 1
+
+
+class TestRenderPdfsForCsvPreMarkVariant:
+    """2026-07-22: C 행 일부를 마크 없이 한 번 더 렌더링하는 --pre-mark-ratio.
+    분류기가 본문 대신 대외비/군사기밀 마크 픽셀만 보고 C/S를 구분하지 않도록,
+    실제 배포 대상엔 마크가 아직 안 찍힌 문서도 섞여 있다는 전제로 도입됨."""
+
+    def _row(self, **overrides):
+        row = {name: "" for name in pilot.CSV_FIELDNAMES}
+        row.update(
+            {
+                "row_id": "1-fallback-0",
+                "clause_no": "1",
+                "cso_classification": "C",
+                "title": "합성 폴백 문서",
+                "ordering_agency": "실제기관명",
+                "body_text": "폴백 본문입니다.",
+                "disclosure_status": "비공개",
+                "non_disclosure_reason": "제1호 — 법률상 비밀",
+                "source": "synthetic-llm",
+                "status": "ok",
+            }
+        )
+        row.update(overrides)
+        return row
+
+    def _write_csv(self, csv_path, rows):
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=pilot.CSV_FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_ratio_zero_explicitly_disables_variant(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        pdf_dir = tmp_path / "pdfs"
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=0.0
+        )
+
+        assert rendered == 1
+        assert not any("_2" in p.name for p in pdf_dir.glob("*.pdf"))
+
+    def test_default_ratio_is_one_and_renders_variant_for_c_row(self, tmp_path):
+        """DEFAULT_PRE_MARK_RATIO=1.0 — pre_mark_ratio를 안 주면 C행마다
+        마크있음:마크없음 50:50이 기본 동작이다(2026-07-22 결정)."""
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        pdf_dir = tmp_path / "pdfs"
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42
+        )
+
+        assert rendered == 2
+
+    def test_ratio_one_renders_additional_unmarked_variant_for_c_row(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        pdf_dir = tmp_path / "pdfs"
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=1.0
+        )
+
+        assert rendered == 2
+        pdfs = sorted(p.name for p in pdf_dir.glob("*.pdf"))
+        assert pdfs == ["합성_폴백_문서.pdf", "합성_폴백_문서_2.pdf"]
+
+    def test_ratio_one_does_not_affect_s_row(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(
+            csv_path,
+            [
+                self._row(
+                    row_id="5-span-0", clause_no="5", cso_classification="S",
+                    non_disclosure_reason="제5호 — 감사·감독·검사",
+                )
+            ],
+        )
+        pdf_dir = tmp_path / "pdfs"
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=1.0
+        )
+
+        assert rendered == 1
+
+    def test_variant_inserted_to_rds_with_distinct_source_url(self, tmp_path):
+        csv_path = tmp_path / "cs_pilot_output.csv"
+        self._write_csv(csv_path, [self._row()])
+        store = _FakeDocumentStore()
+
+        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
+            csv_path, tmp_path / "pdfs", sampling_seed=42, store=store,
+            repo_root=tmp_path, pre_mark_ratio=1.0,
+        )
+
+        assert rendered == 2
+        assert inserted == 2
+        assert rds_errors == 0
+        source_urls = sorted(doc.source_url for doc in store.upserted)
+        assert source_urls == [
+            "synthetic://cs-pilot/1-fallback-0",
+            "synthetic://cs-pilot/1-fallback-0-premark",
+        ]
+        # 본문 내용은 마크 유무와 무관하게 동일해야 한다 — 변형이 만드는 건
+        # 시각적 마크 차이뿐, 라벨/본문은 그대로.
+        bodies = {doc.body_text for doc in store.upserted}
+        assert bodies == {"폴백 본문입니다."}
+        classifications = {doc.cso_classification.value for doc in store.upserted}
+        assert classifications == {"C"}
 
 
 class TestExistingRowIds:
