@@ -6,6 +6,7 @@ import base64
 import os
 import tempfile
 from dataclasses import dataclass
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
@@ -40,6 +41,7 @@ _SYNTHETIC_PETITIONER_NAMES = ("오세림", "한도윤", "임가언", "신우철
 _SYNTHETIC_RANKS = ("행정사무관", "공업사무관", "시설사무관", "행정주사", "행정서기")
 _SYNTHETIC_DEPARTMENTS = ("경영관리과", "장비구매과", "기획조정과", "운영지원과", "총무과")
 _SYNTHETIC_SUPPLIERS = ("한빛정보시스템(주)", "누리테크(주)", "(주)다솔아이씨티")
+_SYNTHETIC_RESEARCH_ORGS = ("한빛정책연구원", "다솔기술연구소", "누리행정연구원")
 _SYNTHETIC_ITEMS = (
     ("업무용 데스크톱", "i7/16GB/512GB", 1_250_000),
     ("네트워크 스위치", "48포트 기가비트", 2_840_000),
@@ -51,6 +53,27 @@ _SYNTHETIC_ADDRESSES = (
     "우 54321  다솔시 미래로 24 (새길동)",
     "우 33221  누리시 행정로 7 (온빛동)",
 )
+# 회의록 셸 — 제22대국회 제436회(임시회) 제4차 국회본회의(전체회의) (2026.06.30.)
+# 회의록에서 확인한 등록형 헤더(회기·차수·일시), 의사일정, 개의/산회 시각,
+# 발언자 태그(◯직책성명) 관례를 모든 meeting_minutes 템플릿 공통 셸로 사용한다.
+# 실제 회기·발언자·안건은 국회 사안이므로 복사하지 않고 위원회명·역할·발언은 합성한다.
+_WEEKDAYS_KO = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def _assembly_time(hour: int, minute: int) -> str:
+    period = "오전" if hour < 12 else "오후"
+    display_hour = hour if hour <= 12 else hour - 12
+    return f"{period} {display_hour}시 {minute:02d}분"
+
+
+def _object_particle(word: str) -> str:
+    """받침 유무에 따라 '을'/'를'을 고른다 — 의사일정 상정 문구용."""
+    if not word:
+        return "를"
+    last = word[-1]
+    if "가" <= last <= "힣":
+        return "을" if (ord(last) - 0xAC00) % 28 != 0 else "를"
+    return "를"
 
 
 @dataclass(frozen=True)
@@ -237,7 +260,12 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
         qty, amount = 2 + (seed + i) % 8, unit * (2 + (seed + i) % 8)
         total += amount
         price_rows.append([item, spec, str(qty), f"{unit:,}", f"{amount:,}"])
-    context.update(price_rows=price_rows, price_total=f"{total:,}", supplier=_SYNTHETIC_SUPPLIERS[seed % len(_SYNTHETIC_SUPPLIERS)])
+    context.update(
+        price_rows=price_rows, price_total=f"{total:,}",
+        supplier=_SYNTHETIC_SUPPLIERS[seed % len(_SYNTHETIC_SUPPLIERS)],
+        supplier_rep=_SYNTHETIC_SIGNER_NAMES[(seed + 5) % len(_SYNTHETIC_SIGNER_NAMES)],
+        contract_no=f"R{25 + seed % 3}TA{10000 + seed % 90000:05d}-00",
+    )
     petitioner = _petitioner(seed)
     in_progress = status is AdminStatus.PETITION_IN_PROGRESS
     results = paragraphs[1:] or ["관련 사실관계를 확인 중이며, 확인 내용을 바탕으로 검토할 예정입니다." if in_progress else "관련 규정을 검토한 결과를 안내드립니다."]
@@ -249,7 +277,76 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
         civil_result_heading="2. 확인 진행 상황" if in_progress else "2. 검토 결과",
         civil_closing="ㅇ 사실관계 확인 후 처리 결과를 별도로 안내드릴 예정입니다." if in_progress else "ㅇ 본 회신 내용에 이의가 있으신 경우 담당 부서로 문의하시기 바랍니다.",
     )
+    context.update(_assembly_context(row, seed, context["discussion"], context["subject"]))
+    context.update(_bid_notice_context(seed, row.get("production_date") or ""))
+    context.update(
+        research_org=_SYNTHETIC_RESEARCH_ORGS[seed % len(_SYNTHETIC_RESEARCH_ORGS)],
+        research_lead=_SYNTHETIC_SIGNER_NAMES[(seed + 2) % len(_SYNTHETIC_SIGNER_NAMES)],
+        dept_manager=_SYNTHETIC_SIGNER_NAMES[(seed + 4) % len(_SYNTHETIC_SIGNER_NAMES)],
+        dept_officer=_SYNTHETIC_SIGNER_NAMES[(seed + 6) % len(_SYNTHETIC_SIGNER_NAMES)],
+    )
     return context
+
+
+def _bid_notice_context(seed: int, production_date: str) -> dict:
+    """bid_review 셸 전용 — 실제 LH 전자입찰공고(입찰공고.pdf)의 건명·금액·일정 표
+    구조를 참고하되, 제5호(공고 게시 전 내부검토)이므로 모든 일정은 '예정'이다."""
+    base_price = 50_000_000 + (seed * 37_919) % 400_000_000
+    try:
+        base_date = date.fromisoformat(production_date)
+    except ValueError:
+        base_date = date(2026, 7, 16)
+    notice_date = base_date + timedelta(days=7 + seed % 5)
+    submit_open = notice_date + timedelta(days=3)
+    submit_close = notice_date + timedelta(days=7)
+    open_at = submit_close
+    return {
+        "bid_estimated_price": f"{base_price:,}",
+        "bid_vat": f"{base_price // 10:,}",
+        "bid_notice_date": f"{notice_date.isoformat()}(예정)",
+        "bid_submit_open": submit_open.isoformat(),
+        "bid_submit_close": submit_close.isoformat(),
+        "bid_open_at": f"{open_at.isoformat()} 14:00(예정)",
+    }
+
+
+def _assembly_context(row: dict, seed: int, discussion: list[str], subject: str) -> dict:
+    """meeting_minutes 셸 전용 필드 — 실제 국회본회의 회의록의 등록형 헤더·의사일정·
+    개의/산회 시각·발언자 태그(◯직책성명) 관례를 위원회명·발언은 합성해 재사용한다."""
+    chair_role = row.get("meeting_chair_role") or "위원장"
+    member_role = row.get("meeting_member_role") or "위원"
+    chair_name = _SYNTHETIC_SIGNER_NAMES[seed % len(_SYNTHETIC_SIGNER_NAMES)]
+    member_name = _SYNTHETIC_SIGNER_NAMES[(seed + 3) % len(_SYNTHETIC_SIGNER_NAMES)]
+    speakers = [
+        {
+            "role": chair_role, "name": chair_name,
+            "line": f"의사일정 제1항 {subject}{_object_particle(subject)} 상정합니다.",
+        }
+    ]
+    for i, line in enumerate(discussion):
+        role, name = (member_role, member_name) if i % 2 == 0 else (chair_role, chair_name)
+        speakers.append({"role": role, "name": name, "line": line})
+    convene_hour, convene_minute = 14 + seed % 4, (seed * 7) % 60
+    adjourn_hour, adjourn_minute = convene_hour + 1 + seed % 2, (seed * 11) % 60
+    weekday = "-"
+    production_date = row.get("production_date") or ""
+    try:
+        weekday = _WEEKDAYS_KO[date.fromisoformat(production_date).weekday()]
+    except ValueError:
+        pass
+    return {
+        "assembly_committee_name": row.get("meeting_committee_name") or f"{row.get('department') or '실무'} 회의",
+        "assembly_session_kind": row.get("meeting_session_kind") or "정례회의",
+        "assembly_session_label": f"제{58 + seed % 40}회",
+        "assembly_doc_label": f"제{1 + seed % 9}차 회의록",
+        "assembly_weekday": weekday,
+        "assembly_convene_time": _assembly_time(convene_hour, convene_minute),
+        "assembly_adjourn_time": _assembly_time(adjourn_hour, adjourn_minute),
+        "assembly_agenda_items": [subject],
+        "assembly_speakers": speakers,
+        "assembly_chair_role": chair_role,
+        "assembly_chair_name": chair_name,
+    }
 
 
 def _render_context(

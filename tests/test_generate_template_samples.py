@@ -23,19 +23,22 @@ def test_strict_source_validation_reports_missing_local_corpus(tmp_path, monkeyp
         samples._verify_samples(require_source_files=True)
 
 
-def test_one_sample_per_template_selects_all_56_templates_once():
-    """56 = 53 + press_release 3건(5호/2호/3호, 2026-07-21 신규)."""
+def test_one_sample_per_template_selects_all_61_templates_once():
+    """61 = 56 + 5호 bid_contract/decision_review 그룹 확장분(T5-10~T5-15,
+    2026-07-21 신규 문서유형-조건부 행정상태 축 추가로 5호가 10개→16개)."""
     selected = samples._selected_samples(1)
 
-    assert len(selected) == 56
-    assert len({sample.template_id for sample in selected}) == 56
+    assert len(selected) == 61
+    assert len({sample.template_id for sample in selected}) == 61
 
 
-def test_remaining_44_templates_have_real_source_references():
+def test_remaining_27_templates_have_real_source_references():
+    """27 = 61 - 34(SAMPLES에 개별 선언된 템플릿, 2026-07-22 5~8호 재작업으로
+    12개에서 34개로 확장). 나머지는 문서유형 기본 참조(_SOURCE_BY_DOC_TYPE)를 쓴다."""
     dedicated_ids = {sample.template_id for sample in samples.SAMPLES}
     remaining = [sample for sample in samples._selected_samples(1) if sample.template_id not in dedicated_ids]
 
-    assert len(remaining) == 44
+    assert len(remaining) == 27
     assert all(sample.provenance_level == "structural_reference" for sample in remaining)
     assert all(sample.sources and sample.sources[0].path.startswith("data/") for sample in remaining)
 

@@ -46,3 +46,16 @@ th { background: #f3f3f3; font-weight: 600; }
 .meeting-agenda td { text-align: left; }
 .meeting-agenda td p { margin: .8mm 0; }
 .notification-table th { background: #dbe5f1; }
+.assembly-registry { text-align: center; margin: 1mm 0 3mm; }
+.assembly-session { font-size: 10.5pt; margin: 0; }
+.assembly-kind { font-size: 9.5pt; color: #444; margin: 0 0 2mm; }
+.assembly-title { font-size: 18pt; font-weight: 700; margin: 1mm 0; }
+.assembly-doc-label { font-size: 10pt; color: #444; margin: 0 0 2mm; }
+.assembly-office { font-size: 9.5pt; margin: 0; }
+.assembly-datetime { font-size: 9.5pt; margin: 0 0 3mm; }
+.assembly-agenda { margin: 2mm 0 3mm; }
+.assembly-agenda p { margin: .6mm 0; }
+.assembly-time { text-align: center; color: #444; font-size: 9pt; margin: 2mm 0; }
+.assembly-speaker-tag { font-weight: 700; margin: 2.5mm 0 0; }
+.assembly-line { margin: .4mm 0 0 6mm; }
+.assembly-conclusion { font-weight: 700; margin: 3mm 0 0; }

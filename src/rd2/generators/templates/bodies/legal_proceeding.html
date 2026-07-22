@@ -1,3 +1,4 @@
-<div class="divider">－ 아 래 －</div>
-<p><strong>1. 사건·절차 개요</strong></p><p>o {{ purpose }}</p>
-<p><strong>2. 현재 진행 상태 및 공개 제한 정보</strong></p>{% for p in progress %}<p>o {{ p }}</p>{% endfor %}<p>{{ ending }}</p>
+{% for s in assembly_speakers %}<p class="assembly-speaker-tag">◯{{ s.role }}{{ s.name }}</p><p class="assembly-line">{{ s.line }}</p>
+{% endfor %}<p class="assembly-speaker-tag">◯{{ assembly_chair_role }}{{ assembly_chair_name }}</p><p class="assembly-line">사건 진행 상황은 다음 회의에서 다시 공유하고, 오늘 논의된 공개 제한 정보는 참석자 외 유출되지 않도록 유의해 주시기 바랍니다.</p>
+<p class="assembly-conclusion">&lt;계속 진행&gt;</p>
+<p>{{ ending }}</p>

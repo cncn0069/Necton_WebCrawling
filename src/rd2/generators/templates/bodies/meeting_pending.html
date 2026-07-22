@@ -1,1 +1,4 @@
-<p class="section">□ 회의개요</p><p>ㅇ 일시 : {{ production_date }}</p><p>ㅇ 참석 : 위원장(주재), 실무위원 — 명단은 심의 종료 시까지 비공개</p><p>ㅇ 안건 : 심의 안건 1건</p><p class="section">안건번호 제{{ agenda_no }}호</p><p>안건명&nbsp;&nbsp;{{ subject }}</p><p class="section">□ 논의내용</p>{% for p in discussion %}<p>{{ 'ㅇ' if loop.index0 % 2 == 0 else '☞' }} {{ p }}</p>{% endfor %}<p class="section">□ 논의결과</p><p>&lt;보류&gt; — 추가 검토 후 차기 회의에서 계속 심의</p><p>{{ ending }}</p>
+{% for s in assembly_speakers %}<p class="assembly-speaker-tag">◯{{ s.role }}{{ s.name }}</p><p class="assembly-line">{{ s.line }}</p>
+{% endfor %}<p class="assembly-speaker-tag">◯{{ assembly_chair_role }}{{ assembly_chair_name }}</p><p class="assembly-line">더 논의하실 위원 계십니까. 없으시면 이 건은 &lt;보류&gt;하고 추가 검토 후 차기 회의에서 계속 심의하겠습니다. 위원 명단은 심의 종료 시까지 비공개로 관리합니다.</p>
+<p class="assembly-conclusion">&lt;보류&gt;</p>
+<p>{{ ending }}</p>
