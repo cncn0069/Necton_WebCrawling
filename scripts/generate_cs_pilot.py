@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import random
@@ -123,6 +124,17 @@ DEFAULT_PER_CELL_TARGET = 2000
 # --per-cell-target 그대로 채운다(그래도 100% 폴백이라는 사실 자체는 계속 표시된다).
 DEFAULT_ZERO_CANDIDATE_TARGET = 50
 DEFAULT_CONCURRENCY = 4  # 설계 문서 "이슈 6" — LLM 호출 동시성, 보수적 기본값
+
+# C(기밀) 행 중 이 비율만큼 대외비/군사기밀 마크·워터마크·레터헤드 없이 추가로
+# 한 번 더 렌더링한다("사전단계" 변형, row_id에 "-premark" 접미사). 마크
+# 유무가 cso_classification과 완전히 결정론적으로 묶여 있으면 RD-1이 "마크 없음"을
+# "비C"의 증거로 오학습할 수 있다 — 실제 배포 대상에 마크가 아직 안 찍힌 문서도
+# 섞여 있고(2026-07-22 사용자 확인), 마크가 실측 판정에 영향을 크게 준다고
+# 보는 이상(2026-07-22 사용자 판단) 절반까지 밀어야 그 방향의 shortcut이 꺾인다.
+# 기본값 1.0 = C행마다 마크있는 버전(항상 1개) + 마크없는 버전(항상 1개 추가)
+# = C 트랙 내 마크있음:마크없음 50:50. "마크 있으면 C"라는 반대 방향 관계는
+# 이 비율과 무관하게 학습 데이터에서 계속 100% 성립한다 — 안 깨진다.
+DEFAULT_PRE_MARK_RATIO = 1.0
 
 # candidates.py는 조항 5/6/7/8만 span 탐지 로직이 있다 — 1~4호는 항상 폴백.
 _SPAN_CLAUSES = ("5", "6", "7", "8")
@@ -1036,6 +1048,19 @@ def _document_from_csv_row(row: dict, output_path: Path, repo_root: Path) -> Doc
     )
 
 
+def _select_pre_mark_variant(row_id: str, seed: int, ratio: float) -> bool:
+    """row_id마다 결정론적으로(재실행해도 동일하게) 사전단계 변형 대상 여부를 정한다.
+
+    실행 순서·--resume 여부에 영향받지 않도록 전역 random 대신 row_id+seed의
+    해시값으로 판정한다.
+    """
+    if ratio <= 0:
+        return False
+    digest = hashlib.sha256(f"{seed}:{row_id}".encode()).hexdigest()
+    frac = int(digest[:8], 16) / 0xFFFFFFFF
+    return frac < ratio
+
+
 def render_pdfs_for_csv(
     csv_path: Path,
     pdf_dir: Path,
@@ -1043,6 +1068,7 @@ def render_pdfs_for_csv(
     sampling_seed: int,
     store: DocumentStore | None = None,
     repo_root: Path | None = None,
+    pre_mark_ratio: float = DEFAULT_PRE_MARK_RATIO,
 ) -> tuple[int, int, int, int]:
     """CSV 행을 기관유형별로 렌더링하되 템플릿 검증 위반 행은 제외한다.
     store가 주어지면(--commit-to-rds) status=ok로 렌더링된 행을 그 자리에서
@@ -1066,6 +1092,14 @@ def render_pdfs_for_csv(
     사용자 결정, _filename_from_title/_unique_pdf_output_path 참고) — row_id는
     CSV 컬럼으로만 남는다. 같은 제목이 반복되면(조항당 시나리오가 3~5개뿐이라
     fallback 문서에서 흔함) "_2", "_3"... 을 붙여 파일명 충돌을 막는다.
+
+    pre_mark_ratio > 0이면 C 행 중 일부(결정론적 선정, _select_pre_mark_variant)를
+    대외비/군사기밀 마크·워터마크·레터헤드 없이 한 번 더 렌더링해 같은 본문의
+    "마크 붙기 전" 변형을 추가로 만든다(row_id에 "-premark" 접미사, 별도
+    dedup_key로 RDS에도 독립된 행으로 들어감). C 라벨이 항상 마크와 함께
+    붙으면 분류기가 본문 대신 마크 픽셀만으로 C/S를 구분하도록 학습할 위험이
+    있어(2026-07-22 CEO 리뷰에서 확인 — 실제 배포 대상에 마크 없는 문서도
+    섞여 있다는 사용자 확인) 도입했다.
     """
     if not csv_path.exists():
         raise RuntimeError(f"CSV 파일이 없습니다: {csv_path} — 먼저 파일럿을 실행하세요.")
@@ -1160,6 +1194,34 @@ def render_pdfs_for_csv(
                     # 그대로 유지). 원인 파악은 아래 로그로.
                     rds_errors += 1
                     print(f"  [rds-error] {row['row_id']}: {exc}")
+
+            if is_confidential and _select_pre_mark_variant(row["row_id"], sampling_seed, pre_mark_ratio):
+                variant_row = dict(row)
+                variant_row["row_id"] = f"{row['row_id']}-premark"
+                variant_output_path = _unique_pdf_output_path(pdf_dir, variant_row, used_filenames)
+                # 마크 관련 인자를 아예 넘기지 않으면 render_document_pdf가
+                # cso_classification과 무관하게 워터마크·스탬프·레터헤드를 전부
+                # 생략한다 — is_confidential 게이팅은 이 렌더러 호출부(위쪽 블록)에만
+                # 있으므로 여기선 그 게이팅을 우회하지 않고 그냥 인자를 안 준다.
+                render_document_pdf(variant_row, category, variant_output_path)
+                rendered += 1
+                print(
+                    f"  [pdf-premark] {variant_row['row_id']} -> {category} -> "
+                    f"마크없음(사전단계) -> {variant_output_path.name}"
+                )
+
+                if store is not None and row.get("status") == "ok":
+                    try:
+                        variant_doc = _document_from_csv_row(variant_row, variant_output_path, rds_root)
+                        if store.upsert(variant_doc):
+                            inserted += 1
+                            print(f"  [rds] {variant_row['row_id']}: 삽입됨 (사전단계 변형)")
+                        else:
+                            dup_skipped += 1
+                            print(f"  [rds-dup] {variant_row['row_id']}: 이미 RDS에 있음, 스킵")
+                    except Exception as exc:  # noqa: BLE001 — 위 본 행과 동일한 이유로 계속 진행
+                        rds_errors += 1
+                        print(f"  [rds-error] {variant_row['row_id']}: {exc}")
     return rendered, inserted, dup_skipped, rds_errors
 
 
@@ -1237,6 +1299,16 @@ def main() -> None:
         help="--target-matrix 셀별 리포트 CSV 경로 (기본: <output>_cell_report.csv)",
     )
     parser.add_argument(
+        "--pre-mark-ratio", type=float, default=DEFAULT_PRE_MARK_RATIO,
+        help=(
+            "C(기밀) 행 중 이 비율만큼 대외비/군사기밀 마크·워터마크·레터헤드 없이 "
+            "추가로 한 번 더 렌더링한다(0.0~1.0, 기본 1.0=C 트랙 내 마크있음:없음 "
+            "50:50). 0.0을 주면 이 기능을 끈다(마크없는 변형 없음, 기존 동작). "
+            "'마크 없음'이 '비C'의 증거로 오학습되는 걸 막기 위함(2026-07-22 결정). "
+            "--render-pdf와 함께만 의미가 있다."
+        ),
+    )
+    parser.add_argument(
         "--commit-to-rds", action="store_true",
         help=(
             "PDF 렌더링과 동시에 status=ok 행을 실제 RDS(rd2 MariaDB) documents "
@@ -1249,6 +1321,8 @@ def main() -> None:
 
     if args.commit_to_rds and not args.render_pdf:
         parser.error("--commit-to-rds는 --render-pdf와 함께 써야 합니다")
+    if not 0.0 <= args.pre_mark_ratio <= 1.0:
+        parser.error("--pre-mark-ratio는 0.0~1.0 범위여야 합니다")
 
     run_tag = args.run_tag.strip()
     if run_tag and re.fullmatch(r"[\w.-]+", run_tag) is None:
@@ -1481,7 +1555,7 @@ def main() -> None:
         try:
             rendered, inserted, dup_skipped, rds_errors = render_pdfs_for_csv(
                 output_path, pdf_dir, sampling_seed=args.sampling_seed,
-                store=store, repo_root=repo_root,
+                store=store, repo_root=repo_root, pre_mark_ratio=args.pre_mark_ratio,
             )
         finally:
             if store is not None:
