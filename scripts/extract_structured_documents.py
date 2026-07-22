@@ -1,8 +1,13 @@
 """PDF/HWP/HWPX를 공통 구조의 JSON으로 추출해 ``data/structured/``에 저장한다.
 
-기존 ``extract_pdf_text.py``는 후속 기밀도 합성 단계가 요구하는 bbox/font span을
-만든다. 이 스크립트는 그 출력을 대체하지 않고, 문서 본문·표와 OCR/격리 필요 여부를
-다른 소비자가 사용할 수 있는 sidecar로 만든다.
+이 스크립트는 표 추출을 조사할 때만 쓰는 선택적 legacy 도구다. 기본 파이프라인은
+본문과 OCR/격리 상태를 canonical v2 ``data/extracted/*.json.gz``에 저장하므로
+``structured`` 사본을 생성하지 않는다. 향후 표 결과를 운영 경로에 붙일 때는 본문을
+복제하지 않는 ``extraction_id`` 기반 sidecar로 분리한다.
+
+canonical v2 추출기는 후속 단계가 쓰는 physical line/bbox/style을 만든다. 이 도구의
+JSON은 그 출력을 대체하지 않으며 본문까지 중복하므로 장기 보관용 sidecar 계약으로
+간주하지 않는다.
 
 사용 예::
 

@@ -2,8 +2,8 @@
 실제로 그려넣어서 레이아웃이 유지되는지 눈으로 확인한다 (RD-2 "다음 할 일 #2"
 사전 검증용, 아직 정식 파이프라인 아니다).
 
-원본 span의 bbox 위치를 흰 사각형으로 지운(redact) 뒤, 같은 위치에 치환
-텍스트를 삽입한다. 원본 PDF에 임베드된 폰트는 서브셋이라 새 글자의 글리프가
+후보가 참조하는 물리 line들의 bbox 합집합을 흰 사각형으로 지운(redact) 뒤,
+같은 위치에 치환 텍스트를 삽입한다. 원본 PDF에 임베드된 폰트는 서브셋이라 새 글자의 글리프가
 없을 수 있어(원문에 없던 한글 등), 대체 폰트로 삽입한다.
 
 MuPDF 내장 CJK 폴백("korea-s"=Droid Sans Fallback)은 원본 문서에 쓰인
@@ -30,16 +30,29 @@ TODO: 지금은 원본 문서 전체를 그대로 저장해서 출력 파일이 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import fitz
 
+from _common import ensure_src_on_path
+
+ensure_src_on_path()
+
+from rd2.augmentation.annotate import annotate_document_in_place  # noqa: E402
+from rd2.extraction.storage import (  # noqa: E402
+    compute_source_sha256,
+    extraction_output_path,
+    read_json_gz,
+)
+
 _REPO_ROOT = Path(__file__).parent.parent
 _DATA_ROOT = _REPO_ROOT / "data"
 _AUGMENTED_LLM_ROOT = _DATA_ROOT / "augmented" / "llm"
 _RECONSTRUCTED_PDF_ROOT = _DATA_ROOT / "augmented" / "reconstructed_pdf"
+_CANDIDATES_ROOT = _DATA_ROOT / "candidates"
 
 # Korean source documents need a font with Korean glyph coverage. Resolve the
 # appropriate platform font at runtime, or accept an explicit --font-file.
@@ -68,17 +81,176 @@ def _default_out_path(augmented_path: Path) -> Path:
     return _RECONSTRUCTED_PDF_ROOT / rel.with_suffix(".pdf")
 
 
-def _extracted_path_for(source_pdf_path: str) -> Path:
-    rel = Path(source_pdf_path).relative_to("data")
-    return _DATA_ROOT / "extracted" / rel.parent / f"{rel.stem}.json"
+def _source_file_path(source_path: str) -> Path:
+    path = Path(source_path)
+    return path if path.is_absolute() else _REPO_ROOT / path
 
 
-def _build_span_index(extracted: dict) -> dict[int, dict]:
-    index: dict[int, dict] = {}
+def _extracted_path_for(source_path: str) -> Path:
+    return extraction_output_path(
+        _source_file_path(source_path),
+        _DATA_ROOT,
+        _DATA_ROOT / "extracted",
+    )
+
+
+def _validate_augmented_candidate_provenance(
+    augmented: dict[str, Any],
+    *,
+    candidates_root: Path = _CANDIDATES_ROOT,
+) -> None:
+    """Reject augmented selections that are not in the current candidate run."""
+
+    if not isinstance(augmented, dict):
+        raise ValueError("augmented 결과의 최상위 값이 JSON 객체가 아닙니다")
+    clause_no = augmented.get("clause_no")
+    if clause_no not in {"5", "6", "7", "8"}:
+        raise ValueError(f"augmented 결과의 clause_no가 잘못되었습니다: {clause_no!r}")
+
+    manifest_path = Path(candidates_root) / "_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"현재 candidate manifest를 읽을 수 없습니다: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("status") != "complete":
+        raise ValueError("현재 candidate manifest가 complete 상태가 아닙니다")
+
+    expected_run_id = manifest.get("run_id")
+    expected_rule_version = manifest.get("rule_version")
+    if not isinstance(expected_run_id, str) or not expected_run_id:
+        raise ValueError("candidate manifest에 run_id가 없습니다")
+    if not isinstance(expected_rule_version, str) or not expected_rule_version:
+        raise ValueError("candidate manifest에 rule_version이 없습니다")
+    if augmented.get("candidate_run_id") != expected_run_id:
+        raise ValueError(
+            "augmented candidate_run_id가 현재 candidate manifest와 일치하지 않습니다"
+        )
+    if augmented.get("candidate_rule_version") != expected_rule_version:
+        raise ValueError(
+            "augmented candidate_rule_version이 현재 candidate manifest와 일치하지 않습니다"
+        )
+
+    counts = manifest.get("counts")
+    expected_count = counts.get(clause_no) if isinstance(counts, dict) else None
+    if not isinstance(expected_count, int) or expected_count < 0:
+        raise ValueError(f"candidate manifest에 {clause_no}호 개수가 없습니다")
+
+    candidate_path = Path(candidates_root) / f"clause_{clause_no}.jsonl"
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    try:
+        with candidate_path.open(encoding="utf-8") as handle:
+            for line_no, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                candidate = json.loads(line)
+                if not isinstance(candidate, dict):
+                    raise ValueError(f"{candidate_path}:{line_no}: JSON 객체가 아닙니다")
+                candidate_id = candidate.get("candidate_id")
+                if not isinstance(candidate_id, str) or not candidate_id:
+                    raise ValueError(f"{candidate_path}:{line_no}: candidate_id가 없습니다")
+                if candidate_id in candidates_by_id:
+                    raise ValueError(f"{candidate_path}:{line_no}: 중복 candidate_id")
+                if candidate.get("run_id") != expected_run_id:
+                    raise ValueError(f"{candidate_path}:{line_no}: run_id 불일치")
+                if candidate.get("rule_version") != expected_rule_version:
+                    raise ValueError(f"{candidate_path}:{line_no}: rule_version 불일치")
+                candidates_by_id[candidate_id] = candidate
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"현재 candidate JSONL을 읽을 수 없습니다: {exc}") from exc
+    if len(candidates_by_id) != expected_count:
+        raise ValueError(
+            "candidate JSONL 개수가 manifest와 일치하지 않습니다: "
+            f"records={len(candidates_by_id)}, manifest={expected_count}"
+        )
+
+    selections = augmented.get("selections")
+    if not isinstance(selections, list):
+        raise ValueError("augmented selections가 배열이 아닙니다")
+    source_path = augmented.get("source_path")
+    expected_fields = {
+        "extraction_id": "extraction_id",
+        "text_sha256": "text_sha256",
+        "line_ids": "line_ids",
+        "page": "page",
+        "original": "text",
+    }
+    for index, selection in enumerate(selections):
+        if not isinstance(selection, dict):
+            raise ValueError(f"selections[{index}]가 JSON 객체가 아닙니다")
+        candidate_id = selection.get("candidate_id")
+        candidate = candidates_by_id.get(candidate_id)
+        if candidate is None:
+            raise ValueError(
+                f"selection candidate_id가 현재 후보 run에 없습니다: {candidate_id!r}"
+            )
+        if candidate.get("source_path") != source_path:
+            raise ValueError(f"selection source_path 불일치: {candidate_id}")
+        if selection.get("clause") != clause_no:
+            raise ValueError(f"selection clause 불일치: {candidate_id}")
+        for selection_field, candidate_field in expected_fields.items():
+            if selection.get(selection_field) != candidate.get(candidate_field):
+                raise ValueError(
+                    f"selection {selection_field}가 현재 후보와 불일치: {candidate_id}"
+                )
+
+
+def _build_line_index(extracted: dict) -> dict[object, dict]:
+    index: dict[object, dict] = {}
     for page in extracted["pages"]:
-        for span in page["spans"]:
-            index[span["span_id"]] = {**span, "page_no": page["page_no"]}
+        for line in page["lines"]:
+            line_id = line["line_id"]
+            if line_id in index:
+                raise ValueError(f"추출 결과에 중복 line_id가 있습니다: {line_id!r}")
+            index[line_id] = {**line, "page": page["page"]}
     return index
+
+
+def _selection_layout(selection: dict, line_index: dict[object, dict]) -> dict | None:
+    line_ids = selection.get("line_ids")
+    if not isinstance(line_ids, list) or not line_ids:
+        raise ValueError(f"selection에 line_ids가 없습니다: {selection!r}")
+    lines = [line_index.get(line_id) for line_id in line_ids]
+    if any(line is None for line in lines):
+        return None
+    resolved = [line for line in lines if line is not None]
+    combined_text = ""
+    for line in resolved:
+        text = str(line.get("cleaned_text") or "")
+        needs_space = bool(combined_text) and not combined_text.endswith(" ") and not text.startswith(" ")
+        combined_text += (" " if needs_space else "") + text
+    original = selection.get("original")
+    if combined_text != original:
+        raise ValueError(
+            f"selection 원문이 현재 line_ids 텍스트와 다릅니다: {selection.get('candidate_id')}"
+        )
+    expected_text_sha256 = selection.get("text_sha256")
+    if (
+        not isinstance(expected_text_sha256, str)
+        or hashlib.sha256(combined_text.encode("utf-8")).hexdigest() != expected_text_sha256
+    ):
+        raise ValueError(
+            f"selection text_sha256가 일치하지 않습니다: {selection.get('candidate_id')}"
+        )
+    pages = {line["page"] for line in resolved}
+    if len(pages) != 1:
+        raise ValueError(f"한 후보의 line_ids가 여러 페이지를 가리킵니다: {line_ids!r}")
+    bboxes = [line.get("bbox_pt") for line in resolved]
+    if any(not isinstance(bbox, list) or len(bbox) != 4 for bbox in bboxes):
+        raise ValueError("PDF 재구성에는 모든 선택 line의 bbox_pt가 필요합니다")
+    concrete_bboxes = [bbox for bbox in bboxes if isinstance(bbox, list)]
+    style_runs = resolved[0].get("style_runs") or []
+    style = style_runs[0] if style_runs else {}
+    return {
+        "page": resolved[0]["page"],
+        "bbox_pt": [
+            min(bbox[0] for bbox in concrete_bboxes),
+            min(bbox[1] for bbox in concrete_bboxes),
+            max(bbox[2] for bbox in concrete_bboxes),
+            max(bbox[3] for bbox in concrete_bboxes),
+        ],
+        "size_pt": float(style.get("size_pt") or 10.0),
+        "color": int(style.get("color") or 0),
+    }
 
 
 def _color_tuple(color_int: int) -> tuple[float, float, float]:
@@ -234,29 +406,40 @@ def main() -> None:
         parser.error("--flatten-dpi must be at least 72")
 
     augmented = json.loads(Path(args.augmented).read_text(encoding="utf-8"))
-    source_pdf_path = augmented["source_pdf_path"]
+    _validate_augmented_candidate_provenance(augmented)
+    source_path = augmented["source_path"]
     selections = augmented.get("selections", [])
     redactions = augmented.get("redactions", [])
     overlays = augmented.get("overlays", [])
     font_path = _resolve_font_path(args.font_file)
 
-    extracted = json.loads(_extracted_path_for(source_pdf_path).read_text(encoding="utf-8"))
-    span_index = _build_span_index(extracted)
+    extracted = read_json_gz(_extracted_path_for(source_path))
+    if extracted.get("schema_version") != 2:
+        raise ValueError("재구성에는 extraction schema_version=2가 필요합니다")
+    if extracted.get("extraction_id") != augmented.get("extraction_id"):
+        raise ValueError("augmented 결과가 현재 extraction_id와 일치하지 않습니다")
+    source_file_path = _source_file_path(source_path)
+    if compute_source_sha256(source_file_path) != extracted.get("source_sha256"):
+        raise ValueError("원본 파일이 canonical 추출 이후 변경되었습니다")
+    annotate_document_in_place(extracted)
+    line_index = _build_line_index(extracted)
 
-    doc = fitz.open(source_pdf_path)
+    doc = fitz.open(source_file_path)
     touched_pages: set[int] = set()
 
     for sel in selections:
-        span_id = sel["span_id"]
-        meta = span_index.get(span_id)
+        candidate_id = sel.get("candidate_id", "<unknown>")
+        if sel.get("extraction_id") != extracted.get("extraction_id"):
+            raise ValueError(f"selection extraction_id 불일치: {candidate_id}")
+        meta = _selection_layout(sel, line_index)
         if meta is None:
-            print(f"  SKIP span_id={span_id}: extracted 데이터에서 못 찾음")
+            print(f"  SKIP candidate_id={candidate_id}: extracted 데이터에서 line_ids를 못 찾음")
             continue
 
-        page = doc[meta["page_no"] - 1]
-        rect = fitz.Rect(meta["bbox"])
+        page = doc[meta["page"] - 1]
+        rect = fitz.Rect(meta["bbox_pt"])
         color = _color_tuple(meta.get("color", 0))
-        fontsize = meta["size"]
+        fontsize = meta["size_pt"]
 
         # 1) 원본 span 영역을 흰색으로 지움
         page.add_redact_annot(rect, fill=(1, 1, 1))
@@ -280,11 +463,14 @@ def main() -> None:
                 break
             size -= 0.5
         if residual < 0:
-            print(f"  WARN span_id={span_id}: 1pt까지 줄여도 안 맞음 (텍스트: {text!r})")
+            print(
+                f"  WARN candidate_id={candidate_id}: "
+                f"1pt까지 줄여도 안 맞음 (텍스트: {text!r})"
+            )
 
-        touched_pages.add(meta["page_no"])
+        touched_pages.add(meta["page"])
         print(
-            f"  span_id={span_id} page={meta['page_no']} "
+            f"  candidate_id={candidate_id} page={meta['page']} "
             f"fontsize {fontsize:.1f}->{size:.1f} : {sel['original']!r} -> {text!r}"
         )
 
@@ -297,7 +483,7 @@ def main() -> None:
         print(f"  panel page={page_no} mode={panel.get('mode', 'redact')}: {panel.get('label', '')!r}")
 
     print(
-        f"Rendered {len(selections)} span replacements, {len(redactions)} withholding panels, "
+        f"Rendered {len(selections)} candidate replacements, {len(redactions)} withholding panels, "
         f"and {len(overlays)} synthetic markers using {font_path}."
     )
 
@@ -314,7 +500,7 @@ def main() -> None:
         print(f"Final PDF flattened at {args.flatten_dpi} DPI to remove font dependencies.")
     doc.close()
 
-    print(f"\n총 {len(selections)}개 span 중 {len(touched_pages)}개 페이지 수정")
+    print(f"\n총 {len(selections)}개 후보 중 {len(touched_pages)}개 페이지 수정")
     print(f"영향받은 페이지: {sorted(touched_pages)}")
     print(f"저장: {out_path}")
 

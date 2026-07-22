@@ -12,7 +12,7 @@
   내용만으로 판단해야 하므로, 학습 데이터 생성도 그 조건을 재현한다 —
   find_candidates.py/candidates.py가 정규식/키워드로 찾아둔 실제 문서 span
   (`data/candidates/clause_{5,6,7,8}.jsonl`)을 근거로 쓴다. 그 span이 가리키는
-  annotated 문서 원문 전체를 LLM에 주고, 거기서 템플릿이 요구하는 필드에 맞는
+  canonical v2 추출 문서의 원문 맥락을 LLM에 주고, 거기서 템플릿이 요구하는 필드에 맞는
   실제 데이터를 추출·재구성한다 — 매칭 span은 "왜 이 조항인지"의 근거 앵커일
   뿐, 실제 추출은 문서 전체 맥락에서 한다. 조항 1~4는 candidates.py에 span
   탐지 로직 자체가 없어(국가안보/진행중 수사 등은 애초에 공개문서에서 매칭될
@@ -47,9 +47,11 @@ import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -63,6 +65,12 @@ import pymysql.cursors
 from dotenv import load_dotenv
 from openai import RateLimitError
 
+from rd2.augmentation.annotate import annotate_document_in_place
+from rd2.extraction.storage import (
+    compute_source_sha256,
+    extraction_output_path,
+    read_json_gz,
+)
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import (
     AGENCY_LOGO_FILENAMES,
@@ -94,7 +102,9 @@ from rd2.storage.db import DocumentStore
 load_dotenv()
 
 CSV_FIELDNAMES = [
-    "row_id", "seed_type", "seed_span_id", "clause_no", "cso_subclause_key",
+    "row_id", "seed_type", "seed_candidate_id", "seed_candidate_run_id", "seed_line_ids",
+    "seed_extraction_id", "seed_text_sha256", "seed_source_path",
+    "clause_no", "cso_subclause_key",
     "cso_classification",
     "title", "ordering_agency", "department", "unit_task", "production_date",
     "subject_category", "matched_span_text", "non_disclosure_reason", "body_text",
@@ -138,6 +148,7 @@ DEFAULT_PRE_MARK_RATIO = 1.0
 
 # candidates.py는 조항 5/6/7/8만 span 탐지 로직이 있다 — 1~4호는 항상 폴백.
 _SPAN_CLAUSES = ("5", "6", "7", "8")
+_CANDIDATE_MANIFEST_NAME = "_manifest.json"
 
 _MAX_SOURCE_DOCUMENT_CHARS = 4000  # generate.py의 _MAX_ANCHOR_TEXT_CHARS와 동일 절단 관례
 # 근거 span을 중심으로 앞/뒤에 배분할 글자 수. 문서 앞부분부터 자르면 근거 span이
@@ -173,7 +184,41 @@ def connect_mariadb() -> pymysql.connections.Connection:
         raise RuntimeError(f"MariaDB 접속 실패: {exc}") from exc
 
 
-def fetch_all_span_candidates(candidates_dir: Path) -> dict[str, list[dict]]:
+def load_candidate_manifest(
+    candidates_dir: Path,
+    *,
+    allow_partial: bool = False,
+) -> dict:
+    path = candidates_dir / _CANDIDATE_MANIFEST_NAME
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"후보 manifest가 없습니다: {path}") from exc
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"후보 manifest를 읽을 수 없습니다: {path} ({exc})") from exc
+
+    status = manifest.get("status")
+    if status != "complete" and not (allow_partial and status == "partial"):
+        raise RuntimeError(
+            f"후보 생성이 완결되지 않았습니다(status={status!r}). "
+            "--allow-partial-candidates를 명시하지 않으면 유료 생성을 시작하지 않습니다."
+        )
+    if not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
+        raise RuntimeError("후보 manifest에 run_id가 없습니다")
+    if not isinstance(manifest.get("counts"), dict):
+        raise RuntimeError("후보 manifest에 counts가 없습니다")
+    if not isinstance(manifest.get("rule_version"), str) or not manifest["rule_version"]:
+        raise RuntimeError("후보 manifest에 rule_version이 없습니다")
+    return manifest
+
+
+def fetch_all_span_candidates(
+    candidates_dir: Path,
+    *,
+    expected_run_id: str | None = None,
+    expected_rule_version: str | None = None,
+    expected_counts: dict[str, int] | None = None,
+) -> dict[str, list[dict]]:
     """data/candidates/clause_{5,6,7,8}.jsonl을 읽어 clause_no로 버킷팅한다.
 
     candidate dict 자체에는 clause_no가 들어있지 않다(candidates.py의
@@ -185,10 +230,35 @@ def fetch_all_span_candidates(candidates_dir: Path) -> dict[str, list[dict]]:
         candidates: list[dict] = []
         if path.exists():
             with path.open("r", encoding="utf-8") as f:
-                for line in f:
+                for line_no, line in enumerate(f, start=1):
                     line = line.strip()
                     if line:
-                        candidates.append(json.loads(line))
+                        candidate = json.loads(line)
+                        if expected_run_id is not None and candidate.get("run_id") != expected_run_id:
+                            raise ValueError(
+                                f"{path}:{line_no}: 후보 run_id가 manifest와 불일치: "
+                                f"record={candidate.get('run_id')!r}, "
+                                f"manifest={expected_run_id!r}"
+                            )
+                        if (
+                            expected_rule_version is not None
+                            and candidate.get("rule_version") != expected_rule_version
+                        ):
+                            raise ValueError(
+                                f"{path}:{line_no}: 후보 rule_version이 manifest와 불일치: "
+                                f"record={candidate.get('rule_version')!r}, "
+                                f"manifest={expected_rule_version!r}"
+                            )
+                        candidates.append(candidate)
+        if expected_counts is not None:
+            expected_count = expected_counts.get(clause_no)
+            if not isinstance(expected_count, int) or expected_count < 0:
+                raise ValueError(f"후보 manifest counts에 {clause_no}호 개수가 없음")
+            if len(candidates) != expected_count:
+                raise ValueError(
+                    f"{path}: 후보 개수가 manifest와 불일치: "
+                    f"records={len(candidates)}, manifest={expected_count}"
+                )
         buckets[clause_no] = candidates
     return buckets
 
@@ -199,84 +269,267 @@ def _sample_candidates(candidates: list[dict], count: int, rng: random.Random) -
     return rng.sample(candidates, count)
 
 
-def load_annotated_document_text(
-    source_pdf_path: str, annotated_root: Path, *, target_span_id: int | None = None
-) -> str | None:
-    """candidate의 source_pdf_path로 원본 annotated JSON을 찾아 원문 텍스트를 재구성한다.
+class CandidateSourceMismatch(ValueError):
+    """후보가 현재 canonical 추출본을 가리키지 않을 때 발생한다."""
 
-    is_boilerplate=false span만 페이지 순서대로 이어붙인다. source_pdf_path는
-    "data/{source}/{doc_type}/{filename}.pdf" 형태(repo-root 기준, OS에 따라
-    구분자가 다를 수 있어 먼저 정규화한다) — 첫 세그먼트(data)를 annotated_root로
-    바꾸고 확장자를 .json으로 바꾸면 annotated JSON 경로가 된다.
 
-    target_span_id가 주어지면 그 span을 기준으로 앞/뒤 문맥을 함께 잘라 반환한다
-    (근거 span 자체는 항상 창 안에 포함됨) — candidates.py가 찾은 근거 span은
-    문서 아무 곳에나 있을 수 있는데, 예전처럼 문서 맨 앞부터 고정 길이로 자르면
-    근거 span이 뒤쪽 페이지에 있을 때 그 주변 문맥이 통째로 빠져 LLM이 참고할
-    실제 내용이 얇아졌다. target_span_id를 못 찾으면(예: span_id 없음, 예전
-    candidate 포맷) 문서 맨 앞부터 자르는 기존 동작으로 폴백한다.
-    """
-    if not source_pdf_path:
-        return None
-    normalized = source_pdf_path.replace("\\", "/")
-    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
-        return None
-    parts = [p for p in normalized.split("/") if p]
-    if (
-        not parts
-        or parts[0].lower() != "data"
-        or any(part in {".", ".."} for part in parts)
-    ):
-        return None
+@dataclass(frozen=True)
+class _DocumentLine:
+    line_id: object
+    page: object
+    text: str
 
-    root = annotated_root.resolve()
-    json_path = root.joinpath(*parts[1:]).with_suffix(".json").resolve()
-    try:
-        json_path.relative_to(root)
-    except ValueError:
-        return None
-    if not json_path.exists():
-        return None
 
-    doc = json.loads(json_path.read_text(encoding="utf-8"))
-    entries: list[tuple[object, str]] = []
-    for page in doc.get("pages", []):
-        for span in page.get("spans", []):
-            if span.get("is_boilerplate"):
-                continue
-            text = (span.get("cleaned_text") or "").strip()
-            if text:
-                entries.append((span.get("span_id"), text))
-    if not entries:
-        return None
+@dataclass(frozen=True)
+class _CachedExtractedDocument:
+    extraction_id: str
+    lines: tuple[_DocumentLine, ...]
+    index_by_line_id: dict[object, int]
 
-    target_index = None
-    if target_span_id is not None:
-        target_index = next(
-            (i for i, (span_id, _) in enumerate(entries) if span_id == target_span_id), None
+
+class _BoundedDocumentCache:
+    """압축 해제·주석 결과를 제한된 수만 보관하고 같은 key 로드는 합친다."""
+
+    def __init__(self, max_entries: int = 32) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be at least 1")
+        self._max_entries = max_entries
+        self._values: OrderedDict[tuple[str, str, str, str], _CachedExtractedDocument] = (
+            OrderedDict()
         )
-    if target_index is None:
-        return "\n".join(text for _, text in entries)[:_MAX_SOURCE_DOCUMENT_CHARS]
+        self._inflight: dict[
+            tuple[str, str, str, str], Future[_CachedExtractedDocument]
+        ] = {}
+        self._lock = threading.Lock()
 
+    def clear(self) -> None:
+        with self._lock:
+            self._values.clear()
+            self._inflight.clear()
+
+    def get_or_load(
+        self,
+        key: tuple[str, str, str, str],
+        loader: Callable[[], _CachedExtractedDocument],
+    ) -> _CachedExtractedDocument:
+        with self._lock:
+            cached = self._values.get(key)
+            if cached is not None:
+                self._values.move_to_end(key)
+                return cached
+            future = self._inflight.get(key)
+            is_loader = future is None
+            if future is None:
+                future = Future()
+                self._inflight[key] = future
+
+        if not is_loader:
+            return future.result()
+
+        try:
+            value = loader()
+        except BaseException as exc:
+            with self._lock:
+                self._inflight.pop(key, None)
+                future.set_exception(exc)
+            raise
+
+        with self._lock:
+            self._values[key] = value
+            self._values.move_to_end(key)
+            while len(self._values) > self._max_entries:
+                self._values.popitem(last=False)
+            self._inflight.pop(key, None)
+            future.set_result(value)
+        return value
+
+
+_EXTRACTED_DOCUMENT_CACHE = _BoundedDocumentCache()
+
+
+def _normalized_source_path(value: str) -> str:
+    return value.replace("\\", "/")
+
+
+def _resolve_source_file(source_path: str, data_root: Path) -> Path:
+    normalized = _normalized_source_path(source_path)
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise CandidateSourceMismatch(f"absolute source_path는 허용되지 않음: {source_path}")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise CandidateSourceMismatch(f"잘못된 source_path: {source_path}")
+    source_file = data_root.parent.joinpath(*parts).resolve()
+    try:
+        source_file.relative_to(data_root.resolve())
+    except ValueError as exc:
+        raise CandidateSourceMismatch(f"source_path가 data root 밖을 가리킴: {source_path}") from exc
+    return source_file
+
+
+def _join_candidate_line_texts(texts: list[str]) -> str:
+    combined = ""
+    for text in texts:
+        needs_space = bool(combined) and not combined.endswith(" ") and not text.startswith(" ")
+        combined += (" " if needs_space else "") + text
+    return combined
+
+
+def _load_extracted_document(
+    source_path: str,
+    candidate_extraction_id: str,
+    *,
+    data_root: Path,
+    extracted_root: Path,
+) -> _CachedExtractedDocument:
+    source_file = _resolve_source_file(source_path, data_root)
+    output_path = extraction_output_path(source_file, data_root, extracted_root)
+    document = read_json_gz(output_path)
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        raise CandidateSourceMismatch(f"v2 추출 문서가 아님: {output_path}")
+    if document.get("status") not in {"ok", "needs_ocr"}:
+        raise CandidateSourceMismatch(
+            f"정상 추출 문서가 아님(status={document.get('status')!r}): {output_path}"
+        )
+    if _normalized_source_path(str(document.get("source_path") or "")) != _normalized_source_path(
+        source_path
+    ):
+        raise CandidateSourceMismatch(f"source_path 불일치: {source_path}")
+
+    extraction_id = document.get("extraction_id")
+    if not isinstance(extraction_id, str) or extraction_id != candidate_extraction_id:
+        raise CandidateSourceMismatch(
+            f"stale candidate extraction_id: candidate={candidate_extraction_id!r}, "
+            f"current={extraction_id!r}"
+        )
+    artifact_source_sha256 = document.get("source_sha256")
+    if not isinstance(artifact_source_sha256, str) or not artifact_source_sha256:
+        raise CandidateSourceMismatch(f"source_sha256가 없는 추출 문서: {output_path}")
+    try:
+        current_source_sha256 = compute_source_sha256(source_file)
+    except OSError as exc:
+        raise CandidateSourceMismatch(f"원본 파일을 읽을 수 없음: {source_file}") from exc
+    if current_source_sha256 != artifact_source_sha256:
+        raise CandidateSourceMismatch(
+            f"stale extraction source_sha256: artifact={artifact_source_sha256!r}, "
+            f"current={current_source_sha256!r}"
+        )
+
+    annotate_document_in_place(document)
+    lines: list[_DocumentLine] = []
+    index_by_line_id: dict[object, int] = {}
+    for page in document.get("pages", []):
+        page_number = page.get("page")
+        for line in page.get("lines", []):
+            if line.get("is_boilerplate"):
+                continue
+            text = str(line.get("cleaned_text") or "")
+            if not text.strip():
+                continue
+            line_id = line.get("line_id")
+            if line_id is None or line_id in index_by_line_id:
+                raise CandidateSourceMismatch(f"누락 또는 중복 line_id: {line_id!r}")
+            index_by_line_id[line_id] = len(lines)
+            lines.append(_DocumentLine(line_id=line_id, page=page_number, text=text))
+
+    return _CachedExtractedDocument(
+        extraction_id=extraction_id,
+        lines=tuple(lines),
+        index_by_line_id=index_by_line_id,
+    )
+
+
+def load_extracted_document_text(
+    candidate: dict,
+    data_root: Path,
+    extracted_root: Path,
+    *,
+    cache: _BoundedDocumentCache | None = None,
+) -> str | None:
+    """v2 후보를 검증하고 해당 line_ids 중심의 텍스트 문맥을 반환한다.
+
+    후보가 현재 추출본과 다르면 문서 앞부분으로 폴백하지 않는다. extraction_id,
+    candidate text hash, line 내용, page를 모두 확인한 뒤에만 LLM 입력을 만든다.
+    """
+    source_path = candidate.get("source_path")
+    extraction_id = candidate.get("extraction_id")
+    line_ids = candidate.get("line_ids")
+    expected_text_sha256 = candidate.get("text_sha256")
+    candidate_text = candidate.get("text")
+    if not isinstance(source_path, str) or not source_path:
+        raise CandidateSourceMismatch("candidate source_path가 없음")
+    if not isinstance(extraction_id, str) or not extraction_id:
+        raise CandidateSourceMismatch("candidate extraction_id가 없음")
+    if not isinstance(line_ids, list) or not line_ids:
+        raise CandidateSourceMismatch("candidate line_ids가 없음")
+    if not isinstance(candidate_text, str):
+        raise CandidateSourceMismatch("candidate text가 없음")
+    if not isinstance(expected_text_sha256, str) or not expected_text_sha256:
+        raise CandidateSourceMismatch("candidate text_sha256가 없음")
+
+    actual_candidate_hash = hashlib.sha256(candidate_text.encode("utf-8")).hexdigest()
+    if actual_candidate_hash != expected_text_sha256:
+        raise CandidateSourceMismatch("candidate text_sha256가 candidate text와 불일치")
+
+    selected_cache = cache or _EXTRACTED_DOCUMENT_CACHE
+    key = (
+        _normalized_source_path(source_path),
+        extraction_id,
+        str(data_root.resolve()),
+        str(extracted_root.resolve()),
+    )
+    document = selected_cache.get_or_load(
+        key,
+        lambda: _load_extracted_document(
+            source_path,
+            extraction_id,
+            data_root=data_root,
+            extracted_root=extracted_root,
+        ),
+    )
+    if not document.lines:
+        return None
+
+    try:
+        target_indexes = [document.index_by_line_id[line_id] for line_id in line_ids]
+    except (KeyError, TypeError) as exc:
+        raise CandidateSourceMismatch(f"candidate line_ids를 현재 추출본에서 찾지 못함: {line_ids}") from exc
+    if target_indexes != sorted(target_indexes) or len(set(target_indexes)) != len(target_indexes):
+        raise CandidateSourceMismatch("candidate line_ids 순서 또는 중복이 잘못됨")
+
+    selected_lines = [document.lines[index] for index in target_indexes]
+    reconstructed_text = _join_candidate_line_texts([line.text for line in selected_lines])
+    if reconstructed_text != candidate_text:
+        raise CandidateSourceMismatch("candidate text가 현재 line_ids 텍스트와 불일치")
+    candidate_page = candidate.get("page")
+    if candidate_page != selected_lines[0].page or any(
+        line.page != candidate_page for line in selected_lines
+    ):
+        raise CandidateSourceMismatch(
+            f"candidate page 불일치: candidate={candidate_page!r}, "
+            f"current={selected_lines[0].page!r}"
+        )
+
+    first_target = target_indexes[0]
+    last_target = target_indexes[-1]
     before: list[str] = []
     before_chars = 0
-    i = target_index - 1
+    i = first_target - 1
     while i >= 0 and before_chars < _CONTEXT_CHARS_BEFORE:
-        before.append(entries[i][1])
-        before_chars += len(entries[i][1]) + 1
+        before.append(document.lines[i].text)
+        before_chars += len(document.lines[i].text) + 1
         i -= 1
     before.reverse()
 
     after: list[str] = []
     after_chars = 0
-    i = target_index + 1
-    while i < len(entries) and after_chars < _CONTEXT_CHARS_AFTER:
-        after.append(entries[i][1])
-        after_chars += len(entries[i][1]) + 1
+    i = last_target + 1
+    while i < len(document.lines) and after_chars < _CONTEXT_CHARS_AFTER:
+        after.append(document.lines[i].text)
+        after_chars += len(document.lines[i].text) + 1
         i += 1
 
-    window = [*before, entries[target_index][1], *after]
-    return "\n".join(window)[:_MAX_SOURCE_DOCUMENT_CHARS]
+    target = [line.text for line in selected_lines]
+    return "\n".join([*before, *target, *after])[:_MAX_SOURCE_DOCUMENT_CHARS]
 
 
 def _with_retry(fn, *, max_attempts: int = 2):
@@ -306,12 +559,13 @@ def generate_span_seeded_row(
     model: str,
     sampling_seed: int,
     conn,
-    annotated_root: Path,
+    data_root: Path,
+    extracted_root: Path,
     db_lock: threading.Lock | None = None,
 ) -> dict | None:
     """candidate(find_candidates.py 결과 1건)로 문서 원문 근거 기반 행을 만든다.
 
-    실제 기관명을 해석하지 못하거나 annotated 원문을 찾지 못하면 None을
+    실제 기관명을 해석하지 못하거나 canonical 추출 원문을 찾지 못하면 None을
     반환한다 — 호출자는 그 candidate를 스킵하고 폴백으로 보충해야 한다
     (가짜 기관명으로 채우지 않는다, R3).
 
@@ -335,12 +589,17 @@ def generate_span_seeded_row(
     subclause_key = infer_subclause_key(
         clause_no, doc_type, keyword_text=matched_span_text
     )
-    source_document_text = load_annotated_document_text(
-        candidate.get("source_pdf_path") or "", annotated_root,
-        target_span_id=candidate.get("span_id"),
-    )
+    try:
+        source_document_text = load_extracted_document_text(
+            candidate,
+            data_root,
+            extracted_root,
+        )
+    except (CandidateSourceMismatch, FileNotFoundError, OSError) as exc:
+        print(f"  [skip] {row_id}: stale/missing canonical extraction: {exc}")
+        return None
     if not source_document_text:
-        print(f"  [skip] {row_id}: annotated 원문을 찾을 수 없어 스킵")
+        print(f"  [skip] {row_id}: canonical 추출 원문이 비어 있어 스킵")
         return None
 
     clause = CLAUSES[clause_no]
@@ -376,7 +635,12 @@ def generate_span_seeded_row(
     return {
         "row_id": row_id,
         "seed_type": "span_seeded",
-        "seed_span_id": candidate.get("span_id") if candidate.get("span_id") is not None else "",
+        "seed_candidate_id": candidate.get("candidate_id") or "",
+        "seed_candidate_run_id": candidate.get("run_id") or "",
+        "seed_line_ids": json.dumps(candidate.get("line_ids") or [], ensure_ascii=False),
+        "seed_extraction_id": candidate.get("extraction_id") or "",
+        "seed_text_sha256": candidate.get("text_sha256") or "",
+        "seed_source_path": candidate.get("source_path") or "",
         "clause_no": clause_no,
         "cso_subclause_key": subclause_key or "",
         "cso_classification": clause.classification.value,
@@ -507,7 +771,12 @@ def generate_fallback_row(
     return {
         "row_id": row_id,
         "seed_type": "synthetic_fallback",
-        "seed_span_id": "",
+        "seed_candidate_id": "",
+        "seed_candidate_run_id": "",
+        "seed_line_ids": "[]",
+        "seed_extraction_id": "",
+        "seed_text_sha256": "",
+        "seed_source_path": "",
         "clause_no": clause_no,
         "cso_subclause_key": subclause_key or "",
         "cso_classification": clause.classification.value,
@@ -568,7 +837,12 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
     return {
         "row_id": ADMIN_STATUS_SAMPLE_ROW_ID,
         "seed_type": "administrative_status",
-        "seed_span_id": "",
+        "seed_candidate_id": "",
+        "seed_candidate_run_id": "",
+        "seed_line_ids": "[]",
+        "seed_extraction_id": "",
+        "seed_text_sha256": "",
+        "seed_source_path": "",
         "clause_no": "",
         "cso_subclause_key": "",
         "cso_classification": "S",
@@ -792,7 +1066,8 @@ def generate_cell_rows(
     model: str,
     sampling_seed: int,
     conn,
-    annotated_root: Path,
+    data_root: Path,
+    extracted_root: Path,
     rng: random.Random,
     fallback_samples: list[tuple[str, str]],
     concurrency: int,
@@ -827,7 +1102,8 @@ def generate_cell_rows(
     def _make_span_task(row_id: str, candidate: dict):
         return lambda: generate_span_seeded_row(
             row_id, clause_no, candidate, client=client, model=model,
-            sampling_seed=sampling_seed, conn=conn, annotated_root=annotated_root,
+            sampling_seed=sampling_seed, conn=conn, data_root=data_root,
+            extracted_root=extracted_root,
             db_lock=db_lock,
         )
 
@@ -1239,6 +1515,11 @@ def main() -> None:
         help="기존 CSV에 이미 있는 row_id는 건너뛰고 이어서 생성",
     )
     parser.add_argument(
+        "--allow-partial-candidates",
+        action="store_true",
+        help="실패 문서가 있는 partial 후보 run도 명시적으로 허용",
+    )
+    parser.add_argument(
         "--clauses", default=None,
         help="쉼표구분 조항 목록만 처리(예: 1,5,6). 기본: 홀드 아닌 전체 조항",
     )
@@ -1259,7 +1540,7 @@ def main() -> None:
         help=(
             "여러 EC2 인스턴스에서 사이트별로 나눠 병렬 실행한 뒤 CSV를 합칠 때 "
             "row_id 충돌을 막는 태그(예: --run-tag moel). row_id 순번(span-{idx}/"
-            "fallback-{fidx})은 로컬 data/annotated 커버리지에 따라 인스턴스마다 "
+            "fallback-{fidx})은 로컬 candidate artifact 커버리지에 따라 인스턴스마다 "
             "달라질 수 있어 태그 없이 합치면 서로 다른 문서가 같은 row_id를 갖게 "
             "된다. 지정하면 row_id 앞에 붙는다(예: 'moel-5-span-0'). [\\w.-]만 허용."
         ),
@@ -1333,8 +1614,9 @@ def main() -> None:
 
     repo_root = Path(__file__).parent.parent
     output_path = Path(args.output) if args.output else repo_root / "cs_pilot_output.csv"
+    data_root = repo_root / "data"
     candidates_dir = repo_root / "data" / "candidates"
-    annotated_root = repo_root / "data" / "annotated"
+    extracted_root = data_root / "extracted"
 
     clause_nos = (
         [c.strip() for c in args.clauses.split(",")]
@@ -1352,6 +1634,21 @@ def main() -> None:
     mode = "a" if (args.resume and output_path.exists()) else "w"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    span_buckets: dict[str, list[dict]] | None = None
+    if not args.admin_status_sample_only:
+        # Validate the candidate transaction before opening a non-resume output
+        # in write mode, which would otherwise truncate a good prior CSV.
+        candidate_manifest = load_candidate_manifest(
+            candidates_dir,
+            allow_partial=args.allow_partial_candidates,
+        )
+        span_buckets = fetch_all_span_candidates(
+            candidates_dir,
+            expected_run_id=candidate_manifest["run_id"],
+            expected_rule_version=candidate_manifest["rule_version"],
+            expected_counts=candidate_manifest["counts"],
+        )
+
     total_ok = 0
     total_error = 0
     with output_path.open(mode, encoding="utf-8", newline="") as f:
@@ -1366,6 +1663,8 @@ def main() -> None:
                 total_ok += 1
                 print(f"  [ok] {row['row_id']}: 행정 상태 부분공개 샘플")
         else:
+            assert span_buckets is not None
+
             # OPENAI_API_KEY 확인을 DB 접속보다 먼저 — 실패할 거면 빨리 실패한다.
             from rd2.generators.generate import _default_client
 
@@ -1374,7 +1673,6 @@ def main() -> None:
             conn = connect_mariadb()
             db_lock = threading.Lock()  # --target-matrix/--concurrency에서 conn 공유 시에만 쓰임
             try:
-                span_buckets = fetch_all_span_candidates(candidates_dir)
                 fallback_samples = fetch_real_agency_date_samples(conn)
 
                 for clause_no in clause_nos:
@@ -1418,7 +1716,7 @@ def main() -> None:
                         rows, report_row = generate_cell_rows(
                             cell_plan, resumed_row_ids=resumed_row_ids,
                             client=client, model=args.model, sampling_seed=args.sampling_seed,
-                            conn=conn, annotated_root=annotated_root, rng=rng,
+                            conn=conn, data_root=data_root, extracted_root=extracted_root, rng=rng,
                             fallback_samples=fallback_samples, concurrency=args.concurrency,
                             db_lock=db_lock,
                         )
@@ -1462,7 +1760,8 @@ def main() -> None:
                                 continue
                             row = generate_span_seeded_row(
                                 row_id, clause_no, candidate, client=client, model=args.model,
-                                sampling_seed=args.sampling_seed, conn=conn, annotated_root=annotated_root,
+                                sampling_seed=args.sampling_seed, conn=conn,
+                                data_root=data_root, extracted_root=extracted_root,
                             )
                             if row is None:
                                 continue  # 스킵된 candidate — 폴백으로 보충

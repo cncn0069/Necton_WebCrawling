@@ -12,7 +12,7 @@ R3(2026-07-20 사용자 결정): 완전 가상 폴백 문서라도 기관명만�
   조회가 필요하다. documents 테이블에는 candidate의 doc_id와 직접 매칭되는
   PK/hash 컬럼이 없고, body_file_path만 있다 — 포맷이
   "{source}/{doc_type}/{bucket}/{doc_id}_{filename}"이라 doc_id는 파일명
-  접두사로만 안다. annotated JSON의 source_pdf_path는 버킷 폴더가 없는 별도
+  접두사로만 안다. canonical extraction v2의 source_path는 버킷 폴더가 없는 별도
   포맷이라 바이트 일치 조회(DocumentStore.get_by_body_file_path)가 안 통해서
   LIKE 퍼지 매칭이 필요하다.
 - DocumentStore는 생성 시점에 스키마 마이그레이션 DDL+commit을 실행하므로

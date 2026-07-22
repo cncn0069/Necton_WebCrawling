@@ -1,8 +1,11 @@
 import csv
+import gzip
+import hashlib
 import json
 import random
 import sys
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -32,7 +35,8 @@ class TestFetchAllSpanCandidates:
         candidates_dir.mkdir()
         (candidates_dir / "clause_5.jsonl").write_text(
             json.dumps({"source": "moel", "doc_type": "notification", "doc_id": "1",
-                        "span_id": 0, "text": "감사 관련", "source_pdf_path": "data/moel/notification/1.pdf"},
+                        "candidate_id": "c1", "run_id": "run-1", "line_ids": [0],
+                        "text": "감사 관련", "source_path": "data/moel/notification/1.pdf"},
                        ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
@@ -52,188 +56,321 @@ class TestFetchAllSpanCandidates:
         buckets = pilot.fetch_all_span_candidates(candidates_dir)
         assert all(buckets[clause] == [] for clause in ("5", "6", "7", "8"))
 
+    def test_record_run_id_must_match_manifest_run(self, tmp_path):
+        candidates_dir = tmp_path / "candidates"
+        candidates_dir.mkdir()
+        (candidates_dir / "clause_5.jsonl").write_text(
+            json.dumps({"candidate_id": "c1", "run_id": "other"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="run_id가 manifest와 불일치"):
+            pilot.fetch_all_span_candidates(candidates_dir, expected_run_id="run-1")
+
+    def test_record_rule_version_must_match_manifest(self, tmp_path):
+        candidates_dir = tmp_path / "candidates"
+        candidates_dir.mkdir()
+        (candidates_dir / "clause_5.jsonl").write_text(
+            json.dumps(
+                {"candidate_id": "c1", "run_id": "run-1", "rule_version": "old-rules"}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="rule_version이 manifest와 불일치"):
+            pilot.fetch_all_span_candidates(
+                candidates_dir,
+                expected_run_id="run-1",
+                expected_rule_version="new-rules",
+            )
+
+    def test_record_counts_must_match_manifest(self, tmp_path):
+        candidates_dir = tmp_path / "candidates"
+        candidates_dir.mkdir()
+        (candidates_dir / "clause_5.jsonl").write_text("", encoding="utf-8")
+        expected_counts = {clause_no: 0 for clause_no in ("5", "6", "7", "8")}
+        expected_counts["5"] = 1
+
+        with pytest.raises(ValueError, match="개수가 manifest와 불일치"):
+            pilot.fetch_all_span_candidates(
+                candidates_dir,
+                expected_run_id="run-1",
+                expected_counts=expected_counts,
+            )
+
+    def test_partial_manifest_requires_explicit_override(self, tmp_path):
+        candidates_dir = tmp_path / "candidates"
+        candidates_dir.mkdir()
+        manifest = {
+            "run_id": "run-1",
+            "rule_version": "rules-v2",
+            "status": "partial",
+            "counts": {},
+        }
+        (candidates_dir / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="완결되지"):
+            pilot.load_candidate_manifest(candidates_dir)
+        assert pilot.load_candidate_manifest(candidates_dir, allow_partial=True) == manifest
+
 
 class TestSampleCandidates:
     def test_returns_all_when_fewer_than_count(self):
         import random
 
-        candidates = [{"span_id": i} for i in range(3)]
+        candidates = [{"candidate_id": str(i)} for i in range(3)]
         result = pilot._sample_candidates(candidates, 5, random.Random(42))
         assert len(result) == 3
 
     def test_samples_exact_count_when_enough(self):
         import random
 
-        candidates = [{"span_id": i} for i in range(10)]
+        candidates = [{"candidate_id": str(i)} for i in range(10)]
         result = pilot._sample_candidates(candidates, 3, random.Random(42))
         assert len(result) == 3
 
     def test_deterministic_given_fixed_seed(self):
         import random
 
-        candidates = [{"span_id": i} for i in range(10)]
+        candidates = [{"candidate_id": str(i)} for i in range(10)]
         result_a = pilot._sample_candidates(candidates, 3, random.Random(42))
         result_b = pilot._sample_candidates(candidates, 3, random.Random(42))
         assert result_a == result_b
 
 
-class TestLoadAnnotatedDocumentText:
-    def _write_annotated_json_with_span_ids(
-        self, annotated_root: Path, rel_path: str, texts: list[str]
+class TestLoadExtractedDocumentText:
+    SOURCE_PATH = "data/moel/notification/1.pdf"
+    EXTRACTION_ID = "extract-v2-1"
+
+    def _write_extracted(
+        self,
+        data_root: Path,
+        extracted_root: Path,
+        texts: list[str],
+        *,
+        extraction_id: str | None = None,
+        source_bytes: bytes = b"source bytes",
     ) -> None:
-        pages = [
+        source_file = data_root.parent / Path(self.SOURCE_PATH)
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_bytes(source_bytes)
+        lines = [
             {
-                "page_no": 1,
-                "spans": [
-                    {"span_id": i, "is_boilerplate": False, "cleaned_text": text}
-                    for i, text in enumerate(texts)
-                ],
+                "line_id": i,
+                "block_id": i,
+                "order": i,
+                "text": text,
+                "bbox_pt": None,
+                "style_runs": [],
             }
+            for i, text in enumerate(texts)
         ]
-        self._write_annotated_json(annotated_root, rel_path, pages)
+        document = {
+            "schema_version": 2,
+            "extraction_id": extraction_id or self.EXTRACTION_ID,
+            "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "source_path": self.SOURCE_PATH,
+            "source": "moel",
+            "doc_type": "notification",
+            "doc_id": "1",
+            "source_format": "pdf",
+            "extraction": {},
+            "status": "ok",
+            "error": None,
+            "quality": {},
+            "pages": [
+                {
+                    "page": 1,
+                    "width_pt": 595.0,
+                    "height_pt": 842.0,
+                    "rotation": 0,
+                    "lines": lines,
+                }
+            ],
+        }
+        path = pilot.extraction_output_path(source_file, data_root, extracted_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            json.dump(document, f, ensure_ascii=False)
 
-    def _write_annotated_json(self, annotated_root: Path, rel_path: str, pages: list[dict]) -> None:
-        json_path = annotated_root / rel_path
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(
-            json.dumps({"source": "moel", "doc_type": "notification", "doc_id": "1", "pages": pages},
-                       ensure_ascii=False),
-            encoding="utf-8",
-        )
+    def _candidate(self, text: str, line_ids: list[int], **overrides) -> dict:
+        candidate = {
+            "candidate_id": "candidate-1",
+            "run_id": "run-1",
+            "extraction_id": self.EXTRACTION_ID,
+            "source_path": self.SOURCE_PATH,
+            "line_ids": line_ids,
+            "text": text,
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "page": 1,
+        }
+        candidate.update(overrides)
+        return candidate
 
-    def test_joins_non_boilerplate_spans_in_page_order(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        pages = [
-            {"page_no": 1, "spans": [
-                {"is_boilerplate": True, "cleaned_text": "쪽번호 1"},
-                {"is_boilerplate": False, "cleaned_text": "첫 문단"},
-            ]},
-            {"page_no": 2, "spans": [
-                {"is_boilerplate": False, "cleaned_text": "둘째 문단"},
-            ]},
-        ]
-        self._write_annotated_json(annotated_root, "moel/notification/1.json", pages)
-
-        text = pilot.load_annotated_document_text("data/moel/notification/1.pdf", annotated_root)
-
-        assert text == "첫 문단\n둘째 문단"
-
-    def test_handles_backslash_separators(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        pages = [{"page_no": 1, "spans": [{"is_boilerplate": False, "cleaned_text": "본문"}]}]
-        self._write_annotated_json(annotated_root, "moel/notification/1.json", pages)
-
-        text = pilot.load_annotated_document_text(r"data\moel\notification\1.pdf", annotated_root)
-
-        assert text == "본문"
-
-    def test_missing_json_returns_none(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        annotated_root.mkdir()
-        assert pilot.load_annotated_document_text("data/moel/notification/missing.pdf", annotated_root) is None
-
-    def test_empty_source_path_returns_none(self, tmp_path):
-        assert pilot.load_annotated_document_text("", tmp_path) is None
-
-    def test_all_boilerplate_returns_none(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        pages = [{"page_no": 1, "spans": [{"is_boilerplate": True, "cleaned_text": "쪽번호"}]}]
-        self._write_annotated_json(annotated_root, "moel/notification/1.json", pages)
-
-        assert pilot.load_annotated_document_text("data/moel/notification/1.pdf", annotated_root) is None
-
-    def test_truncates_long_document(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        long_text = "가" * (pilot._MAX_SOURCE_DOCUMENT_CHARS + 500)
-        pages = [{"page_no": 1, "spans": [{"is_boilerplate": False, "cleaned_text": long_text}]}]
-        self._write_annotated_json(annotated_root, "moel/notification/1.json", pages)
-
-        text = pilot.load_annotated_document_text("data/moel/notification/1.pdf", annotated_root)
-
-        assert len(text) == pilot._MAX_SOURCE_DOCUMENT_CHARS
-
-    def test_rejects_parent_directory_traversal(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        annotated_root.mkdir()
-        self._write_annotated_json(tmp_path, "secret.json", [
-            {"page_no": 1, "spans": [{"is_boilerplate": False, "cleaned_text": "secret"}]}
-        ])
-
-        text = pilot.load_annotated_document_text("data/../secret.pdf", annotated_root)
-
-        assert text is None
-
-    def test_rejects_absolute_data_path(self, tmp_path):
-        assert pilot.load_annotated_document_text("/data/moel/1.pdf", tmp_path) is None
-
-    def test_target_span_id_centers_window_on_matched_span(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        self._write_annotated_json_with_span_ids(
-            annotated_root, "moel/notification/1.json",
+    def test_centers_context_on_candidate_line_ids(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(
+            data_root,
+            extracted_root,
             ["앞 문단1", "앞 문단2", "근거 문단", "뒤 문단1", "뒤 문단2"],
         )
 
-        text = pilot.load_annotated_document_text(
-            "data/moel/notification/1.pdf", annotated_root, target_span_id=2,
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거 문단", [2]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
         )
 
         assert text == "앞 문단1\n앞 문단2\n근거 문단\n뒤 문단1\n뒤 문단2"
 
-    def test_target_span_id_not_found_falls_back_to_document_start(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        self._write_annotated_json_with_span_ids(
-            annotated_root, "moel/notification/1.json", ["첫 문단", "둘째 문단"],
+    def test_multi_line_candidate_uses_extraction_join_convention(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["앞", "근거", "문단", "뒤"])
+
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거 문단", [1, 2]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
         )
 
-        text = pilot.load_annotated_document_text(
-            "data/moel/notification/1.pdf", annotated_root, target_span_id=999,
-        )
+        assert text == "앞\n근거\n문단\n뒤"
 
-        assert text == "첫 문단\n둘째 문단"
+    def test_rejects_stale_extraction_id(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["근거"], extraction_id="new-id")
 
-    def test_window_excludes_far_context_beyond_budget(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
+        with pytest.raises(pilot.CandidateSourceMismatch, match="stale candidate"):
+            pilot.load_extracted_document_text(
+                self._candidate("근거", [0]), data_root, extracted_root,
+                cache=pilot._BoundedDocumentCache(2),
+            )
+
+    def test_rejects_source_changed_after_extraction(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["근거"])
+        source_file = data_root.parent / Path(self.SOURCE_PATH)
+        source_file.write_bytes(b"changed after extraction")
+
+        with pytest.raises(pilot.CandidateSourceMismatch, match="source_sha256"):
+            pilot.load_extracted_document_text(
+                self._candidate("근거", [0]), data_root, extracted_root,
+                cache=pilot._BoundedDocumentCache(2),
+            )
+
+    def test_rejects_text_hash_mismatch_before_loading(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pilot, "read_json_gz", lambda path: pytest.fail("must not load"))
+        candidate = self._candidate("근거", [0], text_sha256="0" * 64)
+
+        with pytest.raises(pilot.CandidateSourceMismatch, match="text_sha256"):
+            pilot.load_extracted_document_text(
+                candidate, tmp_path / "data", tmp_path / "data/extracted",
+                cache=pilot._BoundedDocumentCache(2),
+            )
+
+    def test_rejects_changed_line_text_instead_of_falling_back(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["현재 텍스트"])
+
+        with pytest.raises(pilot.CandidateSourceMismatch, match="line_ids 텍스트"):
+            pilot.load_extracted_document_text(
+                self._candidate("예전 텍스트", [0]), data_root, extracted_root,
+                cache=pilot._BoundedDocumentCache(2),
+            )
+
+    def test_rejects_missing_line_id_instead_of_falling_back(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["근거"])
+
+        with pytest.raises(pilot.CandidateSourceMismatch, match="찾지 못함"):
+            pilot.load_extracted_document_text(
+                self._candidate("근거", [999]), data_root, extracted_root,
+                cache=pilot._BoundedDocumentCache(2),
+            )
+
+    def test_window_respects_context_and_total_budgets(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
         chunk_size = 500
-        num_before = pilot._CONTEXT_CHARS_BEFORE // chunk_size + 3  # 예산을 넘치도록 여유 있게
+        num_before = pilot._CONTEXT_CHARS_BEFORE // chunk_size + 3
         num_after = pilot._CONTEXT_CHARS_AFTER // chunk_size + 3
-        before_chunks = [f"앞문단{i}" + "가" * chunk_size for i in range(num_before)]
-        after_chunks = [f"뒤문단{i}" + "나" * chunk_size for i in range(num_after)]
-        texts = before_chunks + ["근거 문단"] + after_chunks
-        self._write_annotated_json_with_span_ids(
-            annotated_root, "moel/notification/1.json", texts,
-        )
-        target_span_id = len(before_chunks)
+        before = [f"앞{i}" + "가" * chunk_size for i in range(num_before)]
+        after = [f"뒤{i}" + "나" * chunk_size for i in range(num_after)]
+        texts = [*before, "근거", *after]
+        self._write_extracted(data_root, extracted_root, texts)
 
-        text = pilot.load_annotated_document_text(
-            "data/moel/notification/1.pdf", annotated_root, target_span_id=target_span_id,
-        )
-
-        assert "근거 문단" in text
-        assert before_chunks[0] not in text  # 창 밖으로 밀려난 가장 먼 앞 문단
-        assert after_chunks[-1] not in text  # 창 밖으로 밀려난 가장 먼 뒤 문단
-        assert before_chunks[-1] in text  # 근거 span 바로 앞 문단은 창 안에 있어야 함
-        assert after_chunks[0] in text  # 근거 span 바로 뒤 문단은 창 안에 있어야 함
-
-    def test_window_still_respects_total_char_cap(self, tmp_path):
-        annotated_root = tmp_path / "annotated"
-        chunk = "다" * 200
-        texts = [chunk for _ in range(60)]  # span_id 0..59, target in the middle
-        self._write_annotated_json_with_span_ids(
-            annotated_root, "moel/notification/1.json", texts,
-        )
-
-        text = pilot.load_annotated_document_text(
-            "data/moel/notification/1.pdf", annotated_root, target_span_id=30,
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거", [len(before)]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
         )
 
         assert len(text) <= pilot._MAX_SOURCE_DOCUMENT_CHARS
+        assert "근거" in text
+        assert before[0] not in text
+        assert after[-1] not in text
+        assert before[-1] in text
+        assert after[0] in text
+
+    def test_repeated_candidates_load_and_annotate_document_once(self, tmp_path, monkeypatch):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        self._write_extracted(data_root, extracted_root, ["후보 1", "후보 2"])
+        reads = 0
+        annotations = 0
+        source_hashes = 0
+        real_read = pilot.read_json_gz
+        real_annotate = pilot.annotate_document_in_place
+        real_compute_source_sha256 = pilot.compute_source_sha256
+
+        def counted_read(path):
+            nonlocal reads
+            reads += 1
+            time.sleep(0.05)
+            return real_read(path)
+
+        def counted_annotate(document):
+            nonlocal annotations
+            annotations += 1
+            return real_annotate(document)
+
+        def counted_compute_source_sha256(path):
+            nonlocal source_hashes
+            source_hashes += 1
+            return real_compute_source_sha256(path)
+
+        monkeypatch.setattr(pilot, "read_json_gz", counted_read)
+        monkeypatch.setattr(pilot, "annotate_document_in_place", counted_annotate)
+        monkeypatch.setattr(pilot, "compute_source_sha256", counted_compute_source_sha256)
+        cache = pilot._BoundedDocumentCache(2)
+        candidates = [self._candidate("후보 1", [0]), self._candidate("후보 2", [1])]
+        tasks = [
+            lambda candidate=candidate: pilot.load_extracted_document_text(
+                candidate, data_root, extracted_root, cache=cache,
+            )
+            for candidate in candidates * 2
+        ]
+
+        results = pilot._run_concurrently(tasks, concurrency=4)
+
+        assert len(results) == 4
+        assert reads == 1
+        assert annotations == 1
+        assert source_hashes == 1
 
 
 class TestGenerateSpanSeededRow:
     def _candidate(self, **overrides) -> dict:
+        text = "감사 관련 내부검토"
         defaults = dict(
-            source="moel", doc_type="notification", doc_id="1", span_id=0,
-            text="감사 관련 내부검토", source_pdf_path="data/moel/notification/1.pdf",
+            source="moel", doc_type="notification", doc_id="1",
+            candidate_id="candidate-0", run_id="run-1", extraction_id="extract-1",
+            line_ids=[0], text=text,
+            text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            page=1, source_path="data/moel/notification/1.pdf",
         )
         defaults.update(overrides)
         return defaults
@@ -243,20 +380,22 @@ class TestGenerateSpanSeededRow:
 
         row = pilot.generate_span_seeded_row(
             "5-span-0", "5", self._candidate(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
         )
 
         assert row is None
 
-    def test_skips_when_annotated_text_not_found(self, monkeypatch):
+    def test_skips_when_extracted_text_not_found(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
         monkeypatch.setattr(
-            pilot, "load_annotated_document_text", lambda path, root, **kwargs: None
+            pilot, "load_extracted_document_text", lambda candidate, data, extracted: None
         )
 
         row = pilot.generate_span_seeded_row(
             "5-span-0", "5", self._candidate(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
         )
 
         assert row is None
@@ -265,11 +404,11 @@ class TestGenerateSpanSeededRow:
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
         captured_kwargs = {}
 
-        def fake_load_annotated_document_text(path, root, **kwargs):
-            captured_kwargs.update(kwargs)
+        def fake_load_extracted_document_text(candidate, data_root, extracted_root):
+            captured_kwargs["candidate"] = candidate
             return "문서 원문 전체 내용"
 
-        monkeypatch.setattr(pilot, "load_annotated_document_text", fake_load_annotated_document_text)
+        monkeypatch.setattr(pilot, "load_extracted_document_text", fake_load_extracted_document_text)
 
         def fake_generate_span_seeded_body(seed, *, client, model):
             assert seed.ordering_agency == "고용노동부"
@@ -284,12 +423,16 @@ class TestGenerateSpanSeededRow:
 
         row = pilot.generate_span_seeded_row(
             "5-span-0", "5", self._candidate(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
         )
 
         assert row["status"] == "ok"
         assert row["seed_type"] == "span_seeded"
-        assert row["seed_span_id"] == 0
+        assert row["seed_candidate_id"] == "candidate-0"
+        assert row["seed_candidate_run_id"] == "run-1"
+        assert json.loads(row["seed_line_ids"]) == [0]
+        assert row["seed_extraction_id"] == "extract-1"
         assert row["clause_no"] == "5"
         assert row["ordering_agency"] == "고용노동부"
         assert row["body_text"] == "고용노동부 감사 관련 문서 본문"
@@ -298,12 +441,12 @@ class TestGenerateSpanSeededRow:
         assert row["cso_subclause_key"] == "audit_inspection"
         assert row["is_synthetic"] is True
         assert set(row.keys()) == set(pilot.CSV_FIELDNAMES) - {"template_id", "template_violations"}
-        assert captured_kwargs.get("target_span_id") == 0
+        assert captured_kwargs["candidate"]["candidate_id"] == "candidate-0"
 
     def test_llm_failure_produces_llm_error_status(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
         monkeypatch.setattr(
-            pilot, "load_annotated_document_text", lambda path, root, **kwargs: "문서 원문"
+            pilot, "load_extracted_document_text", lambda candidate, data, extracted: "문서 원문"
         )
 
         def fake_generate_span_seeded_body(seed, *, client, model):
@@ -313,7 +456,8 @@ class TestGenerateSpanSeededRow:
 
         row = pilot.generate_span_seeded_row(
             "5-span-0", "5", self._candidate(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
         )
 
         assert row["status"] == "llm_error"
@@ -352,7 +496,7 @@ class TestGenerateFallbackRow:
 
         assert row["status"] == "ok"
         assert row["seed_type"] == "synthetic_fallback"
-        assert row["seed_span_id"] == ""
+        assert row["seed_candidate_id"] == ""
         assert row["ordering_agency"] == "실제기관명"
         assert row["production_date"] == "2025-01-01"
         assert row["body_text"] == "가상 문서 본문"
@@ -1045,7 +1189,7 @@ class TestPlanCell:
 
     def test_nonzero_real_candidates_uses_full_per_cell_target(self):
         plan = pilot.plan_cell(
-            self._cell(), [{"span_id": 1}],
+            self._cell(), [{"candidate_id": "c1"}],
             per_cell_target=2000, zero_candidate_target=50,
             force_full_target_for_zero_cells=False,
         )
@@ -1193,7 +1337,8 @@ class TestGenerateCellRows:
 
         rows, report_row = pilot.generate_cell_rows(
             cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
             rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
             concurrency=2, db_lock=threading.Lock(),
         )
@@ -1221,7 +1366,8 @@ class TestGenerateCellRows:
 
         rows, report_row = pilot.generate_cell_rows(
             cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
             rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
             concurrency=2, db_lock=threading.Lock(),
         )
@@ -1232,7 +1378,7 @@ class TestGenerateCellRows:
     def test_mixes_span_seeded_and_fallback_and_computes_partial_ratio(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")
         monkeypatch.setattr(
-            pilot, "load_annotated_document_text", lambda path, root, **kwargs: "문서 원문"
+            pilot, "load_extracted_document_text", lambda candidate, data, extracted: "문서 원문"
         )
 
         def fake_generate_span_seeded_body(seed, *, client, model):
@@ -1246,8 +1392,10 @@ class TestGenerateCellRows:
 
         cell = pilot.TargetCell("5", "audit_inspection", "audit_result", "감사진행중", "T5-2")
         real_candidates = [
-            {"source": "moel", "doc_type": "notification", "doc_id": "1", "span_id": 0,
-             "text": "감사 관련 내부검토", "source_pdf_path": "data/moel/notification/1.pdf"},
+            {"source": "moel", "doc_type": "notification", "doc_id": "1",
+             "candidate_id": "c1", "run_id": "run-1", "extraction_id": "extract-1",
+             "line_ids": [0], "page": 1, "text_sha256": "hash",
+             "text": "감사 관련 내부검토", "source_path": "data/moel/notification/1.pdf"},
         ]
         cell_plan = pilot.plan_cell(
             cell, real_candidates,
@@ -1257,7 +1405,8 @@ class TestGenerateCellRows:
 
         rows, report_row = pilot.generate_cell_rows(
             cell_plan, resumed_row_ids=set(), client=object(), model="gpt-4o-mini",
-            sampling_seed=42, conn=object(), annotated_root=Path("."),
+            sampling_seed=42, conn=object(), data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
             rng=random.Random(1), fallback_samples=[("고용노동부", "2025-01-01")],
             concurrency=2, db_lock=threading.Lock(),
         )

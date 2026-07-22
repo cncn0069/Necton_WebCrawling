@@ -14,6 +14,14 @@ from typing import Any, Iterator
 
 import fitz  # PyMuPDF
 
+from rd2.extraction.storage import (
+    EXTRACTION_PROFILE,
+    SCHEMA_VERSION,
+    build_extraction_id,
+    compute_source_sha256,
+    source_metadata,
+)
+
 # 문서 평균 페이지당 추출 글자 수가 이 값 미만이면 텍스트 레이어가 없는
 # 스캔본(이미지 PDF) 후보로 표시한다. OCR 적용 여부는 이번 범위 밖 — 표시만 한다.
 _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD = 5
@@ -27,6 +35,16 @@ _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD = 5
 # 걸린다.
 _MERGE_MAX_CHAIN = 40  # 한 문단이 가질 수 있는 최대 줄 수(폭주 방지 안전장치)
 _MERGE_GAP_RATIO = 0.8  # 줄 높이 대비 허용되는 다음 줄까지의 세로 간격 비율
+
+_LAYOUT_PRECISION = 1
+_PDF_EXTRACTION_CONFIG = {
+    "line_mode": "physical",
+    "bbox_precision": _LAYOUT_PRECISION,
+    "font_size_precision": _LAYOUT_PRECISION,
+    "coalesce_adjacent_style_runs": True,
+}
+_FONT_BOLD_FLAG = int(getattr(fitz, "TEXT_FONT_BOLD", 16))
+_FONT_ITALIC_FLAG = int(getattr(fitz, "TEXT_FONT_ITALIC", 2))
 
 
 def _merge_wrapped_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -94,6 +112,240 @@ def _source_and_doc_type(pdf_path: Path, data_root: Path) -> tuple[str, str]:
     source = rel_parts[0] if len(rel_parts) > 0 else "_unclassified"
     doc_type = rel_parts[1] if len(rel_parts) > 2 else "_unclassified"
     return source, doc_type
+
+
+def pdf_extraction_metadata() -> dict[str, Any]:
+    """Return the extractor identity/configuration used by canonical v2."""
+
+    return {
+        "profile": EXTRACTION_PROFILE,
+        "extractor": "pymupdf",
+        "extractor_version": fitz.pymupdf_version,
+        "config": dict(_PDF_EXTRACTION_CONFIG),
+    }
+
+
+def _rounded_bbox(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        return [round(float(coordinate), _LAYOUT_PRECISION) for coordinate in value]
+    except (TypeError, ValueError):
+        return None
+
+
+def _style_payload(span: dict[str, Any]) -> dict[str, Any]:
+    raw_size = span.get("size")
+    try:
+        size_pt = round(float(raw_size), _LAYOUT_PRECISION) if raw_size is not None else None
+    except (TypeError, ValueError):
+        size_pt = None
+    try:
+        flags = int(span.get("flags") or 0)
+    except (TypeError, ValueError):
+        flags = 0
+    raw_color = span.get("color")
+    try:
+        color = int(raw_color) if raw_color is not None else None
+    except (TypeError, ValueError):
+        color = None
+    return {
+        "font": str(span.get("font") or ""),
+        "size_pt": size_pt,
+        "bold": bool(flags & _FONT_BOLD_FLAG),
+        "italic": bool(flags & _FONT_ITALIC_FLAG),
+        "color": color,
+    }
+
+
+def _physical_line_payload(
+    line: dict[str, Any],
+    *,
+    line_id: int,
+    block_id: int,
+    order: int,
+) -> dict[str, Any] | None:
+    """Convert one PyMuPDF physical line and coalesce identical style runs."""
+
+    spans = line.get("spans", [])
+    text_parts: list[str] = []
+    style_runs: list[dict[str, Any]] = []
+    cursor = 0
+    span_bboxes: list[list[float]] = []
+
+    for raw_span in spans:
+        text = str(raw_span.get("text") or "")
+        if not text:
+            continue
+        text_parts.append(text)
+        end = cursor + len(text)
+        style = _style_payload(raw_span)
+        if (
+            style_runs
+            and style_runs[-1]["end"] == cursor
+            and all(style_runs[-1][key] == value for key, value in style.items())
+        ):
+            style_runs[-1]["end"] = end
+        else:
+            style_runs.append({"start": cursor, "end": end, **style})
+        cursor = end
+        bbox = _rounded_bbox(raw_span.get("bbox"))
+        if bbox is not None:
+            span_bboxes.append(bbox)
+
+    text = "".join(text_parts)
+    if not text.strip():
+        return None
+
+    if span_bboxes:
+        bbox_pt = [
+            round(min(bbox[0] for bbox in span_bboxes), _LAYOUT_PRECISION),
+            round(min(bbox[1] for bbox in span_bboxes), _LAYOUT_PRECISION),
+            round(max(bbox[2] for bbox in span_bboxes), _LAYOUT_PRECISION),
+            round(max(bbox[3] for bbox in span_bboxes), _LAYOUT_PRECISION),
+        ]
+    else:
+        bbox_pt = _rounded_bbox(line.get("bbox"))
+
+    return {
+        "line_id": line_id,
+        "block_id": block_id,
+        "order": order,
+        "text": text,
+        "bbox_pt": bbox_pt,
+        "style_runs": style_runs,
+    }
+
+
+def _canonical_pdf_base(
+    pdf_path: Path,
+    *,
+    data_root: Path,
+    source_sha256: str,
+) -> dict[str, Any]:
+    extraction = pdf_extraction_metadata()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "extraction_id": build_extraction_id(source_sha256, extraction),
+        "source_sha256": source_sha256,
+        **source_metadata(pdf_path, data_root),
+        "extraction": extraction,
+        "status": "error",
+        "error": None,
+        "quality": {
+            "has_text_layer": False,
+            "needs_ocr": False,
+            "needs_quarantine": False,
+            "pages_needing_ocr": [],
+            "avg_chars_per_page": 0.0,
+            "warnings": [],
+        },
+        "pages": [],
+    }
+
+
+def extract_pdf_document(
+    pdf_path: Path,
+    *,
+    data_root: Path,
+    source_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Extract canonical v2 physical PDF lines without wrapped-line merging."""
+
+    pdf_path = Path(pdf_path)
+    digest = source_sha256 or compute_source_sha256(pdf_path)
+    result = _canonical_pdf_base(pdf_path, data_root=data_root, source_sha256=digest)
+
+    try:
+        with pdf_path.open("rb") as source_file:
+            header = source_file.read(1024)
+    except OSError as exc:
+        result["error"] = f"input read failed: {exc}"
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["input_read_failed"]
+        return result
+    if b"%PDF-" not in header:
+        result["error"] = "invalid file: no %PDF header"
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["invalid_pdf_header"]
+        return result
+
+    try:
+        document = fitz.open(pdf_path)
+    except Exception as exc:  # noqa: BLE001 - one bad source must not stop a batch
+        result["error"] = f"open failed: {exc}"
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["open_failed"]
+        return result
+
+    try:
+        if document.is_encrypted and not document.authenticate(""):
+            result["error"] = "encrypted (no password)"
+            result["quality"]["needs_quarantine"] = True
+            result["quality"]["warnings"] = ["encrypted"]
+            return result
+
+        pages: list[dict[str, Any]] = []
+        page_char_counts: list[int] = []
+        next_line_id = 0
+        for page_number, page in enumerate(document, start=1):
+            raw = page.get_text("dict")
+            lines: list[dict[str, Any]] = []
+            page_order = 0
+            for block_id, block in enumerate(raw.get("blocks", [])):
+                for raw_line in block.get("lines", []):
+                    line_payload = _physical_line_payload(
+                        raw_line,
+                        line_id=next_line_id,
+                        block_id=block_id,
+                        order=page_order,
+                    )
+                    if line_payload is None:
+                        continue
+                    lines.append(line_payload)
+                    next_line_id += 1
+                    page_order += 1
+
+            page_char_counts.append(sum(len(line["text"]) for line in lines))
+            pages.append(
+                {
+                    "page": page_number,
+                    "width_pt": round(float(page.rect.width), _LAYOUT_PRECISION),
+                    "height_pt": round(float(page.rect.height), _LAYOUT_PRECISION),
+                    "rotation": int(page.rotation),
+                    "lines": lines,
+                }
+            )
+
+        average_chars = sum(page_char_counts) / len(pages) if pages else 0.0
+        pages_needing_ocr = [
+            page_number
+            for page_number, count in enumerate(page_char_counts, start=1)
+            if count < _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD
+        ]
+        if not pages:
+            pages_needing_ocr = []
+        has_text_layer = average_chars >= _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD
+        needs_ocr = not pages or bool(pages_needing_ocr)
+
+        result["pages"] = pages
+        result["status"] = "needs_ocr" if needs_ocr else "ok"
+        result["quality"] = {
+            "has_text_layer": has_text_layer,
+            "needs_ocr": needs_ocr,
+            "needs_quarantine": False,
+            "pages_needing_ocr": pages_needing_ocr,
+            "avg_chars_per_page": round(average_chars, 1),
+            "warnings": ["partial_text_layer"] if has_text_layer and needs_ocr else [],
+        }
+        return result
+    except Exception as exc:  # noqa: BLE001 - preserve a serializable failed result
+        result["error"] = f"extraction failed: {exc}"
+        result["quality"]["needs_quarantine"] = True
+        result["quality"]["warnings"] = ["extraction_failed"]
+        return result
+    finally:
+        document.close()
 
 
 def extract_pdf_spans(pdf_path: Path, *, data_root: Path) -> dict[str, Any]:
