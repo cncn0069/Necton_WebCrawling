@@ -23,8 +23,9 @@ pip install -e .
 python -m playwright install chromium   # HTML 템플릿 PDF 렌더링용 브라우저
 ```
 
-개발 중 최신 호환 버전으로 작업하려면 `requirements.txt` 대신 `pip install -e .`만
-실행해도 된다 (`pyproject.toml`은 `>=` 범위 지정).
+개발 중 최소 의존성만 설치하려면 `requirements.txt` 대신 `pip install -e .`만
+실행해도 된다. HWPX 표 셀 문단 보존 로직이 파서 내부 API에 의존하므로
+`hwp-hwpx-parser`는 두 설치 방식 모두 `1.0.0`으로 고정한다.
 
 ### gstack browse 바이너리 (별도 설치 — pip으로 설치되지 않음)
 

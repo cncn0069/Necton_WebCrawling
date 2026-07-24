@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = 2
 EXTRACTION_PROFILE = "layout-lite-v1"
+_GZIP_COMPRESSLEVEL = 6
 
 
 def compute_source_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -110,6 +111,7 @@ def write_json_gz_atomic(path: Path, payload: Any) -> None:
                 filename="",
                 mode="wb",
                 fileobj=raw_file,
+                compresslevel=_GZIP_COMPRESSLEVEL,
                 mtime=0,
             ) as compressed_file:
                 compressed_file.write(serialized)
