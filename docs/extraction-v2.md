@@ -18,7 +18,7 @@ data/{source}/{doc_type}/sample.hwp
 ```
 
 원본 확장자를 파일명에 남겨 같은 stem의 PDF/HWP/HWPX가 충돌하지 않게 한다. JSON은
-compact UTF-8 gzip이며 같은 디렉터리의 임시 파일을 닫고 `fsync`한 다음
+compact UTF-8 gzip(압축 레벨 6)이며 같은 디렉터리의 임시 파일을 닫고 `fsync`한 다음
 `os.replace`로 교체한다.
 
 ## 문서 계약
@@ -95,6 +95,15 @@ PDF는 의미 문단으로 미리 합치지 않고 PyMuPDF의 물리 줄을 저�
 
 HWP/HWPX 파서는 신뢰할 수 있는 물리 페이지·좌표를 제공하지 않으므로 논리 page 1,
 `width_pt`/`height_pt`/`rotation`/`bbox_pt = null`, `style_runs = []`로 저장한다.
+HWPX 표 셀 안의 여러 문단은 줄 경계를 보존한다. 파서가 비정상적으로 긴 한 줄을
+반환하면 텍스트를 버리지 않고 최대 4,096자 단위의 논리 줄로 나눈다. 추출 문자가
+5자 미만인 문서는 성공으로 숨기지 않고 `status = "needs_ocr"`,
+`pages_needing_ocr = [1]`로 표시한다.
+canonical 결과는 본문에 이미 인라인된 표 텍스트만 사용하고 구조화 표를 다시
+파싱하지 않는다. 표 행·셀 구조가 필요한 조사 도구만 별도 표 추출을 요청한다.
+LibreOffice·soffice 같은 외부 변환기 폴백은 사용하지 않는다. HWP 3.0, 암호화,
+손상, 크기 제한 초과 등 순수 파서가 처리하지 못하는 문서는 `quarantine`으로
+기록하고 후보 입력에서 제외한다.
 향후 OCR 결과는 이 값을 꾸며내지 않고 `extraction_id`에 연결된 별도 결과로 추가한다.
 
 `length`, `cleaned_text`, `is_boilerplate`, 후보 점수·순위처럼 원본과 규칙에서 다시

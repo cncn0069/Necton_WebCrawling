@@ -32,6 +32,36 @@ _HWP_PARSE_TIMEOUT_SECONDS = 60
 _OLE_HWP5_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 _HWP3_MAGIC = b"HWP Document File V3.00"
 _ZIP_MAGIC = b"PK\x03\x04"
+_HWPX_CELL_PARAGRAPH_BREAK = "\u2029"
+
+
+class _ParagraphAwareHWPXReader(HWPXReader):
+    """Preserve paragraph boundaries that the upstream table renderer flattens.
+
+    hwp-hwpx-parser 1.0.0 concatenates every ``<p>`` in a table cell before it
+    renders the table. Some real policy documents place hundreds of paragraphs
+    in one cell, which turns the whole cell into one unusably long logical line.
+    A Unicode paragraph separator survives the upstream Markdown formatter; the
+    wrapper converts it to a normal newline before returning the result.
+    """
+
+    def _collect_cell_text_with_notes(self, elem: Any, texts: list[str]) -> None:
+        if self._local_name(elem.tag) != "p":
+            super()._collect_cell_text_with_notes(elem, texts)
+            return
+
+        paragraph_parts: list[str] = []
+        for child in elem:
+            self._collect_cell_text_with_notes(child, paragraph_parts)
+        if not any(part.strip() for part in paragraph_parts):
+            return
+        if texts:
+            texts.append(_HWPX_CELL_PARAGRAPH_BREAK)
+        texts.extend(paragraph_parts)
+
+
+def _normalize_hwpx_cell_paragraphs(text: str) -> str:
+    return text.replace(_HWPX_CELL_PARAGRAPH_BREAK, "\n")
 
 
 @dataclass
@@ -103,13 +133,17 @@ def _preflight(path: Path) -> tuple[str | None, str | None]:
     return file_type, None
 
 
-def _extract_hwp_in_process(path: Path) -> ExtractedHwpDocument:
+def _extract_hwp_in_process(
+    path: Path,
+    *,
+    include_tables: bool = True,
+) -> ExtractedHwpDocument:
     """자식 프로세스 안에서만 호출되는 실제 파서 진입점."""
     file_type, error = _preflight(path)
     if error or file_type is None:
         return _invalid(path, error or "unknown_hwp_format")
 
-    reader_class = HWP5Reader if file_type == "hwp5" else HWPXReader
+    reader_class = HWP5Reader if file_type == "hwp5" else _ParagraphAwareHWPXReader
     try:
         with reader_class(path) as reader:
             if not reader.is_valid():
@@ -121,7 +155,23 @@ def _extract_hwp_in_process(path: Path) -> ExtractedHwpDocument:
                     error="encrypted_document",
                 )
             text = reader.extract_text()
-            tables = [ExtractedTable(rows=table.rows) for table in reader.get_tables()]
+            if file_type == "hwpx":
+                text = _normalize_hwpx_cell_paragraphs(text)
+            tables: list[ExtractedTable] = []
+            if include_tables:
+                raw_tables = reader.get_tables()
+                if file_type == "hwpx":
+                    tables = [
+                        ExtractedTable(
+                            rows=[
+                                [_normalize_hwpx_cell_paragraphs(cell) for cell in row]
+                                for row in table.rows
+                            ]
+                        )
+                        for table in raw_tables
+                    ]
+                else:
+                    tables = [ExtractedTable(rows=table.rows) for table in raw_tables]
     except Exception as exc:
         return _invalid(path, f"parser_error: {type(exc).__name__}: {exc}")
 
@@ -152,12 +202,17 @@ def _result_from_payload(path: Path, payload: dict[str, Any]) -> ExtractedHwpDoc
         return _invalid(path, f"invalid_worker_payload: {exc}")
 
 
-def extract_hwp(path: Path) -> ExtractedHwpDocument:
+def extract_hwp(
+    path: Path,
+    *,
+    include_tables: bool = True,
+) -> ExtractedHwpDocument:
     """HWP/HWPX를 별도 프로세스에서 제한 시간 안에 추출한다.
 
     확장자가 잘못된 파일도 파일 시그니처로 실제 형식을 판별한다. 자식 파서가
     멈추거나 비정상 종료되면 해당 문서만 격리 결과로 반환하고 호출자 프로세스에는
-    예외를 전파하지 않는다.
+    예외를 전파하지 않는다. 본문에는 표가 이미 인라인돼 있으므로 별도 구조화 표가
+    필요 없는 호출자는 ``include_tables=False``로 중복 표 파싱과 IPC를 생략한다.
     """
     path = Path(path)
     _, error = _preflight(path)
@@ -176,6 +231,8 @@ def extract_hwp(path: Path) -> ExtractedHwpDocument:
     # 격리 처리된다. 자식 stdout과 부모의 디코딩을 모두 UTF-8로 고정해 방지한다.
     environment["PYTHONIOENCODING"] = "utf-8"
     command = [sys.executable, "-m", "rd2.extractors.hwp", "--worker", str(path.resolve())]
+    if not include_tables:
+        command.append("--text-only")
     try:
         completed = subprocess.run(
             command,
@@ -203,8 +260,8 @@ def extract_hwp(path: Path) -> ExtractedHwpDocument:
     return _result_from_payload(path, payload)
 
 
-def _worker_main(path: Path) -> int:
-    result = _extract_hwp_in_process(path)
+def _worker_main(path: Path, *, include_tables: bool = True) -> int:
+    result = _extract_hwp_in_process(path, include_tables=include_tables)
     print(json.dumps(_worker_payload(result), ensure_ascii=False))
     return 0
 
@@ -212,10 +269,11 @@ def _worker_main(path: Path) -> int:
 def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", type=Path)
+    parser.add_argument("--text-only", action="store_true")
     args = parser.parse_args()
     if args.worker is None:
         parser.error("--worker is required")
-    return _worker_main(args.worker)
+    return _worker_main(args.worker, include_tables=not args.text_only)
 
 
 if __name__ == "__main__":

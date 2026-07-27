@@ -221,14 +221,17 @@ def test_encrypted_pdf_is_serialized_as_quarantined_error(tmp_path: Path):
 def test_hwp_v2_uses_one_logical_page_with_null_geometry(tmp_path: Path, monkeypatch):
     data_root, source_path = _source_path(tmp_path, "77_sample.hwpx")
     source_path.write_bytes(b"placeholder")
-    monkeypatch.setattr(
-        hwp_text,
-        "extract_hwp",
-        lambda path: ExtractedHwpDocument(source_path=path, text="첫 문단\n\n둘째 문단"),
-    )
+    calls: list[bool] = []
+
+    def fake_extract(path: Path, *, include_tables: bool = True):
+        calls.append(include_tables)
+        return ExtractedHwpDocument(source_path=path, text="첫 문단\n\n둘째 문단")
+
+    monkeypatch.setattr(hwp_text, "extract_hwp", fake_extract)
 
     payload = extract_hwp_document(source_path, data_root=data_root)
 
+    assert calls == [False]
     assert payload["schema_version"] == 2
     assert payload["source_format"] == "hwpx"
     assert payload["status"] == "ok"
@@ -249,13 +252,59 @@ def test_hwp_v2_uses_one_logical_page_with_null_geometry(tmp_path: Path, monkeyp
     assert all(line["style_runs"] == [] for line in page["lines"])
 
 
+def test_hwp_v2_marks_little_or_no_text_as_needing_ocr(tmp_path: Path, monkeypatch):
+    data_root, source_path = _source_path(tmp_path, "empty.hwp")
+    source_path.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        hwp_text,
+        "extract_hwp",
+        lambda path, **_kwargs: ExtractedHwpDocument(source_path=path, text=" "),
+    )
+
+    payload = extract_hwp_document(source_path, data_root=data_root)
+
+    assert payload["status"] == "needs_ocr"
+    assert payload["error"] is None
+    assert payload["quality"]["has_text_layer"] is False
+    assert payload["quality"]["needs_ocr"] is True
+    assert payload["quality"]["needs_quarantine"] is False
+    assert payload["quality"]["pages_needing_ocr"] == [1]
+    assert payload["quality"]["warnings"] == ["little_or_no_text"]
+    assert payload["pages"][0]["lines"] == []
+
+
+def test_hwp_v2_splits_oversized_logical_lines_without_losing_text(
+    tmp_path: Path,
+    monkeypatch,
+):
+    data_root, source_path = _source_path(tmp_path, "long-table-row.hwpx")
+    source_path.write_bytes(b"placeholder")
+    long_text = "가" * (hwp_text._MAX_LOGICAL_LINE_CHARS + 3)
+    monkeypatch.setattr(
+        hwp_text,
+        "extract_hwp",
+        lambda path, **_kwargs: ExtractedHwpDocument(source_path=path, text=long_text),
+    )
+
+    payload = extract_hwp_document(source_path, data_root=data_root)
+    lines = payload["pages"][0]["lines"]
+
+    assert payload["status"] == "ok"
+    assert [len(line["text"]) for line in lines] == [
+        hwp_text._MAX_LOGICAL_LINE_CHARS,
+        3,
+    ]
+    assert "".join(line["text"] for line in lines) == long_text
+    assert payload["quality"]["warnings"] == ["oversized_logical_line_split"]
+
+
 def test_encrypted_hwp_is_quarantined_without_fake_page(tmp_path: Path, monkeypatch):
     data_root, source_path = _source_path(tmp_path, "encrypted.hwp")
     source_path.write_bytes(b"placeholder")
     monkeypatch.setattr(
         hwp_text,
         "extract_hwp",
-        lambda path: ExtractedHwpDocument(
+        lambda path, **_kwargs: ExtractedHwpDocument(
             source_path=path,
             is_encrypted=True,
             error="encrypted",
