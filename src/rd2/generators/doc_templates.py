@@ -39,6 +39,7 @@ from rd2.storage.naming import (
     DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
 )
+from rd2.generators.content_points import describe_leaf_content
 from rd2.generators.template_matrix import TEMPLATE_TARGETS
 
 # recipient 필드의 센티널 값 — 렌더러가 row별 합성 민원인 성명("OOO 귀하")으로
@@ -298,19 +299,25 @@ TEMPLATES: dict[tuple[str, str], DocTemplateSpec] = {
         doc_type=DOC_TYPE_PERSONNEL,
         # 인사발령은 확정 문서 — 실제 원본("5급 공무원 인사발령" 등)도 결재선
         # 전원이 서명돼 있다. 5호(미확정)와 달리 6호의 비공개 근거는 결재
-        # 상태가 아니라 본문에 그대로 남은 개인정보(성명 등)다.
+        # 상태가 아니라 본문에 그대로 남은 개인정보다.
+        # 성명만 있는 인사발령은 실제로 관보·기관 홈페이지에 흔히 공개되므로
+        # (2026-07-23 사용자 지적 — 실제 파일럿 검수 중 발견), 성명 하나만으로는
+        # 6호 비공개 근거가 약하다. 주민등록번호까지 함께 있어야 실제 판단과
+        # 맞아 표에 컬럼을 추가했다(pdf_render.py _synthetic_rrn).
         approval_state=ApprovalState.COMPLETE,
         approval_positions=("주무관", "사무관", "과장", "국장"),
         recipient="내부결재",
         disclosure_label="비공개(6)",
         body_format="personnel_order",
-        # 성명이 OOO/○○○로 이미 마스킹돼 있으면 "개인정보가 포함되어
-        # 비공개"라는 6호 시나리오와 모순된다 — 마스킹 전 원본이어야 한다.
+        # 성명/주민등록번호가 OOO/○○○로 이미 마스킹돼 있으면 "개인정보가
+        # 포함되어 비공개"라는 6호 시나리오와 모순된다 — 마스킹 전 원본이어야 한다.
         forbidden_phrases=("OOO", "○○○", "비식별 처리", "마스킹 완료"),
         description=(
-            "제6호 개인정보 포함 인사발령 — 발령사항 표(소속·직급·성명·발령사항)에 "
-            "성명이 마스킹 없이 그대로 있어야 하고(합성 인명), 결재선은 확정 문서답게 "
-            "전원 서명 상태여야 한다."
+            "제6호 개인정보 포함 인사발령 — 발령사항 표(소속·직급·성명·주민등록번호·"
+            "발령사항)에 성명과 주민등록번호가 마스킹 없이 그대로 있어야 하고(합성 "
+            "인명·합성 주민등록번호), 결재선은 확정 문서답게 전원 서명 상태여야 "
+            "한다. 성명만으로는 실제 인사발령이 공개되는 경우가 많아 비공개 근거가 "
+            "약하므로 주민등록번호가 함께 있어야 6호 판단과 일치한다."
         ),
     ),
     ("5", DOC_TYPE_BID_NOTICE): DocTemplateSpec(
@@ -363,11 +370,22 @@ TEMPLATES: dict[tuple[str, str], DocTemplateSpec] = {
         # 발령·임용 확정은 인사 의사결정이 끝난 뒤의 표현 — 평가(과정) 문서에
         # 있으면 모순. 실물 인사평가 문서는 원문공개에 올라오지 않아(확정 전
         # 폐기·비공개) 인사발령 원본의 서식 관례 + 미완료 결재선으로 설계했다.
-        forbidden_phrases=("발령 확정", "임용 확정", "승진 확정", "인사위원회 의결 완료"),
+        # 이 template은 구조적으로 이미 provisional(실물 근거 없이 추론)이라,
+        # 인사관리 절차상 화제(승진·채용·연봉)를 description에 더 채우는 것은
+        # 새로운 구조 주장이 아니라 기존 provisional 표 위의 내용 확장이다
+        # (2026-07-23, content_points.py Part B). 징계는 여기 안 넣는다 —
+        # 공무원징계령 제20·21조가 징계위원회 회의·명단을 명시적으로 비공개로
+        # 정해서 5호 일반론이 아니라 1호(legal_secret) 사안이다(검색 검증).
+        forbidden_phrases=(
+            "발령 확정", "임용 확정", "승진 확정", "인사위원회 의결 완료",
+            "채용 확정", "등급 확정",
+        ),
         description=(
-            "제5호 인사평가(후보군 검토) — 평가 개요·후보군 현황(안) 표·향후 계획 "
-            "구조여야 하고, 평가기간이 열려 있어야 하며 발령·임용 확정 표현이 "
-            "있으면 안 된다."
+            "제5호 인사관리 절차 진행중 — 평가 개요·후보군 현황(안) 표·향후 계획 "
+            "구조여야 하고, 평가기간이 열려 있어야 한다. 승진 심사의견, "
+            "채용전형 결과, 연봉·성과급 등급 결정 등 인사관리 절차상 화제라면 "
+            "어느 것을 다뤄도 되지만, 모두 '확정 전' 상태여야 하고 "
+            "발령·임용·채용·등급 확정 표현이 있으면 안 된다."
         ),
     ),
     ("6", DOC_TYPE_REPLY_NOTIFICATION): DocTemplateSpec(
@@ -464,7 +482,10 @@ def _build_template_variants() -> dict[tuple[str, str, str], DocTemplateSpec]:
                     _DOC_BODY_FORMAT.get(target.doc_type, _CLAUSE_BODY_FORMAT[target.clause_no]),
                 ),
                 form_format=_DOC_FORM_FORMAT.get(target.doc_type, "official_form"),
-                description=f"{target.subclause_label} 관련 {target.doc_type} 전용 템플릿.",
+                description=(
+                    describe_leaf_content(target.clause_no, target.subclause_key, target.doc_type)
+                    or f"{target.subclause_label} 관련 {target.doc_type} 전용 템플릿."
+                ),
             )
         else:
             spec = DocTemplateSpec(**{**spec.__dict__, "subclause_key": target.subclause_key})

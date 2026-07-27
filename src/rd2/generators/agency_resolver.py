@@ -27,6 +27,7 @@ import datetime
 import random
 
 from rd2.generators.agency_categories import get_agency_category
+from rd2.generators.agency_capabilities import is_agency_scenario_compatible
 from rd2.generators.clause_data import CLAUSES
 
 FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
@@ -395,6 +396,9 @@ def sample_diverse_agency_and_date_for_fallback(
     samples: list[tuple[str, str]],
     *,
     allowed_categories: list[str] | None = None,
+    clause_no: str | None = None,
+    scenario_index: int | None = None,
+    strict_filters: bool = False,
 ) -> tuple[str, str, str]:
     """5~8호 폴백 문서용으로 (기관명, 생산일자, agency_source)를 뽑는다.
 
@@ -433,8 +437,60 @@ def sample_diverse_agency_and_date_for_fallback(
         filtered = [a for a in pool if get_agency_category(a) in allowed_categories]
         if filtered:
             pool = filtered
+        elif strict_filters:
+            raise RuntimeError("기관유형 조건을 만족하는 실제 기관이 없습니다")
+
+    if clause_no is not None and scenario_index is not None:
+        filtered = [
+            agency
+            for agency in pool
+            if is_agency_scenario_compatible(agency, clause_no, scenario_index)
+        ]
+        if filtered:
+            pool = filtered
+        elif strict_filters:
+            raise RuntimeError("시나리오 필수 기능이 확인된 실제 기관이 없습니다")
 
     agency = rng.choice(pool)
     if agency in agency_to_dates:
         return agency, rng.choice(agency_to_dates[agency]), "real_db_sample"
     return agency, synthesize_plausible_date(rng), "whitelist_synthetic"
+
+
+def sample_compatible_scenario_agency_and_date(
+    rng: random.Random,
+    clause_no: str,
+    samples: list[tuple[str, str]],
+) -> tuple[int, str, str, str]:
+    """시나리오와 기관을 한 쌍으로 선택한다.
+
+    선택한 시나리오에 맞는 기관이 없으면 전체 기관 풀로 되돌아가지 않고 다른
+    시나리오를 시도한다. 모든 시나리오가 부적합하면 생성을 중단한다.
+    """
+    clause = CLAUSES[clause_no]
+    scenario_indexes = list(range(len(clause.scenario_prompts)))
+    rng.shuffle(scenario_indexes)
+    failures: list[str] = []
+    for scenario_index in scenario_indexes:
+        allowed_categories = None
+        if clause.scenario_agency_categories:
+            allowed_categories = clause.scenario_agency_categories[
+                scenario_index % len(clause.scenario_agency_categories)
+            ]
+        try:
+            agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
+                rng,
+                samples,
+                allowed_categories=allowed_categories,
+                clause_no=clause_no,
+                scenario_index=scenario_index,
+                strict_filters=True,
+            )
+        except RuntimeError as exc:
+            failures.append(f"{scenario_index}:{exc}")
+            continue
+        return scenario_index, agency, prod_date, agency_source
+    raise RuntimeError(
+        f"제{clause_no}호에 호환되는 시나리오-기관 쌍이 없습니다: "
+        + "; ".join(failures)
+    )

@@ -80,6 +80,7 @@ from rd2.generators.agency_resolver import (
     fetch_real_agency_date_samples,
     is_military_secret_agency,
     resolve_agency_for_candidate,
+    sample_compatible_scenario_agency_and_date,
     sample_diverse_agency_and_date_for_fallback,
     scenario_contains_military_secret,
     select_military_secret_grade,
@@ -94,6 +95,10 @@ from rd2.generators.candidate_manifest import (
 from rd2.generators.clause_data import CLAUSES
 from rd2.generators.doc_templates import find_template, validate_row
 from rd2.generators.doc_type_inference import infer_doc_type
+from rd2.generators.pii_evidence import (
+    ensure_clause6_pii_evidence,
+    validate_clause6_pii_evidence,
+)
 from rd2.generators.generate import SpanSeedInput, generate_clause_document, generate_span_seeded_body
 from rd2.generators.pdf_render import render_document_pdf
 from rd2.generators.security_mark import (
@@ -114,6 +119,7 @@ load_dotenv()
 CSV_FIELDNAMES = [
     "row_id", "seed_type", "seed_candidate_id", "seed_candidate_run_id", "seed_line_ids",
     "seed_extraction_id", "seed_text_sha256", "seed_source_path",
+    "seed_context_text", "generation_trace_json",
     "clause_no", "cso_subclause_key",
     "cso_classification",
     "title", "ordering_agency", "department", "unit_task", "production_date",
@@ -609,6 +615,18 @@ def _with_retry(fn, *, max_attempts: int = 2):
     raise last_exc
 
 
+def _title_from_source_path(source_path: str, *, fallback: str) -> str:
+    """span 원문 파일명에서 내부 저장용 접두어를 제거한 문서 제목을 복원한다."""
+    stem = Path(source_path).stem.strip()
+    stem = re.sub(r"^\[[^\]]+\]\s*", "", stem)
+    stem = re.sub(r"^(?:DCT[0-9A-F]+|\d{6,})[_\s-]+", "", stem, flags=re.IGNORECASE)
+    stem = stem.strip(" _-")
+    # "1.pdf" 같은 내부 식별자뿐인 파일명은 제목으로 노출하지 않는다.
+    if stem and any(character.isalpha() for character in stem):
+        return stem
+    return fallback
+
+
 def generate_span_seeded_row(
     row_id: str,
     clause_no: str,
@@ -690,6 +708,10 @@ def generate_span_seeded_row(
         status = "llm_error"
         body_text = f"[에러: {exc}]"
     gen_time_s = round(time.monotonic() - start, 2)
+    source_title = _title_from_source_path(
+        candidate.get("source_path") or "",
+        fallback=" ".join(part for part in (agency, unit_task) if part).strip() or row_id,
+    )
 
     return {
         "row_id": row_id,
@@ -700,10 +722,30 @@ def generate_span_seeded_row(
         "seed_extraction_id": candidate.get("extraction_id") or "",
         "seed_text_sha256": candidate.get("text_sha256") or "",
         "seed_source_path": candidate.get("source_path") or "",
+        "seed_context_text": source_document_text,
+        "generation_trace_json": json.dumps(
+            {
+                "pipeline": "span_seeded",
+                "has_original_file": True,
+                "source_path": candidate.get("source_path") or "",
+                "candidate_id": candidate.get("candidate_id") or "",
+                "candidate_run_id": candidate.get("run_id") or "",
+                "extraction_id": candidate.get("extraction_id") or "",
+                "line_ids": candidate.get("line_ids") or [],
+                "matched_span_sha256": candidate.get("text_sha256") or "",
+                "llm_context_sha256": hashlib.sha256(
+                    source_document_text.encode("utf-8")
+                ).hexdigest(),
+                "llm_context_chars": len(source_document_text),
+                "prompt_version": SPAN_SEEDED_PROMPT_VERSION,
+                "model": model,
+            },
+            ensure_ascii=False,
+        ),
         "clause_no": clause_no,
         "cso_subclause_key": subclause_key or "",
         "cso_classification": clause.classification.value,
-        "title": f"[문서 근거] {clause.title} — {agency}",
+        "title": source_title,
         "ordering_agency": agency,
         "department": department,
         "unit_task": unit_task,
@@ -826,6 +868,8 @@ def generate_fallback_row(
         non_disclosure_reason = doc.non_disclosure_reason or non_disclosure_reason
         disclosure_status = doc.disclosure_status.value
         body_text = doc.body_text or ""
+        if clause_no == "6":
+            body_text = ensure_clause6_pii_evidence(body_text, scenario_index, row_id)
         if not body_text.strip():
             status = "empty_body"
     except Exception as exc:  # noqa: BLE001
@@ -850,6 +894,28 @@ def generate_fallback_row(
         "seed_extraction_id": "",
         "seed_text_sha256": "",
         "seed_source_path": "",
+        "seed_context_text": (
+            clause.scenario_prompts[scenario_index % len(clause.scenario_prompts)]
+            if scenario_index is not None and clause.scenario_prompts
+            else ""
+        ),
+        "generation_trace_json": json.dumps(
+            {
+                "pipeline": "synthetic_fallback",
+                "has_original_file": False,
+                "reason": "span 후보가 없거나 목표 건수보다 부족해 독립 시나리오로 합성",
+                "scenario_index": scenario_index,
+                "scenario_prompt": (
+                    clause.scenario_prompts[scenario_index % len(clause.scenario_prompts)]
+                    if scenario_index is not None and clause.scenario_prompts
+                    else ""
+                ),
+                "agency_selection_source": agency_source,
+                "prompt_version": FALLBACK_PROMPT_VERSION,
+                "model": model,
+            },
+            ensure_ascii=False,
+        ),
         "clause_no": clause_no,
         "cso_subclause_key": subclause_key or "",
         "cso_classification": clause.classification.value,
@@ -923,6 +989,17 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "seed_extraction_id": "",
         "seed_text_sha256": "",
         "seed_source_path": "",
+        "seed_context_text": "행정 처리 상태 결정적 템플릿",
+        "generation_trace_json": json.dumps(
+            {
+                "pipeline": "administrative_status_template",
+                "has_original_file": False,
+                "reason": "후보·LLM·DB 조회 없이 고정 템플릿으로 생성",
+                "prompt_version": "",
+                "model": "",
+            },
+            ensure_ascii=False,
+        ),
         "clause_no": "",
         "cso_subclause_key": "",
         "cso_classification": "S",
@@ -1220,9 +1297,13 @@ def generate_cell_rows(
             prod_date = synthesize_plausible_date(rng)
             agency_source = "whitelist_synthetic"
         else:
-            scenario_index = None
-            agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
-                rng, fallback_samples
+            (
+                scenario_index,
+                agency,
+                prod_date,
+                agency_source,
+            ) = sample_compatible_scenario_agency_and_date(
+                rng, clause_no, fallback_samples
             )
         military_secret_grade = (
             select_military_secret_grade(rng) if is_military_secret_agency(agency) else None
@@ -1319,6 +1400,13 @@ def _apply_template_validation(row: dict) -> None:
         row["clause_no"], row["doc_type"], row.get("cso_subclause_key") or None
     )
     violations = validate_row(spec, row) if spec else []
+    if str(row.get("clause_no") or "") == "6":
+        trace = json.loads(row.get("generation_trace_json") or "{}")
+        violations.extend(
+            validate_clause6_pii_evidence(
+                row.get("body_text") or "", trace.get("scenario_index")
+            )
+        )
     row["template_id"] = spec.template_id if spec else ""
     row["template_violations"] = "; ".join(violations)
     if violations and row["status"] == "ok":
@@ -1955,16 +2043,13 @@ def main() -> None:
                                 # 그 시나리오에 맞게 좁힌다(2026-07-23 사용자 지적 —
                                 # "근로복지공단이 웰빙 마사지기를 출시한다" 불일치 발견).
                                 # 채워져 있지 않은 조항(5,6,8호)은 기존처럼 무필터 추출.
-                                clause_def = CLAUSES[clause_no]
-                                n_scenarios = len(clause_def.scenario_prompts)
-                                scenario_index = rng.randrange(n_scenarios) if n_scenarios else None
-                                allowed_categories = None
-                                if scenario_index is not None and clause_def.scenario_agency_categories:
-                                    allowed_categories = clause_def.scenario_agency_categories[
-                                        scenario_index % len(clause_def.scenario_agency_categories)
-                                    ]
-                                agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
-                                    rng, fallback_samples, allowed_categories=allowed_categories
+                                (
+                                    scenario_index,
+                                    agency,
+                                    prod_date,
+                                    agency_source,
+                                ) = sample_compatible_scenario_agency_and_date(
+                                    rng, clause_no, fallback_samples
                                 )
                                 logo_filename = ""
                             # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급

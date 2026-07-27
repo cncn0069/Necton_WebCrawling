@@ -38,6 +38,15 @@ _GANADARA = ("가", "나", "다", "라", "마", "바", "사", "아")
 _APPROVAL_BOX_KEYWORDS = ("감사", "기획", "인사")
 _OFFICIAL_FORM_SLOGAN = "국민의 나라 정의로운 대한민국"
 _SYNTHETIC_SIGNER_NAMES = ("김민준", "이서연", "박지훈", "최수아", "정도현", "강하은", "윤재원")
+_SYNTHETIC_SIGNER_HANJA = {
+    "김민준": "金珉俊",
+    "이서연": "李瑞姸",
+    "박지훈": "朴志勳",
+    "최수아": "崔秀雅",
+    "정도현": "鄭道賢",
+    "강하은": "姜河恩",
+    "윤재원": "尹在元",
+}
 _SYNTHETIC_PETITIONER_NAMES = ("오세림", "한도윤", "임가언", "신우철", "배소민", "송재이")
 _SYNTHETIC_RANKS = ("행정사무관", "공업사무관", "시설사무관", "행정주사", "행정서기")
 _SYNTHETIC_DEPARTMENTS = ("경영관리과", "장비구매과", "기획조정과", "운영지원과", "총무과")
@@ -194,7 +203,39 @@ def _signature_context(template, seed: int, status: AdminStatus | None) -> dict 
         _SYNTHETIC_SIGNER_NAMES[(seed + idx) % len(_SYNTHETIC_SIGNER_NAMES)] if idx < signed else ""
         for idx in range(len(template.approval_positions))
     )
-    return {"headers": (f"★{template.approval_positions[0]}", *template.approval_positions[1:]), "names": names}
+    stamp_shapes = ("round", "oval", "square")
+    marks = []
+    for idx, name in enumerate(names):
+        kind = "signature" if idx == 0 else "stamp"
+        wear = tuple(
+            {
+                "left": 7 + (seed * 11 + idx * 19 + wear_idx * 23) % 82,
+                "top": 8 + (seed * 17 + idx * 13 + wear_idx * 29) % 80,
+                "width": 0.7 + ((seed + idx + wear_idx * 3) % 5) * 0.35,
+                "height": 0.25 + ((seed + idx * 2 + wear_idx) % 3) * 0.22,
+                "rotate": -35 + (seed * 3 + idx * 17 + wear_idx * 31) % 70,
+                "round": (seed + idx + wear_idx) % 3 == 0,
+            }
+            for wear_idx in range(7)
+        )
+        marks.append(
+            {
+                "name": name,
+                "text": _SYNTHETIC_SIGNER_HANJA.get(name, name) if kind == "stamp" else name,
+                # 같은 문서는 항상 같은 모양을 유지하면서 문서·결재자별로 형태가
+                # 달라지도록 seed와 칸 인덱스만 사용한다.
+                "shape": stamp_shapes[(seed + idx * 2) % len(stamp_shapes)],
+                "variant": (seed + idx) % 4,
+                "font": (seed + idx * 3) % 8,
+                "wear": wear if kind == "stamp" else (),
+                "kind": kind,
+            }
+        )
+    return {
+        "headers": (f"★{template.approval_positions[0]}", *template.approval_positions[1:]),
+        "names": names,
+        "marks": tuple(marks),
+    }
 
 
 def _build_signature_line(positions, signed_count, _style=None, *, seed=0):
@@ -441,6 +482,7 @@ def _render_context(
             address=_SYNTHETIC_ADDRESSES[seed % len(_SYNTHETIC_ADDRESSES)],
             tel_suffix=1000 + seed % 9000, email_suffix=f"{seed % 100:02d}",
             disclosure_label=disclosure_label,
+            release_due_date=release_due_date or "",
         )
     return context
 

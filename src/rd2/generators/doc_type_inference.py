@@ -20,6 +20,7 @@ from rd2.storage.naming import (
     DOC_TYPE_PERSONNEL,
     DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
+    DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
 )
 
@@ -29,7 +30,6 @@ _CLAUSE_DOC_TYPE: dict[str, str] = {
     "3": DOC_TYPE_REPORT,
     "4": DOC_TYPE_MEETING_MINUTES,
     # "5"는 _infer_clause5_doc_type()에서 키워드로 세분화한다.
-    "6": DOC_TYPE_PERSONNEL,
     "7": DOC_TYPE_REPORT,
     "8": DOC_TYPE_PLAN,
 }
@@ -56,6 +56,22 @@ _CLAUSE7_KEYWORD_MAP: tuple[tuple[str, str], ...] = (
     ("납품", DOC_TYPE_BID_NOTICE),
 )
 
+_CLAUSE6_KEYWORD_MAP: tuple[tuple[str, str], ...] = (
+    # 승인·결재 문구를 복지 키워드보다 먼저 검사한다. 예: "복지급여 지급 승인"은
+    # 일반 자료제출 공문이 아니라 결재문 템플릿이 맞다.
+    ("승인", DOC_TYPE_APPROVAL),
+    ("결재", DOC_TYPE_APPROVAL),
+    ("민원 처리 결과", DOC_TYPE_REPLY_NOTIFICATION),
+    ("민원 회신", DOC_TYPE_REPLY_NOTIFICATION),
+    ("답변", DOC_TYPE_REPLY_NOTIFICATION),
+    ("복지", DOC_TYPE_OFFICIAL_DOCUMENT),
+    ("수급", DOC_TYPE_OFFICIAL_DOCUMENT),
+    ("급여", DOC_TYPE_OFFICIAL_DOCUMENT),
+    ("지원대상", DOC_TYPE_OFFICIAL_DOCUMENT),
+    ("조사대상", DOC_TYPE_MEETING_MINUTES),
+    ("피조사", DOC_TYPE_MEETING_MINUTES),
+)
+
 
 def _infer_by_keywords(
     keyword_map: tuple[tuple[str, str], ...], keyword_text: str, fallback: str
@@ -72,6 +88,8 @@ def infer_doc_type(clause_no: str, *, keyword_text: str = "") -> str:
     if clause_no == "5":
         # "내부검토" 일반형 — 결재/승인 성격 문서로 폴백
         return _infer_by_keywords(_CLAUSE5_KEYWORD_MAP, keyword_text, DOC_TYPE_APPROVAL)
+    if clause_no == "6":
+        return _infer_by_keywords(_CLAUSE6_KEYWORD_MAP, keyword_text, DOC_TYPE_PERSONNEL)
     if clause_no == "7":
         return _infer_by_keywords(_CLAUSE7_KEYWORD_MAP, keyword_text, DOC_TYPE_REPORT)
     return _CLAUSE_DOC_TYPE.get(clause_no, DOC_TYPE_OFFICIAL_DOCUMENT)

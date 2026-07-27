@@ -1,5 +1,6 @@
 <div class="brief-heading"><span class="brief-label">참고</span><h1>{{ title }}</h1></div>
 <p class="brief-meta">'{{ production_date[2:] }}&nbsp;&nbsp;{{ agency }} {{ department }}</p>
+{% if release_due_date %}<div class="release-due-notice"><strong>공개 예정일</strong><span>{{ release_due_date }}</span><small>내부검토 종료 후 공개 여부를 다시 판단하는 예정일</small></div>{% endif %}
 {% include 'bodies/' ~ body_format ~ '.html' %}
 {% if extra_notice %}<p>{{ extra_notice }}</p>{% endif %}
 <p class="brief-disclosure">{{ disclosure_label }} · 내부 검토자료</p>

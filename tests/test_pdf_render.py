@@ -269,6 +269,36 @@ class TestClassificationGatedMarking:
 class TestRenderedBodyStructure:
     """구현 객체가 아니라 최종 PDF에서 선택 가능한 구조 텍스트를 검증한다."""
 
+    def test_internal_review_pdf_shows_prominent_release_due_date(self, tmp_path):
+        output = tmp_path / "internal-review.pdf"
+        row = _sample_row(
+            clause_no="5",
+            cso_subclause_key="decision_review",
+            doc_type="approval",
+            release_due_date="2026-10-06",
+        )
+
+        render_document_pdf(row, CATEGORY_PUBLIC_CORPORATION, output)
+
+        text = _pdf_text(output)
+        assert "공개 예정일" in text
+        assert "2026-10-06" in text
+        assert "내부검토 종료 후 공개 여부를 다시 판단하는 예정일" in text
+
+    def test_personnel_order_pdf_labels_synthetic_rrn_column(self, tmp_path):
+        output = tmp_path / "personnel-order.pdf"
+        row = _sample_row(
+            clause_no="6",
+            cso_subclause_key="personnel_pii",
+            doc_type="personnel",
+        )
+
+        render_document_pdf(row, CATEGORY_PUBLIC_CORPORATION, output)
+
+        text = _pdf_text(output)
+        assert "주민등록번호" in text
+        assert "발 령 사 항" in text
+
     def test_audit_result_uses_numbered_overview_with_ganadara_sub_items(self, tmp_path):
         output = tmp_path / "audit-structure.pdf"
         render_document_pdf(_sample_row(doc_type=DOC_TYPE_AUDIT_RESULT, body_text="첫 문단\n둘째 문단\n셋째 문단"), CATEGORY_PUBLIC_CORPORATION, output)

@@ -25,6 +25,16 @@ CATEGORY_PUBLIC_CORPORATION = "public_corporation"  # catch-all/기본값
 
 DEFAULT_CATEGORY = CATEGORY_PUBLIC_CORPORATION
 
+# Coverage planner(설계 문서 design-coverage-matrix-diversity-audit-20260723.md)가
+# 기관군 축을 순회할 때 쓰는 정렬 가능한 목록.
+AGENCY_CATEGORIES: tuple[str, ...] = (
+    CATEGORY_CENTRAL_MINISTRY,
+    CATEGORY_EDUCATION_OFFICE,
+    CATEGORY_METRO_LOCAL_GOVERNMENT,
+    CATEGORY_PUBLIC_CORPORATION,
+    CATEGORY_RESEARCH_INSTITUTE,
+)
+
 
 @dataclass(frozen=True)
 class AgencyCategoryRule:

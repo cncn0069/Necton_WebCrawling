@@ -617,6 +617,8 @@ class TestGenerateSpanSeededRow:
         assert row["seed_extraction_id"] == "extract-1"
         assert row["clause_no"] == "5"
         assert row["ordering_agency"] == "고용노동부"
+        assert row["title"] == "고용노동부 내부감사 계획"
+        assert "[문서 근거]" not in row["title"]
         assert row["body_text"] == "고용노동부 감사 관련 문서 본문"
         assert row["matched_span_text"] == "감사 관련 내부검토"
         assert row["doc_type"] == "audit_result"
@@ -624,6 +626,48 @@ class TestGenerateSpanSeededRow:
         assert row["is_synthetic"] is True
         assert set(row.keys()) == set(pilot.CSV_FIELDNAMES) - {"template_id", "template_violations"}
         assert captured_kwargs["candidate"]["candidate_id"] == "candidate-0"
+
+    def test_uses_real_source_filename_as_title(self, monkeypatch):
+        monkeypatch.setattr(
+            pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부"
+        )
+        monkeypatch.setattr(
+            pilot,
+            "load_extracted_document_text",
+            lambda candidate, data, extracted: "원문 전체 내용",
+        )
+        monkeypatch.setattr(
+            pilot,
+            "generate_span_seeded_body",
+            lambda seed, *, client, model: SeededResult(
+                department="고용정책실",
+                unit_task="장려금 지급 규정 개정",
+                production_date="2025-03-01",
+                body_text="규정 개정 검토 본문",
+                tokens_in=10,
+                tokens_out=10,
+            ),
+        )
+        candidate = self._candidate(
+            source_path=(
+                "data/moel/notification/"
+                "20220700805_고용창출장려금 고용안정장려금의 신청 및 지급에 관한 규정 일부개정(안).hwp"
+            )
+        )
+
+        row = pilot.generate_span_seeded_row(
+            "5-span-0",
+            "5",
+            candidate,
+            client=object(),
+            model="gpt-4o-mini",
+            sampling_seed=42,
+            conn=object(),
+            data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
+        )
+
+        assert row["title"] == "고용창출장려금 고용안정장려금의 신청 및 지급에 관한 규정 일부개정(안)"
 
     def test_llm_failure_produces_llm_error_status(self, monkeypatch):
         monkeypatch.setattr(pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부")

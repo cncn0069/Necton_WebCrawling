@@ -13,6 +13,7 @@ from rd2.generators.agency_resolver import (
     RECLASSIFICATION_RATIO,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
+    sample_compatible_scenario_agency_and_date,
     sample_diverse_agency_and_date_for_fallback,
     sample_real_agency_and_date_for_fallback,
     scenario_contains_military_secret,
@@ -209,6 +210,26 @@ class TestSampleDiverseAgencyAndDateForFallback:
         )
         with pytest.raises(RuntimeError, match="실제 \\(ordering_agency, production_date\\) 쌍이 비어"):
             sample_diverse_agency_and_date_for_fallback(random.Random(42), [])
+
+    def test_strict_commercial_scenario_rejects_unverified_public_bodies(self):
+        with pytest.raises(RuntimeError, match="필수 기능"):
+            sample_diverse_agency_and_date_for_fallback(
+                random.Random(42),
+                [("국립암센터", "2026-01-12"), ("국악방송", "2026-02-20")],
+                allowed_categories=["public_corporation"],
+                clause_no="7",
+                scenario_index=4,
+                strict_filters=True,
+            )
+
+    def test_pair_sampler_skips_commercial_scenario_when_no_agency_is_compatible(self):
+        scenario_index, agency, _, _ = sample_compatible_scenario_agency_and_date(
+            random.Random(66),
+            "7",
+            [("국립암센터", "2026-01-12"), ("국악방송", "2026-02-20")],
+        )
+        assert scenario_index not in (4, 6)
+        assert agency in ("국립암센터", "국악방송")
 
 
 class TestSelectWhitelistedAgency:

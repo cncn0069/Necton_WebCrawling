@@ -194,10 +194,12 @@ class TestPersonnelOrderTemplate:
         tables = [f for f in flowables if isinstance(f, Table)]
         assert len(tables) == 1
         cells = tables[0]._cellvalues
-        assert cells[0] == ["소  속", "직  급", "성  명", "발 령 사 항"]
+        assert cells[0] == ["소  속", "직  급", "성  명", "주민등록번호", "발 령 사 항"]
         for data_row in cells[1:]:
             name = data_row[2]
+            rrn = data_row[3]
             assert name and "O" not in name and "○" not in name  # 마스킹 없는 합성 인명
+            assert rrn and "O" not in rrn and "○" not in rrn  # 마스킹 없는 합성 주민등록번호
 
     def test_masking_marker_in_body_is_reported(self):
         # 6호는 "개인정보가 그대로 있어서 비공개"가 시나리오 — 마스킹돼 있으면 모순.
