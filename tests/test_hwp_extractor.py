@@ -43,12 +43,55 @@ class TestExtractHwp:
         assert "감사 개요" in result.text
         assert result.tables == [ExtractedTable(rows=[["감사 결과"]])]
 
+    def test_text_only_extract_omits_structured_table_pass(self):
+        result = extract_hwp(
+            _FIXTURES / "sample_audit_result.hwp",
+            include_tables=False,
+        )
+
+        assert result.is_valid is True
+        assert "감사 개요" in result.text
+        assert result.tables == []
+
     def test_hwpx_extracts_text(self):
         result = extract_hwp(_FIXTURES / "sample_notification.hwpx")
 
         assert result.is_encrypted is False
         assert result.needs_quarantine is False
         assert "고용위기 선제대응지역" in result.text
+
+    def test_hwpx_preserves_paragraph_boundaries_inside_table_cells(
+        self,
+        tmp_path: Path,
+    ):
+        source_path = tmp_path / "table-cell-paragraphs.hwpx"
+        section_xml = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hs="urn:hancom:section" xmlns:hp="urn:hancom:paragraph">
+  <hp:tbl>
+    <hp:tr>
+      <hp:tc>
+        <hp:subList>
+          <hp:p><hp:run><hp:t>첫 문단</hp:t></hp:run></hp:p>
+          <hp:p><hp:run><hp:t>둘째 문단</hp:t></hp:run></hp:p>
+        </hp:subList>
+      </hp:tc>
+    </hp:tr>
+  </hp:tbl>
+</hs:sec>
+"""
+        with ZipFile(source_path, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr("Contents/section0.xml", section_xml)
+
+        result = extract_hwp(source_path)
+        text_only_result = extract_hwp(source_path, include_tables=False)
+
+        assert result.is_valid is True
+        assert "첫 문단\n둘째 문단" in result.text
+        assert result.tables == [ExtractedTable(rows=[["첫 문단\n둘째 문단"]])]
+        assert text_only_result.is_valid is True
+        assert "첫 문단\n둘째 문단" in text_only_result.text
+        assert text_only_result.tables == []
 
     def test_file_type_is_detected_by_magic_not_misleading_suffix(self, tmp_path: Path):
         misleading_path = tmp_path / "actually_hwp5.hwpx"
@@ -67,6 +110,26 @@ class TestExtractHwp:
 
         assert result.is_valid is False
         assert result.needs_quarantine is True
+        assert result.text == ""
+
+    def test_hwp3_is_quarantined_without_starting_an_external_converter(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ):
+        source_path = tmp_path / "legacy.hwp"
+        source_path.write_bytes(hwp_extractor._HWP3_MAGIC + b"\x00legacy")
+
+        def unexpected_worker(*args, **kwargs):
+            raise AssertionError("unsupported HWP must not start a worker or converter")
+
+        monkeypatch.setattr(hwp_extractor.subprocess, "run", unexpected_worker)
+
+        result = extract_hwp(source_path)
+
+        assert result.is_valid is False
+        assert result.needs_quarantine is True
+        assert result.error == "unsupported_hwp3"
         assert result.text == ""
 
     def test_oversized_hwpx_member_is_quarantined_before_parser(self, tmp_path, monkeypatch):
@@ -113,7 +176,7 @@ def test_hwp_text_preserves_specific_isolated_parser_error(tmp_path: Path, monke
     monkeypatch.setattr(
         hwp_text,
         "extract_hwp",
-        lambda path: ExtractedHwpDocument(
+        lambda path, **_kwargs: ExtractedHwpDocument(
             source_path=path,
             is_valid=False,
             error="parser_timeout_after_60s",

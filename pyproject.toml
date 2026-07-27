@@ -12,7 +12,7 @@ dependencies = [
     "PyMySQL>=1.1",
     "pymupdf>=1.24",
     "pdfplumber>=0.11",
-    "hwp-hwpx-parser>=1.0",
+    "hwp-hwpx-parser==1.0.0",
     "numpy>=2.0",
     "Pillow>=10.0",
     "opencv-python-headless>=4.10",

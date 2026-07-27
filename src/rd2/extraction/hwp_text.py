@@ -33,10 +33,30 @@ from rd2.extraction.storage import (
 
 _HWP_SUFFIXES = (".hwp", ".hwpx")
 _SCANNED_AVG_CHARS_THRESHOLD = 5  # pdf_text.py의 스캔본 판정과 동일한 기준
+_MAX_LOGICAL_LINE_CHARS = 4_096
+_PREFERRED_LINE_BREAK_CHARS = (
+    " ",
+    "\t",
+    "|",
+    ".",
+    "。",
+    "!",
+    "?",
+    "！",
+    "？",
+    ";",
+    "；",
+)
 _HWP_EXTRACTION_CONFIG = {
     "line_mode": "logical_newline",
+    "hwpx_table_cell_paragraphs": "preserved",
+    "max_logical_line_chars": _MAX_LOGICAL_LINE_CHARS,
+    "structured_tables": "not_materialized",
+    "external_converter_fallback": "disabled",
+    "unsupported_or_unparseable": "quarantine",
     "geometry": "unavailable",
     "style_runs": "unavailable",
+    "little_or_no_text": "needs_ocr",
 }
 
 
@@ -109,21 +129,49 @@ def _canonical_hwp_base(
     }
 
 
-def _logical_hwp_lines(text: str) -> list[dict[str, Any]]:
-    lines: list[dict[str, Any]] = []
-    for line in (candidate for candidate in text.split("\n") if candidate.strip()):
-        order = len(lines)
-        lines.append(
-            {
-                "line_id": order,
-                "block_id": None,
-                "order": order,
-                "text": line,
-                "bbox_pt": None,
-                "style_runs": [],
-            }
+def _split_oversized_logical_line(text: str) -> list[str]:
+    """Bound pathological parser lines without dropping or rewriting text."""
+
+    chunks: list[str] = []
+    remainder = text
+    while len(remainder) > _MAX_LOGICAL_LINE_CHARS:
+        window = remainder[:_MAX_LOGICAL_LINE_CHARS]
+        split_at = max(
+            (window.rfind(char) + 1 for char in _PREFERRED_LINE_BREAK_CHARS),
+            default=0,
         )
-    return lines
+        if split_at < _MAX_LOGICAL_LINE_CHARS // 2:
+            split_at = _MAX_LOGICAL_LINE_CHARS
+        chunks.append(remainder[:split_at])
+        remainder = remainder[split_at:]
+    if remainder:
+        chunks.append(remainder)
+    return chunks
+
+
+def _logical_hwp_lines(text: str) -> tuple[list[dict[str, Any]], bool]:
+    lines: list[dict[str, Any]] = []
+    split_oversized_line = False
+    normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    source_lines = (
+        candidate for candidate in normalized_text.split("\n") if candidate.strip()
+    )
+    for source_line in source_lines:
+        chunks = _split_oversized_logical_line(source_line)
+        split_oversized_line = split_oversized_line or len(chunks) > 1
+        for chunk in chunks:
+            order = len(lines)
+            lines.append(
+                {
+                    "line_id": order,
+                    "block_id": None,
+                    "order": order,
+                    "text": chunk,
+                    "bbox_pt": None,
+                    "style_runs": [],
+                }
+            )
+    return lines, split_oversized_line
 
 
 def extract_hwp_document(
@@ -139,7 +187,7 @@ def extract_hwp_document(
     result = _canonical_hwp_base(hwp_path, data_root=data_root, source_sha256=digest)
 
     try:
-        document = extract_hwp(hwp_path)
+        document = extract_hwp(hwp_path, include_tables=False)
     except Exception as exc:  # noqa: BLE001 - one bad source must not stop a batch
         result["error"] = f"extraction failed: {exc}"
         result["quality"]["needs_quarantine"] = True
@@ -155,9 +203,12 @@ def extract_hwp_document(
         result["quality"]["warnings"] = ["encrypted" if document.is_encrypted else "invalid_document"]
         return result
 
-    lines = _logical_hwp_lines(document.text)
+    lines, split_oversized_line = _logical_hwp_lines(document.text)
     character_count = sum(len(line["text"]) for line in lines)
     has_text_layer = character_count >= _SCANNED_AVG_CHARS_THRESHOLD
+    warnings = ["oversized_logical_line_split"] if split_oversized_line else []
+    if not has_text_layer:
+        warnings.append("little_or_no_text")
     result["pages"] = [
         {
             "page": 1,
@@ -167,14 +218,14 @@ def extract_hwp_document(
             "lines": lines,
         }
     ]
-    result["status"] = "ok"
+    result["status"] = "ok" if has_text_layer else "needs_ocr"
     result["quality"] = {
         "has_text_layer": has_text_layer,
-        "needs_ocr": False,
+        "needs_ocr": not has_text_layer,
         "needs_quarantine": False,
-        "pages_needing_ocr": [],
+        "pages_needing_ocr": [] if has_text_layer else [1],
         "avg_chars_per_page": None,
-        "warnings": [] if has_text_layer else ["little_or_no_text"],
+        "warnings": warnings,
     }
     return result
 
@@ -207,7 +258,7 @@ def extract_hwp_spans(hwp_path: Path, *, data_root: Path) -> dict[str, Any]:
     }
 
     try:
-        doc = extract_hwp(hwp_path)
+        doc = extract_hwp(hwp_path, include_tables=False)
     except Exception as exc:  # noqa: BLE001 — 배치 처리 중 파일 하나 실패로 전체를 죽이지 않음
         result["error"] = f"extraction failed: {exc}"
         return result
