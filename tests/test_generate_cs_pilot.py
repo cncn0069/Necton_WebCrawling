@@ -690,6 +690,58 @@ class TestGenerateSpanSeededRow:
         assert "simulated API failure" in row["body_text"]
 
 
+class TestClause6SpanPiiEvidence:
+    def test_adds_deterministic_pii_evidence(self, monkeypatch):
+        candidate_text = "성명 주민등록번호 연락처"
+        candidate = {
+            "source": "moel",
+            "doc_type": "notification",
+            "doc_id": "1",
+            "candidate_id": "candidate-6",
+            "run_id": "run-1",
+            "extraction_id": "extract-1",
+            "line_ids": [0],
+            "text": candidate_text,
+            "text_sha256": hashlib.sha256(candidate_text.encode("utf-8")).hexdigest(),
+            "page": 1,
+            "source_path": "data/moel/notification/1.pdf",
+        }
+        monkeypatch.setattr(
+            pilot, "resolve_agency_for_candidate", lambda candidate, conn: "고용노동부"
+        )
+        monkeypatch.setattr(
+            pilot,
+            "load_extracted_document_text",
+            lambda candidate, data, extracted: "개인정보 신청서 원문",
+        )
+        monkeypatch.setattr(
+            pilot,
+            "generate_span_seeded_body",
+            lambda seed, *, client, model: SeededResult(
+                department="복지과",
+                unit_task="개인정보 신청",
+                production_date="2025-03-01",
+                body_text="신청인 성명: 홍길동",
+                tokens_in=10,
+                tokens_out=10,
+            ),
+        )
+
+        row = pilot.generate_span_seeded_row(
+            "6-span-0",
+            "6",
+            candidate,
+            client=object(),
+            model="gpt-4o-mini",
+            sampling_seed=42,
+            conn=object(),
+            data_root=Path("data"),
+            extracted_root=Path("data/extracted"),
+        )
+
+        assert pilot.validate_clause6_pii_evidence(row["body_text"], None) == []
+
+
 class TestGenerateFallbackRow:
     def test_success_path_preserves_real_agency_and_date(self, monkeypatch):
         def fake_generate_clause_document(
