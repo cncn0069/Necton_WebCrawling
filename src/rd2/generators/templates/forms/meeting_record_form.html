@@ -6,6 +6,7 @@
 <p class="assembly-office">{{ agency }} {{ department }}</p>
 <p class="assembly-datetime">{{ production_date }}({{ assembly_weekday }}) {{ assembly_convene_time }}</p>
 </div>
+{% if release_due_date %}<div class="release-due-notice"><strong>공개 예정일</strong><span>{{ release_due_date }}</span><small>내부검토 종료 후 공개 여부를 다시 판단하는 예정일</small></div>{% endif %}
 <div class="assembly-agenda">
 <p class="meeting-section">의사일정</p>
 {% for item in assembly_agenda_items %}<p>{{ loop.index }}. {{ item }}</p>{% endfor %}

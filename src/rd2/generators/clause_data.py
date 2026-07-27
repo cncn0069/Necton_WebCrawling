@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rd2.generators.agency_categories import (
+    CATEGORY_CENTRAL_MINISTRY,
+    CATEGORY_METRO_LOCAL_GOVERNMENT,
+    CATEGORY_PUBLIC_CORPORATION,
+    CATEGORY_RESEARCH_INSTITUTE,
+)
 from rd2.schema.models import CsoClassification
 
 
@@ -30,6 +36,22 @@ class ClauseDefinition:
     # "외교부가 군사대비태세 문서를 쓴다" 같은 시나리오-기관 불일치를 막을 수 있다
     # (2026-07-21 사용자 지적으로 스코프 재확정 — 이전엔 조항 단위 랜덤만 허용했었다).
     scenario_agencies: list[list[str]] = field(default_factory=list)
+    # scenario_prompts[i]와 짝지어지는 agency_categories.AGENCY_CATEGORIES 부분집합 —
+    # 5~8호는 화이트리스트가 아니라 rd2 DB의 실제 (기관,날짜) 표본에서 고르므로
+    # scenario_agencies(고정 기관명 목록)를 못 쓴다. 대신 기관 "유형"으로만 좁힌다.
+    # 채우지 않으면(기본값) 조항 전체 표본에서 그대로 고른다. 5·6·8호는 시나리오가
+    # 기관 유형과 무관하게 대부분 적용 가능해 비워둬도 되지만, 7호(경영상 비밀)는
+    # "신제품 마케팅"·"프랜차이즈" 같은 상업적 소재라 공사·공단(public_corporation)
+    # 밖에서 뽑히면 "근로복지공단이 웰빙 마사지기를 출시한다" 같은 불일치가
+    # 생긴다(2026-07-23 사용자 지적 — 실제 파일럿 생성 결과에서 발견).
+    scenario_agency_categories: list[list[str]] = field(default_factory=list)
+    # scenario_prompts 인덱스 중, 국방부/국가정보원이 아닌 기관이 배정돼도(scenario_agencies
+    # 풀에 비군사기관이 포함된 경우) 내용상 군사기밀 사항이 섞여 있다고 볼 시나리오.
+    # agency_resolver.scenario_contains_military_secret()이 이 필드를 참조해, 비군사기관
+    # 문서에 "이 비밀에는 군사기밀 사항이 포함되어 있습니다" 붉은 문구를 붙일지 정한다
+    # (비밀표시 규정 제9항, 2026-07-27 사용자 제공 이미지). 조항 단위가 아니라 시나리오
+    # 단위로 좁혀 태깅한다 — 조항 전체에 걸면 군사기밀과 무관한 시나리오까지 과잉 확대된다.
+    military_secret_content_scenarios: frozenset[int] = field(default_factory=frozenset)
     requires_pii: bool = False
     on_hold: bool = False
 
@@ -114,6 +136,12 @@ CLAUSES: dict[str, ClauseDefinition] = {
             ["외교부"],
             ["통일부"],
         ],
+        # index 4("주요 우방국과의 방위산업 기술협력 비공개 협상 경과 보고서")는 기관 풀에
+        # 비군사기관(외교부)이 포함돼 있고, 내용 자체가 방위산업(군사기밀 인접) 기술이라
+        # 외교부가 뽑히면 "일반 기관 문서인데 군사기밀 사항이 섞인" 사례가 된다(비밀표시
+        # 규정 제9항). 조항 2의 다른 시나리오(예: 재외공관 보안대책, 대북 인도적 지원 등)는
+        # 안보 관련이어도 군사기밀 그 자체는 아니라 태깅하지 않는다(2026-07-27 사용자 확인).
+        military_secret_content_scenarios=frozenset({4}),
     ),
     "3": ClauseDefinition(
         clause_no="3",
@@ -246,6 +274,17 @@ CLAUSES: dict[str, ClauseDefinition] = {
         ],
         # 2026-07-22 비공개대상정보세부기준.pdf 7호 표의 "핵심전략기술 검토 내용, 신청
         # 및 판정결과 등 핵심전략기술 유출이 우려되는 자료" 항목을 반영해 1개 추가.
+        scenario_agency_categories=[
+            [CATEGORY_RESEARCH_INSTITUTE, CATEGORY_PUBLIC_CORPORATION],
+            [CATEGORY_PUBLIC_CORPORATION],
+            [CATEGORY_PUBLIC_CORPORATION, CATEGORY_RESEARCH_INSTITUTE, CATEGORY_CENTRAL_MINISTRY],
+            [CATEGORY_PUBLIC_CORPORATION, CATEGORY_CENTRAL_MINISTRY, CATEGORY_METRO_LOCAL_GOVERNMENT],
+            [CATEGORY_PUBLIC_CORPORATION],
+            [CATEGORY_PUBLIC_CORPORATION],
+            [CATEGORY_PUBLIC_CORPORATION],
+            [CATEGORY_PUBLIC_CORPORATION, CATEGORY_METRO_LOCAL_GOVERNMENT],
+            [CATEGORY_CENTRAL_MINISTRY, CATEGORY_RESEARCH_INSTITUTE, CATEGORY_PUBLIC_CORPORATION],
+        ],
     ),
     "8": ClauseDefinition(
         clause_no="8",
