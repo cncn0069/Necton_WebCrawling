@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime
 import random
 
+from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.clause_data import CLAUSES
 
 FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
@@ -124,6 +125,105 @@ def select_military_secret_grade(rng: random.Random) -> str:
     마크 이미지 선택) 양쪽에 동일하게 써야 마크와 내용이 어긋나지 않는다.
     """
     return rng.choice(MILITARY_SECRET_GRADES)
+
+
+def scenario_contains_military_secret(
+    clause_no: str, scenario_index: int | None, agency: str
+) -> bool:
+    """국방부/국가정보원이 아닌 일반 기관 문서에 군사기밀 사항이 섞여 있는지 판단한다
+    (비밀표시 규정 제9항 — "각급 행정기관의 장이 생산·재생산하는 비밀 중 군사기밀
+    사항이 포함되어 있는 경우"의 붉은 문구 표시 대상, 2026-07-27 사용자 제공).
+
+    이미 [별표 2] 등급 마크 대상이면(is_military_secret_agency) 별도 표시가 필요
+    없다 — clause_data.ClauseDefinition.military_secret_content_scenarios로 태깅된
+    시나리오를 비군사기관이 배정받았을 때만 True.
+    """
+    if scenario_index is None or is_military_secret_agency(agency):
+        return False
+    clause = CLAUSES.get(clause_no)
+    if clause is None:
+        return False
+    return scenario_index in clause.military_secret_content_scenarios
+
+
+# [별표 2] 7호 "재분류 표시" — 재분류는 하향(격하)만 허용한다(2026-07-27 사용자 결정,
+# 실무상 재분류는 시간 경과에 따른 격하가 일반적). key: 재분류 후(현재 문서에 실제로
+# 붙는) 등급, value: 그 문서가 예전에 가졌을 수 있는 더 높은 등급 후보.
+_RECLASSIFIABLE_FROM: dict[str, tuple[str, ...]] = {
+    "1급": (),
+    "2급": ("1급",),
+    "3급": ("1급", "2급"),
+}
+
+# 등급 마크 대상 문서 중 이 비율만큼 무작위로 "재분류된 문서" 변형을 만든다(조정 가능).
+RECLASSIFICATION_RATIO = 0.2
+
+_RECLASSIFICATION_BASIS_TEXTS: tuple[str, ...] = (
+    "군사기밀 보호법 시행령 제7조",
+    "정기 재분류 심사 결과",
+    "군사기밀 보호업무 훈령 재분류 기준",
+)
+_RECLASSIFICATION_RANKS: tuple[str, ...] = ("대령", "중령", "소령", "준장")
+_RECLASSIFICATION_POSITIONS: tuple[str, ...] = ("보안담당관", "정보보호담당관", "기획관리참모", "군사보안실장")
+_RECLASSIFICATION_SIGNER_NAMES: tuple[str, ...] = ("김도현", "이준서", "박서준", "최지훈", "정하율")
+
+
+def synthesize_plausible_date_after(
+    rng: random.Random,
+    base_date_iso: str,
+    *,
+    max_days_after: int = 730,
+    today: datetime.date | None = None,
+) -> str:
+    """생산일 이후이면서 오늘을 넘지 않는 재분류일을 생성한다."""
+    base_date = datetime.date.fromisoformat(base_date_iso)
+    upper_date = min(
+        base_date + datetime.timedelta(days=max_days_after),
+        today or datetime.date.today(),
+    )
+    available_days = (upper_date - base_date).days
+    if available_days < 1:
+        raise ValueError("재분류일을 만들 수 있는 과거 날짜 구간이 없습니다")
+    days_after = rng.randint(1, available_days)
+    return (base_date + datetime.timedelta(days=days_after)).isoformat()
+
+
+def select_reclassification(
+    rng: random.Random,
+    grade: str,
+    production_date: str,
+    *,
+    today: datetime.date | None = None,
+) -> dict | None:
+    """등급 문서 중 일부를 무작위로 "재분류된 문서"로 만든다([별표 2] 7호 재분류 표시).
+
+    grade가 이미 최고등급(1급)이면 더 높았던 이력을 만들 수 없어 항상 None. 반환값은
+    {"old_grade", "basis_text", "reclass_date", "position", "rank", "name"} 또는 None —
+    security_mark.py의 재분류 마크 생성과 generate_cs_pilot.py의 CSV 직렬화(JSON) 양쪽에
+    그대로 쓰인다. 직책/계급/성명/근거 문구는 전부 합성 데이터다(2026-07-27 사용자 결정).
+    """
+    candidates = _RECLASSIFIABLE_FROM.get(grade, ())
+    current_date = today or datetime.date.today()
+    try:
+        produced_on = datetime.date.fromisoformat(production_date)
+    except ValueError:
+        return None
+    if (
+        not candidates
+        or produced_on >= current_date
+        or rng.random() >= RECLASSIFICATION_RATIO
+    ):
+        return None
+    return {
+        "old_grade": rng.choice(candidates),
+        "basis_text": rng.choice(_RECLASSIFICATION_BASIS_TEXTS),
+        "reclass_date": synthesize_plausible_date_after(
+            rng, production_date, today=current_date
+        ),
+        "position": rng.choice(_RECLASSIFICATION_POSITIONS),
+        "rank": rng.choice(_RECLASSIFICATION_RANKS),
+        "name": rng.choice(_RECLASSIFICATION_SIGNER_NAMES),
+    }
 
 
 def _scenario_agency_pool(clause_no: str, scenario_index: int | None) -> list[str] | None:
@@ -291,7 +391,10 @@ GENERAL_TRACK_SUPPLEMENTARY_AGENCIES: list[str] = ["기획재정부"]
 
 
 def sample_diverse_agency_and_date_for_fallback(
-    rng: random.Random, samples: list[tuple[str, str]]
+    rng: random.Random,
+    samples: list[tuple[str, str]],
+    *,
+    allowed_categories: list[str] | None = None,
 ) -> tuple[str, str, str]:
     """5~8호 폴백 문서용으로 (기관명, 생산일자, agency_source)를 뽑는다.
 
@@ -303,6 +406,13 @@ def sample_diverse_agency_and_date_for_fallback(
     (agency_source="real_db_sample"), 보충 목록에서 온 기관처럼 실제 날짜가
     없으면 synthesize_plausible_date()로 짓는다(agency_source="whitelist_synthetic",
     R3에 따라 기관명 자체는 항상 실존 기관이다).
+
+    allowed_categories가 주어지면 agency_categories.get_agency_category()로
+    각 기관을 분류해 그 유형에 속하는 기관으로만 풀을 좁힌다(예: 7호 "신제품
+    마케팅" 시나리오가 공사·공단이 아닌 곳에 배정되는 걸 막기 위함 —
+    clause_data.ClauseDefinition.scenario_agency_categories 참고, 2026-07-23
+    사용자 지적). 필터링 후 풀이 비면 시나리오-기관 일치보다 "가짜 기관 금지"
+    (R3)가 우선이므로 조용히 필터링 전 전체 풀로 되돌아간다.
     """
     agency_to_dates: dict[str, list[str]] = {}
     for agency, prod_date in samples:
@@ -318,6 +428,11 @@ def sample_diverse_agency_and_date_for_fallback(
             "실제 (ordering_agency, production_date) 쌍이 비어 있어 폴백 값을 "
             "고를 수 없습니다 — rd2 DB에 최소 1건 이상의 실제 값이 있어야 합니다."
         )
+
+    if allowed_categories:
+        filtered = [a for a in pool if get_agency_category(a) in allowed_categories]
+        if filtered:
+            pool = filtered
 
     agency = rng.choice(pool)
     if agency in agency_to_dates:
