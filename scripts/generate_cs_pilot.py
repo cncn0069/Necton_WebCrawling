@@ -701,6 +701,8 @@ def generate_span_seeded_row(
         department, unit_task, production_date, body_text = (
             result.department, result.unit_task, result.production_date, result.body_text,
         )
+        if clause_no == "6":
+            body_text = ensure_clause6_pii_evidence(body_text, None, row_id)
         tokens_in, tokens_out = result.tokens_in, result.tokens_out
         if not body_text or not body_text.strip():
             status = "empty_body"
