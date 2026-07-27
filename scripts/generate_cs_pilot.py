@@ -50,6 +50,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -80,9 +81,15 @@ from rd2.generators.agency_resolver import (
     is_military_secret_agency,
     resolve_agency_for_candidate,
     sample_diverse_agency_and_date_for_fallback,
+    scenario_contains_military_secret,
     select_military_secret_grade,
+    select_reclassification,
     select_whitelisted_agency,
     synthesize_plausible_date,
+)
+from rd2.generators.candidate_manifest import (
+    fetch_all_span_candidates,
+    load_candidate_manifest,
 )
 from rd2.generators.clause_data import CLAUSES
 from rd2.generators.doc_templates import find_template, validate_row
@@ -93,7 +100,10 @@ from rd2.generators.security_mark import (
     generate_agency_letterhead_mark,
     generate_agency_watermark,
     generate_classification_stamp,
+    generate_military_secret_content_notice,
     generate_military_secret_mark,
+    generate_reclassification_notice,
+    generate_reclassification_old_mark,
 )
 from rd2.generators.template_matrix import TARGET_BY_KEY, infer_subclause_key
 from rd2.schema.models import Document
@@ -108,10 +118,16 @@ CSV_FIELDNAMES = [
     "cso_classification",
     "title", "ordering_agency", "department", "unit_task", "production_date",
     "subject_category", "matched_span_text", "non_disclosure_reason", "body_text",
-    "disclosure_status", "document_status", "source", "source_url", "doc_type", "is_synthetic",
+    "disclosure_status", "document_status", "release_due_date",
+    "source", "source_url", "doc_type", "is_synthetic",
     "field_source", "status", "model", "tokens_in", "tokens_out", "gen_time_s",
     "sampling_seed", "prompt_version", "template_id", "template_violations",
     "military_secret_grade", "agency_logo_filename",
+    # 2026-07-27 추가 — 비밀표시 규정 제9항(일반 기관 문서에 군사기밀 사항이 섞인
+    # 경우 붉은 문구)과 [별표 2] 7호(군사기밀 등급 문서의 재분류 표시). 후자는
+    # select_reclassification()의 반환 dict를 JSON으로 담는다(기존 field_source
+    # 컬럼과 같은 "JSON-in-CSV" 관례) — 재분류가 아니면 빈 문자열.
+    "military_secret_content_notice", "reclassification_json",
     # --target-matrix 모드 전용(2026-07-21 추가) — 기존 --per-clause 경로의 행은
     # 이 세 필드가 빈 문자열로 남는다. "영구 0건 셀" 예외가 적용된 셀은 반드시
     # cell_zero_candidate_exception="true"로 CSV에서 바로 보이게 한다(설계 문서
@@ -148,14 +164,53 @@ DEFAULT_PRE_MARK_RATIO = 1.0
 
 # candidates.py는 조항 5/6/7/8만 span 탐지 로직이 있다 — 1~4호는 항상 폴백.
 _SPAN_CLAUSES = ("5", "6", "7", "8")
-_CANDIDATE_MANIFEST_NAME = "_manifest.json"
 
-_MAX_SOURCE_DOCUMENT_CHARS = 4000  # generate.py의 _MAX_ANCHOR_TEXT_CHARS와 동일 절단 관례
+# 정보공개법(공공기관의 정보공개에 관한 법률) 제9조1항5호 — 의사결정 과정 또는
+# 내부검토 과정을 이유로 비공개할 때는 그 과정이 끝나 공개 여부를 다시 판단할
+# 시점(공개 예정 일시)을 함께 정해야 한다(2026-07-27 사용자 지적). 이 프로젝트의
+# 조항 번호 체계에서 그 사유는 clause_no == "5"뿐이므로, 그 조항 행에만 값을 채운다.
+_INTERNAL_REVIEW_CLAUSE_NO = "5"
+_RELEASE_DUE_MIN_DAYS = 30
+_RELEASE_DUE_MAX_DAYS = 180
+
+
+def _synthesize_release_due_date(
+    production_date: str,
+    row_id: str,
+    *,
+    today: date | None = None,
+) -> str:
+    """clause_no 5(내부검토) 행에 한해 결정론적인 공개 예정 일시를 합성한다.
+
+    production_date가 없거나 ISO 형식이 아니면(LLM 산출 오류 등) 빈 문자열을
+    돌려준다 — 근거 없는 날짜를 지어내지 않는다.
+    """
+    try:
+        base = date.fromisoformat(production_date)
+    except (TypeError, ValueError):
+        return ""
+    reference_date = max(base, today or date.today())
+    digest = hashlib.sha256(f"release-due:{row_id}".encode()).hexdigest()
+    span = _RELEASE_DUE_MAX_DAYS - _RELEASE_DUE_MIN_DAYS
+    offset_days = _RELEASE_DUE_MIN_DAYS + (int(digest[:8], 16) % (span + 1))
+    return (reference_date + timedelta(days=offset_days)).isoformat()
+
 # 근거 span을 중심으로 앞/뒤에 배분할 글자 수. 문서 앞부분부터 자르면 근거 span이
 # 뒤쪽 페이지에 있을 때 그 앞뒤 문맥이 통째로 잘려나가 LLM이 근거 문구만 보고
 # 본문을 얇게 쓰는 문제가 있었다(2026-07-21 사용자 피드백).
-_CONTEXT_CHARS_BEFORE = _MAX_SOURCE_DOCUMENT_CHARS // 2
-_CONTEXT_CHARS_AFTER = _MAX_SOURCE_DOCUMENT_CHARS - _CONTEXT_CHARS_BEFORE
+#
+# 2026-07-27: 기존 4000자(앞/뒤 2000자씩)는 같은 문서에서 candidate가 여러 개 나올 때
+# 서로의 문맥 창이 겹쳐서(예: 인접한 표 행들) LLM이 거의 같은 문맥을 보고 쓰게 되고,
+# 그 결과 서로 다른 candidate인데도 생성 결과가 비슷해지는 원인이었다. 예산을
+# 줄이고, 글자수로 뭉텅 자르는 대신 block_id(추출 시 물리 줄이 묶인 논리 단위 —
+# 문단/표 셀 등) 경계에서만 자르도록 바꾼다 — 표나 문단 중간이 잘리는 것도 같이
+# 막는다. 근거 span 자신(anchor)은 예산과 무관하게 항상 보존한다.
+_CONTEXT_TOTAL_BUDGET_CHARS = 1200
+# anchor가 속한 block 자체가 예산보다 훨씬 큰 드문 경우(예: 거대한 표 하나가 통째로
+# 한 block)에만 적용되는 안전장치. anchor 보존 원칙 때문에 이 경우 앞뒤 문맥 없이
+# anchor만 쓰지만, 그 anchor조차 무한정 길 수는 없으니 최후 방어선으로 자른다.
+# 정상 케이스(anchor가 예산 안에 들어옴)에는 전혀 영향 없다.
+_ANCHOR_HARD_CEILING_CHARS = _CONTEXT_TOTAL_BUDGET_CHARS * 3
 
 
 def connect_mariadb() -> pymysql.connections.Connection:
@@ -184,89 +239,35 @@ def connect_mariadb() -> pymysql.connections.Connection:
         raise RuntimeError(f"MariaDB 접속 실패: {exc}") from exc
 
 
-def load_candidate_manifest(
-    candidates_dir: Path,
-    *,
-    allow_partial: bool = False,
-) -> dict:
-    path = candidates_dir / _CANDIDATE_MANIFEST_NAME
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"후보 manifest가 없습니다: {path}") from exc
-    except (json.JSONDecodeError, OSError) as exc:
-        raise RuntimeError(f"후보 manifest를 읽을 수 없습니다: {path} ({exc})") from exc
+def _deduplicate_candidates_by_document_text(candidates: list[dict]) -> list[dict]:
+    """같은 문서에서 text가 완전히 같은 후보는 첫 번째 것만 남긴다.
 
-    status = manifest.get("status")
-    if status != "complete" and not (allow_partial and status == "partial"):
-        raise RuntimeError(
-            f"후보 생성이 완결되지 않았습니다(status={status!r}). "
-            "--allow-partial-candidates를 명시하지 않으면 유료 생성을 시작하지 않습니다."
-        )
-    if not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
-        raise RuntimeError("후보 manifest에 run_id가 없습니다")
-    if not isinstance(manifest.get("counts"), dict):
-        raise RuntimeError("후보 manifest에 counts가 없습니다")
-    if not isinstance(manifest.get("rule_version"), str) or not manifest["rule_version"]:
-        raise RuntimeError("후보 manifest에 rule_version이 없습니다")
-    return manifest
-
-
-def fetch_all_span_candidates(
-    candidates_dir: Path,
-    *,
-    expected_run_id: str | None = None,
-    expected_rule_version: str | None = None,
-    expected_counts: dict[str, int] | None = None,
-) -> dict[str, list[dict]]:
-    """data/candidates/clause_{5,6,7,8}.jsonl을 읽어 clause_no로 버킷팅한다.
-
-    candidate dict 자체에는 clause_no가 들어있지 않다(candidates.py의
-    _base_candidate 참고) — 어느 파일에서 나왔는지로만 조항을 구분한다.
+    반복 양식 라벨처럼 source_path와 text가 모두 같은 후보는 LLM 입력의 anchor도
+    동일하므로 여러 번 생성할 정보 가치가 없다. 다른 문서의 같은 문구는 서로 다른
+    문맥을 가질 수 있어 보존한다. 필수 키가 없거나 문자열이 아닌 비정상 후보는
+    여기서 합치지 않고 이후 기존 검증 경로가 오류를 설명하게 둔다.
     """
-    buckets: dict[str, list[dict]] = {}
-    for clause_no in _SPAN_CLAUSES:
-        path = candidates_dir / f"clause_{clause_no}.jsonl"
-        candidates: list[dict] = []
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                for line_no, line in enumerate(f, start=1):
-                    line = line.strip()
-                    if line:
-                        candidate = json.loads(line)
-                        if expected_run_id is not None and candidate.get("run_id") != expected_run_id:
-                            raise ValueError(
-                                f"{path}:{line_no}: 후보 run_id가 manifest와 불일치: "
-                                f"record={candidate.get('run_id')!r}, "
-                                f"manifest={expected_run_id!r}"
-                            )
-                        if (
-                            expected_rule_version is not None
-                            and candidate.get("rule_version") != expected_rule_version
-                        ):
-                            raise ValueError(
-                                f"{path}:{line_no}: 후보 rule_version이 manifest와 불일치: "
-                                f"record={candidate.get('rule_version')!r}, "
-                                f"manifest={expected_rule_version!r}"
-                            )
-                        candidates.append(candidate)
-        if expected_counts is not None:
-            expected_count = expected_counts.get(clause_no)
-            if not isinstance(expected_count, int) or expected_count < 0:
-                raise ValueError(f"후보 manifest counts에 {clause_no}호 개수가 없음")
-            if len(candidates) != expected_count:
-                raise ValueError(
-                    f"{path}: 후보 개수가 manifest와 불일치: "
-                    f"records={len(candidates)}, manifest={expected_count}"
-                )
-        buckets[clause_no] = candidates
-    return buckets
+    unique: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        source_path = candidate.get("source_path")
+        text = candidate.get("text")
+        if not isinstance(source_path, str) or not isinstance(text, str):
+            unique.append(candidate)
+            continue
+        key = (source_path, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
 
 
 def _sample_candidates(candidates: list[dict], count: int, rng: random.Random) -> list[dict]:
-    if len(candidates) <= count:
-        return list(candidates)
-    return rng.sample(candidates, count)
+    unique_candidates = _deduplicate_candidates_by_document_text(candidates)
+    if len(unique_candidates) <= count:
+        return unique_candidates
+    return rng.sample(unique_candidates, count)
 
 
 class CandidateSourceMismatch(ValueError):
@@ -278,6 +279,7 @@ class _DocumentLine:
     line_id: object
     page: object
     text: str
+    block_id: object
 
 
 @dataclass(frozen=True)
@@ -429,13 +431,68 @@ def _load_extracted_document(
             if line_id is None or line_id in index_by_line_id:
                 raise CandidateSourceMismatch(f"누락 또는 중복 line_id: {line_id!r}")
             index_by_line_id[line_id] = len(lines)
-            lines.append(_DocumentLine(line_id=line_id, page=page_number, text=text))
+            lines.append(
+                _DocumentLine(
+                    line_id=line_id, page=page_number, text=text, block_id=line.get("block_id")
+                )
+            )
 
     return _CachedExtractedDocument(
         extraction_id=extraction_id,
         lines=tuple(lines),
         index_by_line_id=index_by_line_id,
     )
+
+
+def _block_span(document: _CachedExtractedDocument, index: int) -> tuple[int, int]:
+    """index가 속한 연속 block_id 구간의 (start, end) 인덱스(둘 다 포함)를 반환한다.
+
+    block_id가 같은 줄들은 추출 시 이미 인접하게 저장된다(PyMuPDF 물리 블록
+    순서 보존) — 여기서는 그 인접 구간의 경계만 찾는다. block_id가 None인
+    줄(HWP 등 좌표 정보가 없는 추출)은 줄 하나짜리 block으로 취급한다.
+    """
+    block_id = document.lines[index].block_id
+    if block_id is None:
+        # HWP/HWPX 추출본은 block_id가 전부 None이다(extraction-v2.md — 신뢰할 수
+        # 있는 물리 블록 정보가 없어 null로 저장). None끼리 같다고 보면 문서 전체가
+        # 하나의 거대한 block이 되어 예산을 항상 초과하고, 결과적으로 앞뒤 문맥이
+        # 전혀 안 붙는다(2026-07-27 실측에서 창 길이 37자로 확인). 줄 하나짜리
+        # block으로 취급해 글자수 예산 안에서 줄 단위로 문맥을 모으게 한다.
+        return index, index
+    start = index
+    while start - 1 >= 0 and document.lines[start - 1].block_id == block_id:
+        start -= 1
+    end = index
+    while end + 1 < len(document.lines) and document.lines[end + 1].block_id == block_id:
+        end += 1
+    return start, end
+
+
+def _collect_block_context(
+    document: _CachedExtractedDocument, start_index: int, step: int, budget: int
+) -> list[str]:
+    """start_index에서 step 방향(-1=앞으로, +1=뒤로)으로 block 단위로 문맥을 모은다.
+
+    block을 절반만 포함시키지 않는다 — 한 block 전체가 남은 예산 안에 들어갈
+    때만 포함하고, 아니면 거기서 멈춘다(표/문단 중간 절단 방지).
+    """
+    collected: list[str] = []
+    chars = 0
+    index = start_index
+    while 0 <= index < len(document.lines) and chars < budget:
+        block_start, block_end = _block_span(document, index)
+        block_texts = [document.lines[k].text for k in range(block_start, block_end + 1)]
+        block_chars = sum(len(text) + 1 for text in block_texts)
+        if chars + block_chars > budget:
+            break
+        if step < 0:
+            collected = block_texts + collected
+            index = block_start - 1
+        else:
+            collected = collected + block_texts
+            index = block_end + 1
+        chars += block_chars
+    return collected
 
 
 def load_extracted_document_text(
@@ -511,25 +568,27 @@ def load_extracted_document_text(
 
     first_target = target_indexes[0]
     last_target = target_indexes[-1]
-    before: list[str] = []
-    before_chars = 0
-    i = first_target - 1
-    while i >= 0 and before_chars < _CONTEXT_CHARS_BEFORE:
-        before.append(document.lines[i].text)
-        before_chars += len(document.lines[i].text) + 1
-        i -= 1
-    before.reverse()
+    anchor_start, _ = _block_span(document, first_target)
+    _, anchor_end = _block_span(document, last_target)
+    # candidate가 block 일부만 가리켜도 같은 block의 나머지 줄은 anchor 문맥으로
+    # 한 번만 포함한다. first_target±1에서 수집하면 _block_span()이 anchor까지
+    # 되돌아와 같은 block을 앞/뒤 문맥에 중복 삽입하게 된다.
+    target = [document.lines[index].text for index in range(anchor_start, anchor_end + 1)]
+    target_chars = sum(len(text) + 1 for text in target)
 
-    after: list[str] = []
-    after_chars = 0
-    i = last_target + 1
-    while i < len(document.lines) and after_chars < _CONTEXT_CHARS_AFTER:
-        after.append(document.lines[i].text)
-        after_chars += len(document.lines[i].text) + 1
-        i += 1
+    # anchor(target)는 예산과 무관하게 항상 보존한다 — 앞뒤 문맥에만 남은 예산을 쓴다.
+    remaining_budget = max(0, _CONTEXT_TOTAL_BUDGET_CHARS - target_chars)
+    before_budget = remaining_budget // 2
+    after_budget = remaining_budget - before_budget
 
-    target = [line.text for line in selected_lines]
-    return "\n".join([*before, *target, *after])[:_MAX_SOURCE_DOCUMENT_CHARS]
+    before = _collect_block_context(document, anchor_start - 1, -1, before_budget)
+    after = _collect_block_context(document, anchor_end + 1, 1, after_budget)
+
+    combined = "\n".join([*before, *target, *after])
+    if len(combined) > _ANCHOR_HARD_CEILING_CHARS:
+        # anchor 자신이 속한 block이 예산보다 훨씬 큰 드문 경우에만 닿는 안전장치.
+        combined = combined[:_ANCHOR_HARD_CEILING_CHARS]
+    return combined
 
 
 def _with_retry(fn, *, max_attempts: int = 2):
@@ -655,6 +714,11 @@ def generate_span_seeded_row(
         "body_text": body_text,
         "disclosure_status": "비공개",
         "document_status": "",
+        "release_due_date": (
+            _synthesize_release_due_date(production_date, row_id)
+            if clause_no == _INTERNAL_REVIEW_CLAUSE_NO
+            else ""
+        ),
         "source": "synthetic-llm",
         "source_url": "",
         "doc_type": doc_type,
@@ -684,6 +748,8 @@ def generate_span_seeded_row(
         "prompt_version": SPAN_SEEDED_PROMPT_VERSION,
         "military_secret_grade": "",  # 5~8호 span-seeded 경로는 군사기밀 대상 기관이 없음
         "agency_logo_filename": "",  # 5~8호(S)는 마크를 안 그리므로 기관 로고가 필요 없음
+        "military_secret_content_notice": "",  # 5~8호는 조항 2 시나리오 태깅 대상이 아님
+        "reclassification_json": "",  # 5~8호는 군사기밀 등급 대상이 아니라 재분류도 없음
         # --target-matrix 모드에서만 _apply_cell_metadata()가 실제 값으로 덮어쓴다.
         "cell_key": "",
         "cell_fallback_ratio": "",
@@ -704,6 +770,8 @@ def generate_fallback_row(
     military_secret_grade: str | None = None,
     agency_logo_filename: str = "",
     scenario_index: int | None = None,
+    military_secret_content_notice: bool = False,
+    reclassification: dict | None = None,
 ) -> dict:
     """span 후보가 없는 조항(1~4호) 또는 span 후보가 부족한 조항의 나머지분을
     D1 4번(완전 독립 시나리오)으로 백필한다.
@@ -729,6 +797,11 @@ def generate_fallback_row(
     생성 프롬프트에 그 등급에 맞는 심각성으로 쓰라는 지시를 추가하고, CSV에도 같은
     값을 남겨 render_pdfs_for_csv()가 [별표 2] 등급 마크를 고를 수 있게 한다
     (2026-07-21 사용자 결정 — 마크와 본문 내용이 어긋나지 않아야 함).
+
+    military_secret_content_notice/reclassification(2026-07-27 추가)은 호출자가
+    agency_resolver.scenario_contains_military_secret()/select_reclassification()로
+    미리 계산해 넘긴 값을 CSV에 그대로 옮겨 적을 뿐이다 — 이 함수 자체는 판단하지
+    않는다.
     """
     clause = CLAUSES[clause_no]
     start = time.monotonic()
@@ -791,6 +864,11 @@ def generate_fallback_row(
         "body_text": body_text,
         "disclosure_status": disclosure_status,
         "document_status": "",
+        "release_due_date": (
+            _synthesize_release_due_date(production_date, row_id)
+            if clause_no == _INTERNAL_REVIEW_CLAUSE_NO
+            else ""
+        ),
         "source": "synthetic-llm",
         "source_url": "",
         "doc_type": doc_type,
@@ -820,6 +898,8 @@ def generate_fallback_row(
         "prompt_version": FALLBACK_PROMPT_VERSION,
         "military_secret_grade": military_secret_grade or "",
         "agency_logo_filename": agency_logo_filename,
+        "military_secret_content_notice": "true" if military_secret_content_notice else "",
+        "reclassification_json": json.dumps(reclassification, ensure_ascii=False) if reclassification else "",
         # --target-matrix 모드에서만 _apply_cell_metadata()가 실제 값으로 덮어쓴다.
         "cell_key": "",
         "cell_fallback_ratio": "",
@@ -862,6 +942,7 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "disclosure_status": "부분공개",
         # AdminStatus.ATTACHMENT_MISSING.value와 같은 정규화된 상태값.
         "document_status": "첨부미등록",
+        "release_due_date": "",
         "source": "synthetic-template",
         "source_url": "",
         "doc_type": "official_document",
@@ -883,6 +964,8 @@ def generate_admin_status_sample_row(*, sampling_seed: int) -> dict:
         "prompt_version": ADMIN_STATUS_PROMPT_VERSION,
         "military_secret_grade": "",
         "agency_logo_filename": "",
+        "military_secret_content_notice": "",
+        "reclassification_json": "",
         "cell_key": "",
         "cell_fallback_ratio": "",
         "cell_zero_candidate_exception": "",
@@ -1121,31 +1204,48 @@ def generate_cell_rows(
     produced_so_far = resumed_span + produced_span
     n_fallback = max(0, cell_plan.effective_target - produced_so_far)
 
-    fallback_specs: list[tuple[str, str, str, str, str | None]] = []
+    fallback_specs: list[tuple[str, str, str, str, str | None, int | None, bool, dict | None]] = []
     for fidx in range(n_fallback):
         row_id = f"cell-{slug}-fallback-{fidx}"
         if row_id in resumed_row_ids:
             continue
         if clause_no in MARKING_SPEC_AGENCY_WHITELIST or clause_no in ("1", "2", "3", "4"):
-            agency, _logo_filename = select_whitelisted_agency(clause_no, rng)
+            # scenario_index를 기관 선택보다 먼저 뽑는다 — --per-clause 경로와 동일한
+            # 이유(본문·기관 불일치 방지)에 더해, 이 값이 없으면
+            # scenario_contains_military_secret()도 계산할 수 없다(2026-07-27 추가로
+            # 드러난 기존 공백 — 이전엔 이 셀 경로만 scenario_index를 안 뽑았다).
+            n_scenarios = len(CLAUSES[clause_no].scenario_prompts)
+            scenario_index = rng.randrange(n_scenarios) if n_scenarios else None
+            agency, _logo_filename = select_whitelisted_agency(clause_no, rng, scenario_index=scenario_index)
             prod_date = synthesize_plausible_date(rng)
             agency_source = "whitelist_synthetic"
         else:
+            scenario_index = None
             agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
                 rng, fallback_samples
             )
         military_secret_grade = (
             select_military_secret_grade(rng) if is_military_secret_agency(agency) else None
         )
-        fallback_specs.append((row_id, agency, prod_date, agency_source, military_secret_grade))
+        military_secret_content_notice = scenario_contains_military_secret(clause_no, scenario_index, agency)
+        reclassification = (
+            select_reclassification(rng, military_secret_grade, prod_date) if military_secret_grade else None
+        )
+        fallback_specs.append((
+            row_id, agency, prod_date, agency_source, military_secret_grade,
+            scenario_index, military_secret_content_notice, reclassification,
+        ))
 
     def _make_fallback_task(
-        row_id: str, agency: str, prod_date: str, agency_source: str, military_secret_grade: str | None
+        row_id: str, agency: str, prod_date: str, agency_source: str, military_secret_grade: str | None,
+        scenario_index: int | None, military_secret_content_notice: bool, reclassification: dict | None,
     ):
         return lambda: generate_fallback_row(
             row_id, clause_no, client=client, model=model, sampling_seed=sampling_seed,
             ordering_agency=agency, production_date=prod_date, agency_source=agency_source,
-            military_secret_grade=military_secret_grade,
+            military_secret_grade=military_secret_grade, scenario_index=scenario_index,
+            military_secret_content_notice=military_secret_content_notice,
+            reclassification=reclassification,
         )
 
     fallback_tasks = [_make_fallback_task(*spec) for spec in fallback_specs]
@@ -1383,6 +1483,11 @@ def render_pdfs_for_csv(
     pdf_dir.mkdir(parents=True, exist_ok=True)
     stamp_path = pdf_dir / "_stamp_confidential.png"
     generate_classification_stamp(stamp_path, seed=sampling_seed)
+    # 비밀표시 규정 제9항 붉은 문구 — 일반 기관 대외비 문서 중 군사기밀 사항이 섞인
+    # 행에만 쓴다(2026-07-27 추가). "대외비" 마크와 마찬가지로 파이프라인 전체가
+    # 공유하는 이미지 하나로 충분하다(문구가 고정).
+    military_secret_content_notice_path = pdf_dir / "_notice_military_secret_content.png"
+    generate_military_secret_content_notice(military_secret_content_notice_path, seed=sampling_seed)
 
     military_mark_cache: dict[str, Path] = {}
 
@@ -1394,6 +1499,30 @@ def render_pdfs_for_csv(
         generate_military_secret_mark(mark_path, grade, seed=sampling_seed)
         military_mark_cache[grade] = mark_path
         return mark_path
+
+    # [별표 2] 7호 재분류 표시 — 예전 등급에 붉은 대각선을 그은 마크는 등급별로
+    # 3종류뿐이라 캐시로 재사용한다. 재분류 근거 박스(직책/계급/성명/날짜)는 행마다
+    # 문구가 달라 캐시하지 않고 매 행 새로 만든다(2026-07-27 추가).
+    reclassification_old_mark_cache: dict[str, Path] = {}
+
+    def _reclassification_old_mark_for_grade(old_grade: str) -> Path:
+        cached = reclassification_old_mark_cache.get(old_grade)
+        if cached is not None:
+            return cached
+        mark_path = pdf_dir / f"_stamp_reclass_old_{old_grade}.png"
+        generate_reclassification_old_mark(mark_path, old_grade, seed=sampling_seed)
+        reclassification_old_mark_cache[old_grade] = mark_path
+        return mark_path
+
+    def _reclassification_notice_for_row(row_id: str, reclass: dict) -> Path:
+        notice_path = pdf_dir / f"_notice_reclass_{row_id}.png"
+        generate_reclassification_notice(
+            notice_path,
+            basis_text=reclass["basis_text"], reclass_date=reclass["reclass_date"],
+            position=reclass["position"], rank=reclass["rank"], name=reclass["name"],
+            seed=sampling_seed,
+        )
+        return notice_path
 
     letterhead_cache: dict[str, Path] = {}
     agency_watermark_cache: dict[str, Path] = {}
@@ -1441,17 +1570,29 @@ def render_pdfs_for_csv(
             watermark_path = _agency_watermark_for_row(row) if is_confidential else None
             agency_mark_path = _letterhead_for_row(row) if is_confidential else None
             grade = (row.get("military_secret_grade") or "").strip()
+            reclass_raw = (row.get("reclassification_json") or "").strip()
+            reclass = json.loads(reclass_raw) if reclass_raw else None
             if grade and grade in MILITARY_SECRET_MARK_FILENAMES:
                 military_mark = _military_mark_for_grade(grade)
-                row_stamp_path, row_stamp_top_path = military_mark, military_mark
-                mark = f"군사기밀({grade})" if is_confidential else "마크없음"
+                if reclass:
+                    row_stamp_path = military_mark
+                    row_stamp_top_path = _reclassification_old_mark_for_grade(reclass["old_grade"])
+                    row_footer_caption_path = _reclassification_notice_for_row(row["row_id"], reclass)
+                    mark = f"군사기밀({reclass['old_grade']}→{grade}, 재분류)" if is_confidential else "마크없음"
+                else:
+                    row_stamp_path, row_stamp_top_path = military_mark, military_mark
+                    row_footer_caption_path = None
+                    mark = f"군사기밀({grade})" if is_confidential else "마크없음"
             else:
                 row_stamp_path, row_stamp_top_path = stamp_path, None
+                wants_notice = (row.get("military_secret_content_notice") or "").strip() == "true"
+                row_footer_caption_path = military_secret_content_notice_path if wants_notice else None
                 mark = "C(대외비)" if is_confidential else "마크없음"
             render_document_pdf(
                 row, category, output_path,
                 watermark_path=watermark_path, stamp_path=row_stamp_path,
                 stamp_top_path=row_stamp_top_path, agency_mark_path=agency_mark_path,
+                footer_caption_path=row_footer_caption_path,
             )
             rendered += 1
             print(f"  [pdf] {row['row_id']} -> {category} -> {mark} -> {output_path.name}")
@@ -1809,9 +1950,21 @@ def main() -> None:
                                 prod_date = synthesize_plausible_date(rng)
                                 agency_source = "whitelist_synthetic"
                             else:
-                                scenario_index = None
+                                # 7호처럼 scenario_agency_categories가 채워진 조항은
+                                # scenario_index를 기관 선택보다 먼저 뽑아 기관 유형을
+                                # 그 시나리오에 맞게 좁힌다(2026-07-23 사용자 지적 —
+                                # "근로복지공단이 웰빙 마사지기를 출시한다" 불일치 발견).
+                                # 채워져 있지 않은 조항(5,6,8호)은 기존처럼 무필터 추출.
+                                clause_def = CLAUSES[clause_no]
+                                n_scenarios = len(clause_def.scenario_prompts)
+                                scenario_index = rng.randrange(n_scenarios) if n_scenarios else None
+                                allowed_categories = None
+                                if scenario_index is not None and clause_def.scenario_agency_categories:
+                                    allowed_categories = clause_def.scenario_agency_categories[
+                                        scenario_index % len(clause_def.scenario_agency_categories)
+                                    ]
                                 agency, prod_date, agency_source = sample_diverse_agency_and_date_for_fallback(
-                                    rng, fallback_samples
+                                    rng, fallback_samples, allowed_categories=allowed_categories
                                 )
                                 logo_filename = ""
                             # 국방부/국가정보원 문서만 "대외비" 대신 군사기밀 [별표 2] 등급
@@ -1823,6 +1976,17 @@ def main() -> None:
                                 if is_military_secret_agency(agency)
                                 else None
                             )
+                            # 비군사기관 문서에 군사기밀 사항이 섞여 있는지(비밀표시
+                            # 규정 제9항)와, 군사기밀 등급 문서가 재분류됐는지([별표 2]
+                            # 7호)는 서로 다른 문서군에만 적용되는 상호 배타적 케이스다
+                            # (2026-07-27 추가).
+                            military_secret_content_notice = scenario_contains_military_secret(
+                                clause_no, scenario_index, agency
+                            )
+                            reclassification = (
+                                select_reclassification(rng, military_secret_grade, prod_date)
+                                if military_secret_grade else None
+                            )
                             row = generate_fallback_row(
                                 row_id, clause_no, client=client, model=args.model,
                                 sampling_seed=args.sampling_seed,
@@ -1831,6 +1995,8 @@ def main() -> None:
                                 military_secret_grade=military_secret_grade,
                                 agency_logo_filename=logo_filename,
                                 scenario_index=scenario_index,
+                                military_secret_content_notice=military_secret_content_notice,
+                                reclassification=reclassification,
                             )
                             _apply_template_validation(row)
                             writer.writerow(row)

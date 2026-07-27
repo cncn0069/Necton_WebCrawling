@@ -10,12 +10,16 @@ from rd2.generators.agency_resolver import (
     GENERAL_TRACK_SUPPLEMENTARY_AGENCIES,
     MARKING_SPEC_AGENCY_WHITELIST,
     PER_DOC_AGENCY_SOURCES,
+    RECLASSIFICATION_RATIO,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
     sample_diverse_agency_and_date_for_fallback,
     sample_real_agency_and_date_for_fallback,
+    scenario_contains_military_secret,
+    select_reclassification,
     select_whitelisted_agency,
     synthesize_plausible_date,
+    synthesize_plausible_date_after,
 )
 
 
@@ -294,3 +298,134 @@ class TestSynthesizePlausibleDate:
         result_a = synthesize_plausible_date(random.Random(3))
         result_b = synthesize_plausible_date(random.Random(3))
         assert result_a == result_b
+
+
+class TestScenarioContainsMilitarySecret:
+    """비밀표시 규정 제9항 — 비군사기관 문서에 군사기밀 사항이 섞였는지 판단."""
+
+    def test_military_agency_is_always_false(self):
+        assert scenario_contains_military_secret("2", 4, "국방부") is False
+        assert scenario_contains_military_secret("2", 4, "국가정보원") is False
+
+    def test_tagged_scenario_with_non_military_agency_is_true(self):
+        assert scenario_contains_military_secret("2", 4, "외교부") is True
+
+    def test_untagged_scenario_is_false(self):
+        assert scenario_contains_military_secret("2", 1, "외교부") is False
+
+    def test_scenario_index_none_is_false(self):
+        assert scenario_contains_military_secret("2", None, "외교부") is False
+
+    def test_unknown_clause_is_false(self):
+        assert scenario_contains_military_secret("not-a-clause", 0, "외교부") is False
+
+    def test_clause_without_tagging_is_always_false(self):
+        for idx in range(10):
+            assert scenario_contains_military_secret("1", idx, "검찰청") is False
+
+
+class TestSynthesizePlausibleDateAfter:
+    def test_returns_iso_date_string_after_base_date(self):
+        rng = random.Random(1)
+        result = synthesize_plausible_date_after(
+            rng, "2026-01-01", today=datetime.date(2026, 7, 27)
+        )
+        parsed = datetime.date.fromisoformat(result)
+        assert parsed > datetime.date(2026, 1, 1)
+        assert parsed <= datetime.date(2026, 7, 27)
+
+    def test_stays_within_max_days_after_window(self):
+        rng = random.Random(1)
+        result = synthesize_plausible_date_after(
+            rng, "2026-01-01", max_days_after=30, today=datetime.date(2026, 7, 27)
+        )
+        parsed = datetime.date.fromisoformat(result)
+        assert (parsed - datetime.date(2026, 1, 1)).days <= 30
+
+    def test_deterministic_given_fixed_seed(self):
+        result_a = synthesize_plausible_date_after(
+            random.Random(3), "2026-01-01", today=datetime.date(2026, 7, 27)
+        )
+        result_b = synthesize_plausible_date_after(
+            random.Random(3), "2026-01-01", today=datetime.date(2026, 7, 27)
+        )
+        assert result_a == result_b
+
+    def test_unparseable_base_date_raises(self):
+        with pytest.raises(ValueError):
+            synthesize_plausible_date_after(
+                random.Random(1), "not-a-date", today=datetime.date(2026, 7, 27)
+            )
+
+    def test_base_date_today_has_no_valid_reclassification_window(self):
+        with pytest.raises(ValueError, match="과거 날짜 구간"):
+            synthesize_plausible_date_after(
+                random.Random(1), "2026-07-27", today=datetime.date(2026, 7, 27)
+            )
+
+
+class TestSelectReclassification:
+    """[별표 2] 7호 재분류 표시 — 등급 문서 중 일부를 무작위로 재분류 변형으로 만든다."""
+
+    def test_top_grade_is_never_reclassified(self):
+        rng = random.Random(1)
+        for _ in range(50):
+            assert select_reclassification(rng, "1급", "2026-01-01") is None
+
+    def test_lower_grades_can_be_reclassified_with_ratio_one(self):
+        rng = random.Random(1)
+        result = None
+        for _ in range(50):
+            result = select_reclassification(rng, "3급", "2026-01-01")
+            if result is not None:
+                break
+        assert result is not None
+        assert result["old_grade"] in ("1급", "2급")
+
+    def test_old_grade_is_always_more_severe_than_new_grade(self):
+        rng = random.Random(1)
+        for _ in range(200):
+            result = select_reclassification(rng, "2급", "2026-01-01")
+            if result is not None:
+                assert result["old_grade"] == "1급"
+
+    def test_zero_ratio_never_reclassifies(self, monkeypatch):
+        monkeypatch.setattr(
+            "rd2.generators.agency_resolver.RECLASSIFICATION_RATIO", 0.0
+        )
+        rng = random.Random(1)
+        for _ in range(50):
+            assert select_reclassification(rng, "3급", "2026-01-01") is None
+
+    def test_result_has_expected_keys(self):
+        rng = random.Random(1)
+        result = None
+        for _ in range(50):
+            result = select_reclassification(rng, "3급", "2026-01-01")
+            if result is not None:
+                break
+        assert result is not None
+        assert set(result.keys()) == {
+            "old_grade", "basis_text", "reclass_date", "position", "rank", "name",
+        }
+
+    def test_ratio_constant_is_between_zero_and_one(self):
+        assert 0.0 < RECLASSIFICATION_RATIO < 1.0
+
+    def test_future_production_date_is_never_reclassified(self, monkeypatch):
+        monkeypatch.setattr(
+            "rd2.generators.agency_resolver.RECLASSIFICATION_RATIO", 1.0
+        )
+        assert select_reclassification(
+            random.Random(1), "3급", "2026-07-28", today=datetime.date(2026, 7, 27)
+        ) is None
+
+    def test_reclassification_date_never_exceeds_today(self, monkeypatch):
+        monkeypatch.setattr(
+            "rd2.generators.agency_resolver.RECLASSIFICATION_RATIO", 1.0
+        )
+        result = select_reclassification(
+            random.Random(1), "3급", "2026-07-26", today=datetime.date(2026, 7, 27)
+        )
+        assert result is not None
+        assert result["reclass_date"] == "2026-07-27"

@@ -16,7 +16,10 @@ from rd2.generators.pdf_render import (
 from rd2.generators.security_mark import (
     generate_agency_letterhead_mark,
     generate_classification_stamp,
+    generate_military_secret_content_notice,
     generate_page_watermark,
+    generate_reclassification_notice,
+    generate_reclassification_old_mark,
 )
 from rd2.storage.naming import DOC_TYPE_AUDIT_RESULT, DOC_TYPE_OFFICIAL_DOCUMENT
 import fitz
@@ -215,6 +218,53 @@ class TestClassificationGatedMarking:
 
         assert c_output.stat().st_size > s_output.stat().st_size
 
+    def test_footer_caption_path_renders_larger_pdf(self, tmp_path):
+        """비밀표시 규정 제9항 붉은 문구 — footer_caption_path 유무에 따라 PDF 크기가
+        커지는지로 실제로 그려졌는지 확인한다(기존 stamp/watermark 검증과 같은 패턴)."""
+        stamp_path = generate_classification_stamp(tmp_path / "stamp.png", seed=1)
+        caption_path = generate_military_secret_content_notice(tmp_path / "caption.png", seed=1)
+
+        with_caption = tmp_path / "with_caption.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="C"), CATEGORY_METRO_LOCAL_GOVERNMENT, with_caption,
+            stamp_path=stamp_path, footer_caption_path=caption_path,
+        )
+
+        without_caption = tmp_path / "without_caption.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="C"), CATEGORY_METRO_LOCAL_GOVERNMENT, without_caption,
+            stamp_path=stamp_path,
+        )
+
+        assert with_caption.stat().st_size > without_caption.stat().st_size
+
+    def test_footer_caption_path_gated_by_c_classification(self, tmp_path):
+        caption_path = generate_military_secret_content_notice(tmp_path / "caption.png", seed=1)
+        output = tmp_path / "s_doc.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="S"), CATEGORY_METRO_LOCAL_GOVERNMENT, output,
+            footer_caption_path=caption_path,
+        )
+        assert output.exists()
+        assert output.read_bytes()[:4] == b"%PDF"
+
+    def test_reclassification_variant_stamp_top_and_footer_caption_together(self, tmp_path):
+        """[별표 2] 7호 재분류 시나리오 — 예전 등급(대각선) 마크를 stamp_top_path로,
+        재분류 근거 박스를 footer_caption_path로 동시에 줘도 문제없이 렌더링된다."""
+        old_mark_path = generate_reclassification_old_mark(tmp_path / "old.png", "1급", seed=1)
+        reclass_notice_path = generate_reclassification_notice(
+            tmp_path / "reclass.png",
+            basis_text="군사기밀 보호법 시행령 제7조", reclass_date="2026-03-15",
+            position="보안담당관", rank="대령", name="김도현", seed=1,
+        )
+        output = tmp_path / "reclassified.pdf"
+        render_document_pdf(
+            _sample_row(cso_classification="C"), CATEGORY_METRO_LOCAL_GOVERNMENT, output,
+            stamp_top_path=old_mark_path, footer_caption_path=reclass_notice_path,
+        )
+        assert output.exists()
+        assert output.read_bytes()[:4] == b"%PDF"
+
 
 class TestRenderedBodyStructure:
     """구현 객체가 아니라 최종 PDF에서 선택 가능한 구조 텍스트를 검증한다."""
@@ -233,6 +283,22 @@ class TestRenderedBodyStructure:
         text = _pdf_text(output)
         assert "아 래" in text
         assert "o 첫 번째 문단입니다." in text
+
+    def test_body_text_with_own_list_marker_does_not_double_up(self, tmp_path):
+        """LLM이 body_text 문단에 자체 목록기호(숫자, 대시 등)를 붙여도 템플릿의
+        "o " 기호와 겹치면 안 된다 — 2026-07-27 사용자가 실제 생성물에서 "o 1)"
+        같은 중복 기호를 지적했다(실제 파일럿 출력 CSV의 437개 문단에서 확인)."""
+        output = tmp_path / "no-double-marker.pdf"
+        row = _sample_row(
+            doc_type=DOC_TYPE_OFFICIAL_DOCUMENT,
+            body_text="1) 인가자 명단 작성 및 갱신 주기는 매년 1회 실시\n- 담당자명: 홍길동",
+        )
+        render_document_pdf(row, CATEGORY_PUBLIC_CORPORATION, output)
+        text = _pdf_text(output)
+        assert "o 1)" not in text
+        assert "o -" not in text
+        assert "o 인가자 명단 작성" in text
+        assert "o 담당자명: 홍길동" in text
 
     def test_all_doc_types_end_with_geut_marker(self, tmp_path):
         for doc_type in (DOC_TYPE_AUDIT_RESULT, DOC_TYPE_OFFICIAL_DOCUMENT):

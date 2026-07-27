@@ -6,6 +6,7 @@ import random
 import sys
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -137,6 +138,68 @@ class TestSampleCandidates:
         result_a = pilot._sample_candidates(candidates, 3, random.Random(42))
         result_b = pilot._sample_candidates(candidates, 3, random.Random(42))
         assert result_a == result_b
+
+    def test_removes_exact_text_duplicates_within_same_document(self):
+        import random
+
+        candidates = [
+            {"candidate_id": "first", "source_path": "data/a.pdf", "text": "반복 문구"},
+            {"candidate_id": "duplicate", "source_path": "data/a.pdf", "text": "반복 문구"},
+            {"candidate_id": "other", "source_path": "data/a.pdf", "text": "다른 문구"},
+        ]
+
+        result = pilot._sample_candidates(candidates, 10, random.Random(42))
+
+        assert [candidate["candidate_id"] for candidate in result] == ["first", "other"]
+
+    def test_preserves_same_text_from_different_documents(self):
+        import random
+
+        candidates = [
+            {"candidate_id": "a", "source_path": "data/a.pdf", "text": "공통 문구"},
+            {"candidate_id": "b", "source_path": "data/b.pdf", "text": "공통 문구"},
+        ]
+
+        result = pilot._sample_candidates(candidates, 10, random.Random(42))
+
+        assert [candidate["candidate_id"] for candidate in result] == ["a", "b"]
+
+    def test_deduplicates_before_sampling(self):
+        import random
+
+        candidates = [
+            {"candidate_id": "first", "source_path": "data/a.pdf", "text": "반복 문구"},
+            {"candidate_id": "duplicate", "source_path": "data/a.pdf", "text": "반복 문구"},
+            {"candidate_id": "b", "source_path": "data/b.pdf", "text": "문구 B"},
+            {"candidate_id": "c", "source_path": "data/c.pdf", "text": "문구 C"},
+        ]
+
+        result = pilot._sample_candidates(candidates, 3, random.Random(42))
+
+        assert [candidate["candidate_id"] for candidate in result] == ["first", "b", "c"]
+
+
+class TestSynthesizeReleaseDueDate:
+    def test_uses_production_date_when_it_is_in_the_future(self):
+        due = pilot._synthesize_release_due_date(
+            "2027-01-01", "row-1", today=date(2026, 7, 27)
+        )
+
+        delta = date.fromisoformat(due) - date(2027, 1, 1)
+        assert 30 <= delta.days <= 180
+
+    def test_never_returns_a_past_due_date_for_an_old_document(self):
+        due = pilot._synthesize_release_due_date(
+            "2023-01-01", "row-1", today=date(2026, 7, 27)
+        )
+
+        delta = date.fromisoformat(due) - date(2026, 7, 27)
+        assert 30 <= delta.days <= 180
+
+    def test_invalid_production_date_returns_empty_string(self):
+        assert pilot._synthesize_release_due_date(
+            "not-a-date", "row-1", today=date(2026, 7, 27)
+        ) == ""
 
 
 class TestLoadExtractedDocumentText:
@@ -295,9 +358,10 @@ class TestLoadExtractedDocumentText:
     def test_window_respects_context_and_total_budgets(self, tmp_path):
         data_root = tmp_path / "data"
         extracted_root = data_root / "extracted"
-        chunk_size = 500
-        num_before = pilot._CONTEXT_CHARS_BEFORE // chunk_size + 3
-        num_after = pilot._CONTEXT_CHARS_AFTER // chunk_size + 3
+        chunk_size = 300
+        budget_per_side = pilot._CONTEXT_TOTAL_BUDGET_CHARS // 2
+        num_before = budget_per_side // chunk_size + 3
+        num_after = budget_per_side // chunk_size + 3
         before = [f"앞{i}" + "가" * chunk_size for i in range(num_before)]
         after = [f"뒤{i}" + "나" * chunk_size for i in range(num_after)]
         texts = [*before, "근거", *after]
@@ -308,12 +372,130 @@ class TestLoadExtractedDocumentText:
             cache=pilot._BoundedDocumentCache(2),
         )
 
-        assert len(text) <= pilot._MAX_SOURCE_DOCUMENT_CHARS
+        assert len(text) <= pilot._ANCHOR_HARD_CEILING_CHARS
         assert "근거" in text
         assert before[0] not in text
         assert after[-1] not in text
         assert before[-1] in text
         assert after[0] in text
+
+    def _write_extracted_with_block_ids(
+        self, data_root: Path, extracted_root: Path, texts: list[str], block_ids: list[object]
+    ) -> None:
+        """_write_extracted()와 같지만 줄마다 block_id를 직접 지정한다(기본
+        fixture는 줄마다 다른 block_id를 쓰므로, block 경계 로직을 검증하려면
+        여러 줄이 같은 block_id를 공유하는 케이스가 따로 필요하다)."""
+        source_file = data_root.parent / Path(self.SOURCE_PATH)
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_bytes = b"source bytes"
+        source_file.write_bytes(source_bytes)
+        lines = [
+            {
+                "line_id": i, "block_id": block_ids[i], "order": i, "text": text,
+                "bbox_pt": None, "style_runs": [],
+            }
+            for i, text in enumerate(texts)
+        ]
+        document = {
+            "schema_version": 2, "extraction_id": self.EXTRACTION_ID,
+            "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "source_path": self.SOURCE_PATH, "source": "moel", "doc_type": "notification",
+            "doc_id": "1", "source_format": "pdf", "extraction": {}, "status": "ok",
+            "error": None, "quality": {},
+            "pages": [{"page": 1, "width_pt": 595.0, "height_pt": 842.0, "rotation": 0, "lines": lines}],
+        }
+        path = pilot.extraction_output_path(source_file, data_root, extracted_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            json.dump(document, f, ensure_ascii=False)
+
+    def test_window_never_splits_a_block(self, tmp_path):
+        """근거 span 앞에 같은 block_id를 공유하는 표 행 여러 개가 있을 때,
+        예산이 그 block 전체를 다 못 담으면 block을 반만 넣지 않고 통째로
+        건너뛴다 -- 표 중간이 잘려서 LLM에 들어가는 걸 막는 게 목적이다."""
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        chunk_size = 300
+        # 예산의 상당 부분을 채우는 큰 block 하나(줄 3개, 같은 block_id) 바로
+        # 앞에, 그 block을 통째로 넣기엔 부족한 정도의 남은 예산만 두도록 배치.
+        filler = ["채움" + "다" * chunk_size for _ in range(2)]
+        big_block_lines = ["행1" + "가" * chunk_size, "행2" + "가" * chunk_size, "행3" + "가" * chunk_size]
+        texts = [*filler, *big_block_lines, "근거"]
+        block_ids = [*range(len(filler)), *(["shared-block"] * len(big_block_lines)), len(filler) + len(big_block_lines)]
+        self._write_extracted_with_block_ids(data_root, extracted_root, texts, block_ids)
+
+        anchor_index = len(filler) + len(big_block_lines)
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거", [anchor_index]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
+        )
+
+        assert "근거" in text
+        # 예산이 3줄짜리 block 전체를 못 담으면, 1~2줄만 포함되는 대신 아예 빠져야 한다.
+        included = sum(1 for line in big_block_lines if line in text)
+        assert included in (0, len(big_block_lines))
+
+    def test_null_block_ids_still_get_context(self, tmp_path):
+        """HWP/HWPX 추출본은 block_id가 전부 None이다. None끼리 같은 block으로
+        묶으면 문서 전체가 한 block이 되어 예산 초과로 문맥이 하나도 안 붙는
+        버그가 있었다(2026-07-27 EC2 실측에서 창 길이 37자로 발견). 줄 단위로
+        취급해 정상적으로 앞뒤 문맥이 붙어야 한다."""
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        texts = ["앞2", "앞1", "근거", "뒤1", "뒤2"]
+        self._write_extracted_with_block_ids(
+            data_root, extracted_root, texts, [None] * len(texts)
+        )
+
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거", [2]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
+        )
+
+        assert "근거" in text
+        assert "앞1" in text
+        assert "뒤1" in text
+
+    def test_anchor_block_is_included_once_without_duplicate_context(self, tmp_path):
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        texts = ["같은 블록 앞", "근거", "같은 블록 뒤", "다음 블록"]
+        self._write_extracted_with_block_ids(
+            data_root,
+            extracted_root,
+            texts,
+            ["anchor-block", "anchor-block", "anchor-block", "next-block"],
+        )
+
+        text = pilot.load_extracted_document_text(
+            self._candidate("근거", [1]),
+            data_root,
+            extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
+        )
+
+        assert text.splitlines() == texts
+        assert text.count("근거") == 1
+
+    def test_anchor_larger_than_budget_is_kept_without_context(self, tmp_path):
+        """anchor(근거 span) 자신이 문맥 예산보다 큰 드문 경우 -- 앞뒤 문맥은
+        전혀 안 붙지만 anchor 자체는 보존 원칙에 따라 잘리지 않는다(안전장치
+        상한 이내에서)."""
+        data_root = tmp_path / "data"
+        extracted_root = data_root / "extracted"
+        huge_anchor = "근거" + "가" * (pilot._CONTEXT_TOTAL_BUDGET_CHARS * 2)
+        texts = ["앞", huge_anchor, "뒤"]
+        self._write_extracted(data_root, extracted_root, texts)
+
+        text = pilot.load_extracted_document_text(
+            self._candidate(huge_anchor, [1]), data_root, extracted_root,
+            cache=pilot._BoundedDocumentCache(2),
+        )
+
+        assert text.startswith("근거")
+        assert "앞" not in text
+        assert "뒤" not in text
+        assert len(text) <= pilot._ANCHOR_HARD_CEILING_CHARS
 
     def test_repeated_candidates_load_and_annotate_document_once(self, tmp_path, monkeypatch):
         data_root = tmp_path / "data"
@@ -608,6 +790,106 @@ class TestGenerateFallbackRow:
         )
 
         assert row["military_secret_grade"] == ""
+
+    def test_military_secret_content_notice_forwarded_to_row(self, monkeypatch):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제2호 — 안보·국방·통일·외교 국익저해",
+                subject_category="안보·국방·통일·외교 국익저해", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="2",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "2-fallback-0", "2", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="외교부", production_date="2026-01-01",
+            agency_source="whitelist_synthetic", scenario_index=4,
+            military_secret_content_notice=True,
+        )
+
+        assert row["military_secret_content_notice"] == "true"
+
+    def test_military_secret_content_notice_defaults_to_empty_string(self, monkeypatch):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제1호 — 법률상 비밀·비공개 규정",
+                subject_category="법률상 비밀·비공개 규정", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="1",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "1-fallback-0", "1", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="검찰청", production_date="2026-01-01",
+        )
+
+        assert row["military_secret_content_notice"] == ""
+
+    def test_reclassification_forwarded_to_row_as_json(self, monkeypatch):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제2호 — 안보·국방·통일·외교 국익저해",
+                subject_category="안보·국방·통일·외교 국익저해", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="2",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        reclass = {
+            "old_grade": "1급", "basis_text": "군사기밀 보호법 시행령 제7조",
+            "reclass_date": "2026-03-15", "position": "보안담당관", "rank": "대령", "name": "김도현",
+        }
+        row = pilot.generate_fallback_row(
+            "2-fallback-0", "2", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="국방부", production_date="2026-01-01",
+            agency_source="whitelist_synthetic", military_secret_grade="2급",
+            reclassification=reclass,
+        )
+
+        assert json.loads(row["reclassification_json"]) == reclass
+
+    def test_reclassification_defaults_to_empty_string(self, monkeypatch):
+        def fake_generate_clause_document(
+            clause_no, *, ordering_agency, production_date, client, model, **kwargs
+        ):
+            return Document(
+                title="[합성] 가상 시나리오", ordering_agency=ordering_agency,
+                production_date=production_date, disclosure_status=DisclosureStatus.CLOSED,
+                non_disclosure_reason="제1호 — 법률상 비밀·비공개 규정",
+                subject_category="법률상 비밀·비공개 규정", body_text="가상 문서 본문",
+                cso_classification=CsoClassification.C, cso_sub_clause="1",
+                source="synthetic-llm", source_url=None, doc_type="synthetic_document",
+                is_synthetic=True,
+            )
+
+        monkeypatch.setattr(pilot, "generate_clause_document", fake_generate_clause_document)
+
+        row = pilot.generate_fallback_row(
+            "1-fallback-0", "1", client=object(), model="gpt-4o-mini", sampling_seed=42,
+            ordering_agency="검찰청", production_date="2026-01-01",
+        )
+
+        assert row["reclassification_json"] == ""
 
 
 class TestGenerateAdministrativeStatusSample:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -48,6 +49,23 @@ _SYNTHETIC_ITEMS = (
     ("문서스캐너", "A3 양면 고속", 1_980_000),
     ("서버 랙", "42U 표준형", 3_150_000),
 )
+def _synthetic_rrn(seed: int) -> str:
+    """합성 주민등록번호 형식(YYMMDD-GXXXXXX)을 결정적으로 만든다.
+
+    T6-1(인사발령) 실사 결과, 성명 하나만 있는 인사발령은 실제로 공개되는
+    경우가 많아(관보·기관 홈페이지에 흔히 게시됨) 성명만으로는 6호 비공개
+    근거가 약하다(2026-07-23 사용자 지적). 주민등록번호처럼 더 강한 개인
+    식별정보가 함께 있어야 실제 6호 판단과 맞는다 — 실존 인물과 무관한
+    합성값이며 유효 생년월일 범위만 지킨다.
+    """
+    year = 60 + seed % 40
+    month = 1 + seed % 12
+    day = 1 + (seed * 7) % 28
+    gender_digit = 1 + seed % 2
+    suffix = (seed * 9973 + 137) % 1_000_000
+    return f"{year:02d}{month:02d}{day:02d}-{gender_digit}{suffix:06d}"
+
+
 _SYNTHETIC_ADDRESSES = (
     "우 12345  한빛시 중앙대로 88 (가온동)",
     "우 54321  다솔시 미래로 24 (새길동)",
@@ -130,8 +148,18 @@ def _embedded_css() -> str:
     return _CSS_PATH.read_text(encoding="utf-8")
 
 
+# body_text는 LLM이 "한국 관공서 문서 형식"으로 자유 생성하므로 문단 첫머리에
+# 자체 목록기호(숫자, 대시, 원문자 등)를 흔히 붙인다. 각 body_format 템플릿도
+# 그 문단을 "o "/"ㅇ "/"- "/가나다 순서 등 자체 기호로 감싸므로, 여기서 벗겨내지
+# 않으면 "o 1)"처럼 두 기호가 겹쳐 보인다(2026-07-27 사용자 지적 — 실제 파일럿
+# 출력 CSV의 body_text 437줄에서 확인).
+_LEADING_LIST_MARKER_RE = re.compile(r"^(?:\d{1,2}[.)]|[-○●◦□■•▪☞ㅇoO])\s+")
+
+
 def _paragraphs(row: dict) -> list[str]:
-    return [p.strip() for p in (row.get("body_text") or "").splitlines() if p.strip()]
+    lines = (p.strip() for p in (row.get("body_text") or "").splitlines() if p.strip())
+    stripped = (_LEADING_LIST_MARKER_RE.sub("", line, count=1).strip() for line in lines)
+    return [line for line in stripped if line]
 
 
 def _seed(row: dict) -> int:
@@ -196,7 +224,7 @@ def _nodes_for_body(row: dict, body_format: str):
         text = ["평가위원회 구성(안)", "배점 기준(안)", "위원 후보 명단은 선정 확정 시까지 비공개 관리"]
         tables = [Table([["구분", "배점비율", "평가요소"]])]
     elif body_format == "personnel_order":
-        tables = [Table([["소  속", "직  급", "성  명", "발 령 사 항"], *ctx["personnel_rows"]])]
+        tables = [Table([["소  속", "직  급", "성  명", "주민등록번호", "발 령 사 항"], *ctx["personnel_rows"]])]
     elif body_format == "unit_price":
         text = [f"{ctx['supplier']}와의 납품단가 협상 결과", "영업상 비밀"]
         tables = [Table([["품목", "규격", "수량", "단가(원)", "금액(원)"], *ctx["price_rows"], ["합계", "", "", "", ctx["price_total"]]])]
@@ -247,7 +275,13 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
         "agenda_no": 1000 + seed % 900,
     }
     context["personnel_rows"] = [
-        [row.get("ordering_agency") or "(기관명)", _SYNTHETIC_RANKS[(seed + i) % len(_SYNTHETIC_RANKS)], _SYNTHETIC_SIGNER_NAMES[(seed + i * 3 + 1) % len(_SYNTHETIC_SIGNER_NAMES)], f"{_SYNTHETIC_DEPARTMENTS[(seed + i) % len(_SYNTHETIC_DEPARTMENTS)]} 근무를 명함"]
+        [
+            row.get("ordering_agency") or "(기관명)",
+            _SYNTHETIC_RANKS[(seed + i) % len(_SYNTHETIC_RANKS)],
+            _SYNTHETIC_SIGNER_NAMES[(seed + i * 3 + 1) % len(_SYNTHETIC_SIGNER_NAMES)],
+            _synthetic_rrn(seed + i * 5 + 2),
+            f"{_SYNTHETIC_DEPARTMENTS[(seed + i) % len(_SYNTHETIC_DEPARTMENTS)]} 근무를 명함",
+        ]
         for i in range(2 + seed % 2)
     ]
     context["eval_rows"] = [
@@ -392,6 +426,12 @@ def _render_context(
             notice = "붙임  관련 검토자료 1부."
         elif status is AdminStatus.DEIDENTIFY_PENDING:
             notice = "※ 본 문서의 개인정보는 비식별 처리 예정임(처리 전 원본)"
+        disclosure_label = template.disclosure_label or "대국민공개"
+        release_due_date = row.get("release_due_date")
+        if release_due_date:
+            # 정보공개법 제9조1항5호 — 내부검토 과정을 이유로 비공개할 때는
+            # 공개 여부를 다시 판단할 예정 일시를 함께 밝혀야 한다.
+            disclosure_label = f"{disclosure_label} · 공개예정일 {release_due_date}"
         context.update(
             slogan=_OFFICIAL_FORM_SLOGAN, agency=row.get("ordering_agency") or "(기관명)",
             department=row.get("department") or "담당부서", recipient=recipient, title=title,
@@ -400,7 +440,7 @@ def _render_context(
             signature=_signature_context(template, seed, status), doc_no=10000 + seed % 90000,
             address=_SYNTHETIC_ADDRESSES[seed % len(_SYNTHETIC_ADDRESSES)],
             tel_suffix=1000 + seed % 9000, email_suffix=f"{seed % 100:02d}",
-            disclosure_label=template.disclosure_label or "대국민공개",
+            disclosure_label=disclosure_label,
         )
     return context
 
@@ -411,6 +451,13 @@ _FOOTER_MARK_HEIGHT_MM = 12  # 하단 여백(최소 25mm)엔 여유 있게 들�
 # 상단은 더 작게 잡아야 최소 여백(public_corporation 15mm) 카테고리에서도
 # 본문과 안 겹친다.
 _HEADER_MARK_HEIGHT_MM = 8
+# footer_mark 아래, 페이지번호 위에 쌓는 범용 캡션 이미지(비밀표시 규정 제9항의
+# "군사기밀 포함" 붉은 문구, [별표 2] 7호의 재분류 근거 박스 공용 슬롯 — 2026-07-27
+# 추가). 마진 예산: 기존 스탬프 12mm + 여백 1mm + 페이지번호 텍스트 ~3mm = 16mm,
+# 전 카테고리 하단 최소마진 25mm 안에 4mm를 더 넣어도 21mm로 여유 있다.
+_CAPTION_MARK_HEIGHT_MM = 6  # 2026-07-27: 9cm x 2cm / 8cm+1.5cm x 2cm 실제 도안 박스라
+# 너무 작게 표시하면 글자를 못 알아본다 — 4mm에서 6mm로 키움(마진 예산: 스탬프 12mm +
+# 여백 1mm + 캡션 6mm + 페이지번호 텍스트 ~3mm = 22mm, 최소 하단마진 25mm 안에 들어감).
 
 
 def _html_to_pdf(
@@ -420,6 +467,7 @@ def _html_to_pdf(
     *,
     stamp_uri: str | None = None,
     stamp_top_uri: str | None = None,
+    caption_uri: str | None = None,
 ) -> None:
     """대외비/군사기밀 마크는 body에 position:fixed로 심지 않고 Playwright의
     header_template/footer_template로 그린다.
@@ -440,8 +488,12 @@ def _html_to_pdf(
         f'<img src="{stamp_uri}" style="display:block;margin:0 auto 1mm;height:{_FOOTER_MARK_HEIGHT_MM}mm;">'
         if stamp_uri else ""
     )
+    caption_mark = (
+        f'<img src="{caption_uri}" style="display:block;margin:0.5mm auto 0;height:{_CAPTION_MARK_HEIGHT_MM}mm;">'
+        if caption_uri else ""
+    )
     footer_template = (
-        f'<div style="width:100%;text-align:center">{footer_mark}'
+        f'<div style="width:100%;text-align:center">{footer_mark}{caption_mark}'
         '<div style="font-size:9px">- <span class="pageNumber"></span> -</div></div>'
     )
     header_template = (
@@ -497,6 +549,7 @@ def render_document_pdf(
     stamp_path: Path | None = None,
     stamp_top_path: Path | None = None,
     agency_mark_path: Path | None = None,
+    footer_caption_path: Path | None = None,
 ) -> Path:
     """공개 진입점. C 문서에만 페이지 반복 워터마크와 스탬프를 적용한다.
 
@@ -504,6 +557,10 @@ def render_document_pdf(
     붙여야 하는 경우에만 넘긴다 — 일반 "대외비" 마크는 하단(stamp_path)만 쓴다.
     agency_mark_path는 문서 좌상단에 한 번 표시하는 기관 마크(레터헤드)다 — 대외비/
     군사기밀 마크와 별개로, C 문서에만 적용한다(2026-07-21 사용자 결정).
+    footer_caption_path는 하단 스탬프(stamp_path) 아래에 추가로 쌓는 범용 캡션
+    이미지다(2026-07-27 추가) — 비밀표시 규정 제9항의 "군사기밀 포함" 붉은 문구
+    (일반 기관 대외비 문서용)와 [별표 2] 7호 재분류 근거 박스(군사기밀 등급 문서용)가
+    같은 슬롯을 공유한다. 두 용도는 대상 문서군이 겹치지 않아 상호 배타적이다.
     """
     output_path = Path(output_path)
     confidential = (row.get("cso_classification") or "").strip().upper() == "C"
@@ -511,6 +568,7 @@ def render_document_pdf(
     effective_stamp_top = stamp_top_path if confidential else None
     effective_watermark = watermark_path if confidential else None
     effective_agency_mark = agency_mark_path if confidential else None
+    effective_footer_caption = footer_caption_path if confidential else None
     env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_autoescape(("html",)))
     context = _render_context(row, category, effective_watermark, effective_agency_mark)
     template = context["template"]
@@ -530,5 +588,6 @@ def render_document_pdf(
     _html_to_pdf(
         html, output_path, context["layout"],
         stamp_uri=_image_data_uri(effective_stamp), stamp_top_uri=_image_data_uri(effective_stamp_top),
+        caption_uri=_image_data_uri(effective_footer_caption),
     )
     return output_path
