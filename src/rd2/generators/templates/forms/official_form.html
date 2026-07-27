@@ -1,5 +1,6 @@
 <div class="slogan">{{ slogan }}</div><div class="agency-name">{{ agency }}</div>
 <div class="official-fields"><p>수신&nbsp;&nbsp;{{ recipient }}</p><p>(경유)</p><p>제목&nbsp;&nbsp;{{ title }}</p></div>
+{% if release_due_date %}<div class="release-due-notice"><strong>공개 예정일</strong><span>{{ release_due_date }}</span><small>내부검토 종료 후 공개 여부를 다시 판단하는 예정일</small></div>{% endif %}
 {% include 'bodies/' ~ body_format ~ '.html' %}
 {% if extra_notice %}<p>{{ extra_notice }}</p>{% endif %}
 <div class="sender">{{ agency }}장</div>

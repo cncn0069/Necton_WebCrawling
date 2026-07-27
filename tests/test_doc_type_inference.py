@@ -8,6 +8,7 @@ from rd2.storage.naming import (
     DOC_TYPE_PERSONNEL,
     DOC_TYPE_PLAN,
     DOC_TYPE_POLICY_MATERIAL,
+    DOC_TYPE_REPLY_NOTIFICATION,
     DOC_TYPE_REPORT,
 )
 
@@ -27,6 +28,24 @@ class TestInferDocType:
 
     def test_clause_6_is_personnel(self):
         assert infer_doc_type("6") == DOC_TYPE_PERSONNEL
+
+    def test_clause_6_welfare_submission_is_official_document(self):
+        assert (
+            infer_doc_type(
+                "6",
+                keyword_text="2023년 사회복지 급여 수급자 자격 심사 자료 제출",
+            )
+            == DOC_TYPE_OFFICIAL_DOCUMENT
+        )
+
+    def test_clause_6_welfare_approval_is_approval(self):
+        assert infer_doc_type("6", keyword_text="복지급여 지급 승인") == DOC_TYPE_APPROVAL
+
+    def test_clause_6_petition_result_is_reply_notification(self):
+        assert (
+            infer_doc_type("6", keyword_text="민원 처리 결과 통보")
+            == DOC_TYPE_REPLY_NOTIFICATION
+        )
 
     def test_clause_7_is_report(self):
         assert infer_doc_type("7") == DOC_TYPE_REPORT

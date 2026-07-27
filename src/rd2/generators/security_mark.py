@@ -57,6 +57,16 @@ _LETTERHEAD_MARK_SIZE_PX = (170, 170)  # 좌상단 기관 마크(레터헤드) �
 _AGENCY_WATERMARK_BOX_PX = (900, 900)  # 배경 워터마크용 기관 마크 캔버스
 _AGENCY_WATERMARK_ALPHA = 60  # 글자 워터마크 fill=(140,140,140,60)과 같은 톤
 
+# 비밀표시 규정 제9항 붉은 문구 + [별표 2] 7호 재분류 근거 박스 공용 폰트 크기/색.
+_NOTICE_FONT_SIZE = 26
+_NOTICE_TEXT_COLOR = (200, 0, 0, 255)
+_MILITARY_SECRET_CONTENT_NOTICE_TEXT = "이 비밀에는 군사기밀 사항이 포함되어 있습니다"
+
+# security_mark.py의 다른 마크와 같은 150dpi 래스터화 기준 cm→px 환산
+# (_PAGE_SIZE_PX 주석 참고, 1cm = dpi/2.54 px) — 비밀표시 규정 제9항 박스와
+# [별표 2] 7호 재분류 근거 박스가 공유한다.
+_PX_PER_CM = 150 / 2.54
+
 
 def _load_font(path: str, size: int) -> ImageFont.ImageFont:
     try:
@@ -214,3 +224,169 @@ def generate_agency_watermark(output_path: Path, logo_filename: str, *, seed: in
 def generate_security_mark(output_path: Path, *, seed: int = 0) -> Path:
     """하위호환용 별칭 — 분류 박스 스탬프만 생성한다."""
     return generate_classification_stamp(output_path, seed=seed)
+
+
+# 비밀표시 규정 제9항 도안 실측 치수 — 박스 너비 9cm × 높이 2cm(2026-07-27 사용자
+# 지적 — 원 도안은 1.5cm 높이지만, [별표 2] 7호 재분류 근거 박스와 시각적으로
+# 맞추기 위해 2cm로 통일하라는 사용자 결정).
+_NOTICE_BOX_WIDTH_PX = round(9 * _PX_PER_CM)
+_NOTICE_BOX_HEIGHT_PX = round(2 * _PX_PER_CM)
+_NOTICE_BOX_PAD_PX = 10
+# 2026-07-27: 이 박스는 최종 PDF 하단 여백에 6mm 높이로 작게 표시되는데, 2px
+# 테두리는 _apply_noise()의 가우시안 블러 + 그 축소 배율을 거치면 사실상 사라진다
+# (원본 PNG를 확대해서 보면 테두리가 있지만, 실제 인쇄/미리보기 크기에서는 안 보임
+# — 사용자 지적). 축소돼도 살아남도록 두껍게 그린다.
+_NOTICE_BOX_BORDER_WIDTH_PX = 6
+
+
+def generate_military_secret_content_notice(output_path: Path, *, seed: int = 0) -> Path:
+    """국방부·국가정보원이 아닌 일반 기관의 비밀문서에 군사기밀 사항이 섞여 있을 때,
+    기존 "대외비" 마크 아래 여백에 붙이는 붉은색 문구 PNG를 만든다(비밀표시 규정
+    제9항 — 각급 행정기관 장이 생산·재생산하는 비밀에 군사기밀 사항이 포함된 경우의
+    표시, 2026-07-27 사용자 제공 이미지).
+
+    agency_resolver.scenario_contains_military_secret()이 True인 문서에만 쓴다 —
+    국방부/국가정보원 문서 자체는 이미 generate_military_secret_mark()의 등급 마크를
+    쓰므로 이 함수 대상이 아니다. 박스 치수는 9cm×2cm로 고정하고([별표 2] 7호 재분류
+    근거 박스와 같은 방식, 2026-07-27 사용자 지적 — 텍스트 길이에 맞춰 캔버스가
+    늘어나던 이전 버전은 박스 테두리 자체가 없었다), 글자 크기를 그 안에 맞춰
+    자동으로 줄인다.
+    """
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    available_w = _NOTICE_BOX_WIDTH_PX - _NOTICE_BOX_PAD_PX * 2
+    available_h = _NOTICE_BOX_HEIGHT_PX - _NOTICE_BOX_PAD_PX * 2
+
+    font_size = _NOTICE_FONT_SIZE
+    while font_size > 8:
+        font = _load_font(_KOREAN_FONT_PATH, font_size)
+        bbox = measure.textbbox((0, 0), _MILITARY_SECRET_CONTENT_NOTICE_TEXT, font=font)
+        text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if text_w <= available_w and text_h <= available_h:
+            break
+        font_size -= 1
+    else:
+        font = _load_font(_KOREAN_FONT_PATH, font_size)
+        bbox = measure.textbbox((0, 0), _MILITARY_SECRET_CONTENT_NOTICE_TEXT, font=font)
+        text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    img = Image.new("RGBA", (_NOTICE_BOX_WIDTH_PX, _NOTICE_BOX_HEIGHT_PX), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle(
+        [0, 0, _NOTICE_BOX_WIDTH_PX - 1, _NOTICE_BOX_HEIGHT_PX - 1],
+        outline=_NOTICE_TEXT_COLOR, width=_NOTICE_BOX_BORDER_WIDTH_PX,
+    )
+    text_x = (_NOTICE_BOX_WIDTH_PX - text_w) / 2 - bbox[0]
+    text_y = (_NOTICE_BOX_HEIGHT_PX - text_h) / 2 - bbox[1]
+    draw.text((text_x, text_y), _MILITARY_SECRET_CONTENT_NOTICE_TEXT, font=font, fill=_NOTICE_TEXT_COLOR)
+    noisy = _apply_noise(img, seed=seed, angle_range=0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
+
+
+def generate_reclassification_old_mark(output_path: Path, old_grade: str, *, seed: int = 0) -> Path:
+    """재분류된 군사기밀 문서의 "예전 등급" 마크 — 등급 마크 위에 붉은색 대각선(X자)을
+    그어 삭제 표시한다([별표 2] 7호 "예전 분류 표시를 붉은색으로 대각선을 그어 삭제").
+
+    상단 마진에 배치한다 — 새(현재) 등급은 기존 generate_military_secret_mark()를
+    하단에 그대로 쓴다(측면 배치 대신 상단/하단만 쓰는 설계, 2026-07-27 결정).
+    """
+    if old_grade not in MILITARY_SECRET_MARK_FILENAMES:
+        raise ValueError(f"알 수 없는 군사기밀 등급: {old_grade!r}")
+    asset_path = _LOGO_DIR / MILITARY_SECRET_MARK_FILENAMES[old_grade]
+    base = _load_mark_asset(asset_path)
+    draw = ImageDraw.Draw(base)
+    width, height = base.size
+    line_width = max(2, width // 60)
+    draw.line([(0, 0), (width, height)], fill=(220, 0, 0, 255), width=line_width)
+    draw.line([(0, height), (width, 0)], fill=(220, 0, 0, 255), width=line_width)
+    noisy = _apply_noise(base, seed=seed, angle_range=0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
+
+
+# [별표 2] 7호 재분류 근거 표시 도안 실측 치수 — 근거·직책·계급·성명 박스 8cm ×
+# 서명란 1.5cm, 둘 다 높이 2cm.
+_RECLASS_TEXT_BOX_WIDTH_PX = round(8 * _PX_PER_CM)
+_RECLASS_SIGNATURE_BOX_WIDTH_PX = round(1.5 * _PX_PER_CM)
+_RECLASS_BOX_HEIGHT_PX = round(2 * _PX_PER_CM)
+_RECLASS_BOX_PAD_PX = 10
+_RECLASS_LINE_GAP_PX = 6
+_RECLASS_SIGNATURE_LABEL_FONT_SIZE = 18
+# _NOTICE_BOX_BORDER_WIDTH_PX와 같은 이유 — 최종 PDF 하단 여백에서 작게 표시될 때도
+# 테두리가 사라지지 않도록 두껍게 그린다(2026-07-27 사용자 지적).
+_RECLASS_BOX_BORDER_WIDTH_PX = 6
+
+
+def generate_reclassification_notice(
+    output_path: Path,
+    *,
+    basis_text: str,
+    reclass_date: str,
+    position: str,
+    rank: str,
+    name: str,
+    seed: int = 0,
+) -> Path:
+    """[별표 2] 7호 재분류 근거 표시 PNG를 만든다 — "{근거}에 따른 재분류({날짜})" +
+    "직책: {} 계급: {} 성명: {}" 두 줄이 든 박스(8cm×2cm)와 그 옆 빈 서명란
+    (1.5cm×2cm, 실제 서명 이미지는 합성하지 않는다)으로 구성한다. 박스 치수는
+    [별표 2] 도안 실측값 그대로 고정하고(2026-07-27 사용자 지적 — 텍스트 길이에
+    맞춰 캔버스가 늘어나던 이전 버전은 규격과 다르다), 글자 크기를 그 안에 맞춰
+    자동으로 줄인다. 하단 마진에서 새 등급 마크(generate_military_secret_mark)
+    아래에 쌓아 표시한다.
+    """
+    line1 = f"{basis_text}에 따른 재분류({reclass_date})"
+    line2 = f"직책: {position}  계급: {rank}  성명: {name}"
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+
+    available_w = _RECLASS_TEXT_BOX_WIDTH_PX - _RECLASS_BOX_PAD_PX * 2
+    available_line_h = (
+        _RECLASS_BOX_HEIGHT_PX - _RECLASS_BOX_PAD_PX * 2 - _RECLASS_LINE_GAP_PX
+    ) / 2
+
+    font_size = _NOTICE_FONT_SIZE
+    while font_size > 8:
+        font = _load_font(_KOREAN_FONT_PATH, font_size)
+        bbox1 = measure.textbbox((0, 0), line1, font=font)
+        bbox2 = measure.textbbox((0, 0), line2, font=font)
+        fits_width = max(bbox1[2] - bbox1[0], bbox2[2] - bbox2[0]) <= available_w
+        fits_height = max(bbox1[3] - bbox1[1], bbox2[3] - bbox2[1]) <= available_line_h
+        if fits_width and fits_height:
+            break
+        font_size -= 1
+    else:
+        font = _load_font(_KOREAN_FONT_PATH, font_size)
+        bbox1 = measure.textbbox((0, 0), line1, font=font)
+        bbox2 = measure.textbbox((0, 0), line2, font=font)
+
+    total_w = _RECLASS_TEXT_BOX_WIDTH_PX + _RECLASS_SIGNATURE_BOX_WIDTH_PX
+    img = Image.new("RGBA", (total_w, _RECLASS_BOX_HEIGHT_PX), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    draw.rectangle(
+        [0, 0, _RECLASS_TEXT_BOX_WIDTH_PX, _RECLASS_BOX_HEIGHT_PX - 1],
+        outline=(0, 0, 0, 255), width=_RECLASS_BOX_BORDER_WIDTH_PX,
+    )
+    draw.rectangle(
+        [_RECLASS_TEXT_BOX_WIDTH_PX, 0, total_w - 1, _RECLASS_BOX_HEIGHT_PX - 1],
+        outline=(0, 0, 0, 255), width=_RECLASS_BOX_BORDER_WIDTH_PX,
+    )
+
+    line1_y = _RECLASS_BOX_PAD_PX
+    line2_y = _RECLASS_BOX_PAD_PX + available_line_h + _RECLASS_LINE_GAP_PX
+    draw.text((_RECLASS_BOX_PAD_PX - bbox1[0], line1_y - bbox1[1]), line1, font=font, fill=(0, 0, 0, 255))
+    draw.text((_RECLASS_BOX_PAD_PX - bbox2[0], line2_y - bbox2[1]), line2, font=font, fill=(0, 0, 0, 255))
+
+    sig_font = _load_font(_KOREAN_FONT_PATH, _RECLASS_SIGNATURE_LABEL_FONT_SIZE)
+    sig_bbox = measure.textbbox((0, 0), "서명", font=sig_font)
+    sig_w, sig_h = sig_bbox[2] - sig_bbox[0], sig_bbox[3] - sig_bbox[1]
+    sig_x = _RECLASS_TEXT_BOX_WIDTH_PX + (_RECLASS_SIGNATURE_BOX_WIDTH_PX - sig_w) / 2 - sig_bbox[0]
+    sig_y = (_RECLASS_BOX_HEIGHT_PX - sig_h) / 2 - sig_bbox[1]
+    draw.text((sig_x, sig_y), "서명", font=sig_font, fill=(0, 0, 0, 255))
+
+    noisy = _apply_noise(img, seed=seed, angle_range=0.0)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    noisy.save(output_path)
+    return output_path
