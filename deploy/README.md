@@ -2,10 +2,21 @@
 
 ## 1. 서버 준비
 ```bash
-sudo apt update && sudo apt install -y python3.12 python3.12-venv
+sudo apt update
+sudo apt install -y \
+  python3.12 \
+  python3.12-venv \
+  libpango-1.0-0 \
+  libpangoft2-1.0-0 \
+  libharfbuzz0b \
+  libharfbuzz-subset0
 sudo useradd -m -s /bin/bash rd2
 sudo mkdir -p /opt/rd2 && sudo chown rd2:rd2 /opt/rd2
 ```
+
+마지막 네 패키지는 WeasyPrint 69가 HTML/CSS를 PDF로 렌더링할 때 사용하는
+Pango/Harfbuzz 런타임이다. EC2가 x86_64인지 Graviton(arm64)인지와 무관하게
+인스턴스의 Ubuntu 아키텍처에 맞는 패키지가 설치된다.
 
 ## 2. 코드 + 의존성
 ```bash
@@ -14,7 +25,35 @@ cd /opt/rd2
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -e .
+.venv/bin/python -m weasyprint --info
 ```
+
+마지막 명령에서 WeasyPrint와 Pango 버전이 출력되면 네이티브 라이브러리까지
+정상 로딩된 것이다. 기존 `pdf_render.py` 경로는 계속 Playwright Chromium을
+사용하므로, 그 렌더러도 EC2에서 실행할 경우 별도로 Chromium을 설치한다:
+
+```bash
+.venv/bin/python -m playwright install chromium
+```
+
+### Docker 이미지에 넣을 경우
+
+EC2에서 Docker로 실행해도 같은 패키지가 필요하다. Debian/Ubuntu 기반 Python
+이미지의 애플리케이션 설치 단계 앞에 다음을 둔다:
+
+```dockerfile
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libharfbuzz0b \
+        libharfbuzz-subset0 \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+WeasyPrint는 `requirements.txt`의 `WeasyPrint==69.0`으로 설치한다. 기존
+Playwright 렌더러까지 컨테이너 안에서 사용할 때만 Chromium과 그 런타임
+의존성을 추가한다.
 
 ## 3. DB 접속정보 (.env)
 저장 계층은 MariaDB(RDS)를 본다(`src/rd2/storage/db.py`, 2026-07-09 SQLite→MariaDB 전환).
@@ -51,7 +90,8 @@ sudo journalctl -u rd2-crawler -f   # 로그 확인
 포함시킬 것.
 
 ## 미포함 (별도 후속 작업)
-- Dockerfile/컨테이너화 — 지금은 systemd + venv로 충분한 규모.
+- 완성형 Dockerfile/컨테이너화 — 위 시스템 의존성 조각만 문서화했고, 현재 기본
+  운영 방식은 systemd + venv다.
 - CI(테스트 자동 실행) — 로컬 `pytest` 통과만 확인하고 배포.
 - 여러 인스턴스 동시 실행 — MariaDB 자체는 동시 접속을 지원하지만, 같은 소스를 여러
   프로세스가 동시에 돌리면 체크포인트 파일(`rd2.db.{source}_checkpoint.json`)을 서로
