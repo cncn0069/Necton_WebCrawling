@@ -1,6 +1,6 @@
-# 개발 환경에서 검증된 버전으로 고정(pip freeze 기준, 2026-07-08).
+# 개발 환경에서 검증된 버전으로 고정(2026-07-28 기준).
 # pyproject.toml보다 엄격하게, 새 서버(EC2 등)에 처음 설치할 때
-# 로컬과 다른 버전이 깔려 재현 안 되는 문제를 막기 위한 전체 고정 버전 목록이다.
+# 로컬과 다른 버전이 깔려 재현 안 되는 문제를 막기 위한 직접 의존성 고정 목록이다.
 # hwp-hwpx-parser는 내부 API 호환성 때문에 pyproject.toml에서도 1.0.0으로 고정한다.
 # numpy==2.5.1이 Python 3.12+ 전용이라 이 파일 전체가 Python 3.12+ 필요
 # (pyproject.toml의 requires-python도 3.12로 맞춰뒀다).
@@ -17,6 +17,7 @@ numpy==2.5.1
 pillow==12.3.0
 opencv-python-headless==5.0.0.93
 Jinja2==3.1.6
+WeasyPrint==69.0
 playwright==1.61.0
 
 # --- 개발/테스트 전용(운영 배포 시 생략 가능) ---
@@ -29,3 +30,10 @@ reportlab==5.0.0
 # 동작하지 않는다. 새 서버에 배포할 때 반드시 같이 설치해야 한다:
 #   ~/.claude/skills/gstack/browse/dist/browse (또는 PATH의 browse/browse.exe)
 # 설치 방법은 gstack의 browse 스킬 setup 스크립트를 참고할 것.
+#
+# WeasyPrint는 Python 패키지 외에 Pango/Harfbuzz가 필요하다. 새
+# 서버/컨테이너에서는 pip 설치 전에 아래 OS 패키지를 설치해야 한다
+# (Ubuntu 24.04 기준):
+#   libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0
+# Apple Silicon macOS에서는 `brew install pango` 뒤 아래 경로를 셸에 설정한다:
+#   export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_FALLBACK_LIBRARY_PATH

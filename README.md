@@ -16,12 +16,26 @@ Python 3.12 이상 필요 (`pyproject.toml`의 `requires-python`). `requirements
 고정한 `numpy==2.5.1`이 3.12+ 전용이라, 이보다 낮은 버전에서는 설치 자체가 실패한다.
 
 ```bash
+# macOS 최초 1회 — WeasyPrint 네이티브 라이브러리
+brew install pango
+# Apple Silicon에서 Homebrew 라이브러리를 못 찾을 때 필요한 공식 권장 경로
+export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_FALLBACK_LIBRARY_PATH
+
 python3.12 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt   # 검증된 고정 버전 (재현성 우선 — EC2 등 새 환경에서 사용)
 pip install -e .
 python -m playwright install chromium   # HTML 템플릿 PDF 렌더링용 브라우저
+python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 ```
+
+기존 공공문서 템플릿 PDF는 Playwright Chromium을 계속 사용한다. 새 문서 렌더링
+실험을 위해 Jinja2와 WeasyPrint 69.x를 함께 설치하며, 둘은 기존 렌더러를
+자동으로 대체하지 않는다. Ubuntu/EC2의 Pango 설치 패키지는
+[`deploy/README.md`](./deploy/README.md)를 따른다. macOS에서
+`cannot load library 'libgobject-2.0-0'`가 나오면 위
+`DYLD_FALLBACK_LIBRARY_PATH`가 현재 셸에 설정됐는지 확인한다
+([WeasyPrint 공식 문제 해결 문서](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#missing-library)).
 
 개발 중 최소 의존성만 설치하려면 `requirements.txt` 대신 `pip install -e .`만
 실행해도 된다. HWPX 표 셀 문단 보존 로직이 파서 내부 API에 의존하므로
