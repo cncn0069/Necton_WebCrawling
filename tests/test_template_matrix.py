@@ -180,13 +180,13 @@ def test_target_statuses_by_key_matches_admin_statuses_for_doc_type():
 
 
 def test_status_aware_targets_cross_only_that_doc_types_own_statuses():
-    """규칙이 있는 doc_type은 (target × 그 doc_type의 상태 라벨 수)만큼
-    행이 생겨야 한다 — 전체 상태 라벨을 곱하는 완전 격자가 아니다."""
+    """규칙이 있는 doc_type은 기본 셀 + 자체 상태 라벨만 가진다."""
     official_doc_rows = [row for row in STATUS_AWARE_TARGETS if row.doc_type == "official_document"]
     n_official_doc_targets = sum(1 for t in TEMPLATE_TARGETS if t.doc_type == "official_document")
     assert n_official_doc_targets > 0
-    assert len(official_doc_rows) == n_official_doc_targets * 5
+    assert len(official_doc_rows) == n_official_doc_targets * 6
     assert {row.admin_status for row in official_doc_rows} == {
+        None,
         "결재진행중",
         "첨부미등록",
         "타기관협의중",
@@ -218,11 +218,10 @@ def test_status_aware_targets_keep_a_placeholder_row_when_no_rule_defined():
         assert row.admin_status is None
 
 
-def test_status_aware_targets_row_count_equals_sum_of_statuses_or_one():
-    """전체 STATUS_AWARE_TARGETS 행 수는 각 타겟마다 (상태 라벨 수, 없으면 1)을
-    합한 값과 정확히 같아야 한다 — 곱하거나 빠뜨리는 버그를 잡는다."""
+def test_status_aware_targets_row_count_equals_base_plus_statuses():
+    """각 타겟은 상태 없는 기본 셀 하나와 적용 가능한 상태 셀을 가진다."""
     expected = 0
     for target in TEMPLATE_TARGETS:
         statuses = admin_statuses_for_doc_type(target.doc_type)
-        expected += len(statuses) if statuses else 1
+        expected += 1 + len(statuses or ())
     assert len(STATUS_AWARE_TARGETS) == expected

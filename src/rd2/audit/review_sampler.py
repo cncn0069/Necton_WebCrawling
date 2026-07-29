@@ -11,6 +11,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Mapping
+
+from rd2.administrative_status import AdminStatus
 
 REVIEW_SAMPLES_FIELDNAMES = [
     "sample_rank",
@@ -26,6 +29,24 @@ REVIEW_SAMPLES_FIELDNAMES = [
     "seed_candidate_id",
     "seed_extraction_id",
     "pdf_path",
+]
+
+CONTENT_SAMPLES_FIELDNAMES = [
+    "sample_rank",
+    "sample_axis",
+    "sample_value",
+    "sample_status",
+    "row_id",
+    "cso_classification",
+    "clause_no",
+    "cso_subclause_key",
+    "doc_type",
+    "document_status",
+    "title",
+    "body_text",
+    "coverage_cell_key",
+    "pdf_path",
+    "pdf_status",
 ]
 
 # 우선순위 순서(§8): raw exact -> normalized -> semantic(not_run) -> coverage
@@ -53,6 +74,75 @@ class RowSummary:
     body_length: int
     normalized_hash: str
     structure_fingerprint: str
+    clause_no: str = ""
+    document_status: str = ""
+
+
+@dataclass(frozen=True)
+class ContentSampleSelection:
+    sample_rank: int
+    sample_axis: str  # "clause" | "admin_status"
+    sample_value: str
+    sample_status: str  # "ok" | "missing"
+    row_id: str
+
+
+def select_content_samples(
+    row_summaries: Mapping[str, RowSummary],
+) -> list[ContentSampleSelection]:
+    """조항 1~8과 행정상태별로 생성 내용 대표 1건을 결정적으로 고른다.
+
+    그룹 안에서는 본문 길이 중앙값에 가장 가까운 행을 택한다. 생성 결과가 없는
+    그룹도 ``missing`` 행으로 남겨 검수 파일만 보고 누락을 확인할 수 있게 한다.
+    한 문서가 조항 대표와 행정상태 대표를 겸할 수 있지만 두 검수 목적은 별도
+    행으로 보존한다.
+    """
+
+    def choose(members: list[RowSummary]) -> str:
+        lengths = sorted(member.body_length for member in members)
+        median_length = lengths[len(lengths) // 2]
+        return min(
+            members,
+            key=lambda member: (
+                abs(member.body_length - median_length),
+                member.normalized_hash,
+                member.row_id,
+            ),
+        ).row_id
+
+    groups: list[tuple[str, str, list[RowSummary]]] = []
+    summaries = list(row_summaries.values())
+    for clause_no in tuple(str(number) for number in range(1, 9)):
+        groups.append(
+            (
+                "clause",
+                clause_no,
+                [summary for summary in summaries if summary.clause_no == clause_no],
+            )
+        )
+    for status in AdminStatus:
+        groups.append(
+            (
+                "admin_status",
+                status.value,
+                [
+                    summary
+                    for summary in summaries
+                    if summary.document_status == status.value
+                ],
+            )
+        )
+
+    return [
+        ContentSampleSelection(
+            sample_rank=rank,
+            sample_axis=axis,
+            sample_value=value,
+            sample_status="ok" if members else "missing",
+            row_id=choose(members) if members else "",
+        )
+        for rank, (axis, value, members) in enumerate(groups, start=1)
+    ]
 
 
 @dataclass(frozen=True)
@@ -337,8 +427,34 @@ def select_review_samples(
     coverage_actual_rows: list[dict],
     format_result: dict,
     pdf_dir: Path | None,
+    forced_review_reasons: Mapping[str, str] | None = None,
 ) -> list[ReviewSample]:
-    anomaly_quota = min(10, math.ceil(sample_count * 2 / 3))
+    forced_reasons = dict(forced_review_reasons or {})
+    forced_samples: list[ReviewSample] = []
+    for row_id in sorted(forced_reasons):
+        summary = row_summaries.get(row_id)
+        if summary is None:
+            continue
+        forced_samples.append(
+            ReviewSample(
+                sample_rank=0,
+                row_id=row_id,
+                sample_kind="mandatory",
+                reason_code="classification_disagreement",
+                secondary_reasons="",
+                reason_detail=forced_reasons[row_id],
+                coverage_cell_key=summary.coverage_cell_key,
+                metric_name="classification_consistency",
+                metric_value=0.0,
+                related_row_id="",
+                seed_candidate_id=summary.seed_candidate_id,
+                seed_extraction_id=summary.seed_extraction_id,
+                pdf_path="",
+            )
+        )
+
+    remaining_quota = max(0, sample_count - len(forced_samples))
+    anomaly_quota = min(10, math.ceil(remaining_quota * 2 / 3))
     anomaly_samples = select_anomaly_samples(
         quota=anomaly_quota,
         row_summaries=row_summaries,
@@ -346,8 +462,17 @@ def select_review_samples(
         coverage_actual_rows=coverage_actual_rows,
         format_result=format_result,
     )
-    chosen_row_ids = {sample.row_id for sample in anomaly_samples}
-    representative_quota = max(0, sample_count - len(anomaly_samples))
+    forced_row_ids = {sample.row_id for sample in forced_samples}
+    anomaly_samples = [
+        sample for sample in anomaly_samples if sample.row_id not in forced_row_ids
+    ]
+    chosen_row_ids = forced_row_ids | {
+        sample.row_id for sample in anomaly_samples
+    }
+    representative_quota = max(
+        0,
+        sample_count - len(forced_samples) - len(anomaly_samples),
+    )
     representative_samples = select_representative_samples(
         quota=representative_quota,
         row_summaries=row_summaries,
@@ -356,7 +481,8 @@ def select_review_samples(
     )
 
     final_samples: list[ReviewSample] = []
-    for rank, sample in enumerate(anomaly_samples + representative_samples, start=1):
+    selected = forced_samples + anomaly_samples + representative_samples
+    for rank, sample in enumerate(selected, start=1):
         pdf_path, status = pdf_status(sample.row_id, pdf_dir)
         secondary = sample.secondary_reasons
         if status != "ok":

@@ -238,6 +238,36 @@ def _signature_context(template, seed: int, status: AdminStatus | None) -> dict 
     }
 
 
+def _document_quality_variant(row: dict, status: AdminStatus | None, seed: int) -> str:
+    """행정상태와 별개인 문서 완성도/작성 품질 변형을 재현 가능하게 고른다.
+
+    호출자가 ``document_quality_variant``를 지정하면 그 값을 우선한다. 초안은
+    구조적 미완성의 비율만 높이고, 특정 문구나 ``끝.`` 유무를 강제하지 않는다.
+    완료 문서에도 드물게 종결 표기 누락이 생길 수 있다.
+    """
+    explicit = str(row.get("document_quality_variant") or "").strip()
+    allowed = {
+        "complete",
+        "partial_fields",
+        "near_complete",
+        "interrupted",
+        "clerical_error",
+        "ending_omitted",
+    }
+    if explicit in allowed:
+        return explicit
+    roll = seed % 20
+    if status is AdminStatus.DRAFT:
+        if roll < 9:
+            return "partial_fields"
+        if roll < 14:
+            return "near_complete"
+        if roll < 18:
+            return "interrupted"
+        return "clerical_error"
+    return "ending_omitted" if roll == 0 else "complete"
+
+
 def _build_signature_line(positions, signed_count, _style=None, *, seed=0):
     if not positions:
         return []
@@ -300,8 +330,12 @@ def _build_civil_reply_body_flowables(row, _style=None): return _nodes_for_body(
 
 def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> dict:
     seed = _seed(row)
+    quality_variant = _document_quality_variant(row, status, seed)
     paragraphs = _paragraphs(row)
+    if quality_variant == "interrupted" and len(paragraphs) > 1:
+        paragraphs = paragraphs[: max(1, len(paragraphs) // 2)]
     context: dict = {
+        "document_quality_variant": quality_variant,
         "paragraphs": paragraphs,
         "overview": paragraphs[: len(_GANADARA)],
         "details": paragraphs[len(_GANADARA) :],
@@ -312,7 +346,12 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
         "discussion": paragraphs[1:] or ["안건 세부 내용에 대한 위원 질의 및 소관 부서 답변 진행."],
         "production_date": row.get("production_date") or "",
         "department": row.get("department") or "감사 대상 부서",
-        "ending": "[이하 작성 중]" if status is AdminStatus.DRAFT else "끝.",
+        "ending": (
+            ""
+            if quality_variant
+            in {"partial_fields", "interrupted", "clerical_error", "ending_omitted"}
+            else "끝."
+        ),
         "agenda_no": 1000 + seed % 900,
     }
     context["personnel_rows"] = [
@@ -360,6 +399,12 @@ def _body_context(row: dict, body_format: str, status: AdminStatus | None) -> di
         dept_manager=_SYNTHETIC_SIGNER_NAMES[(seed + 4) % len(_SYNTHETIC_SIGNER_NAMES)],
         dept_officer=_SYNTHETIC_SIGNER_NAMES[(seed + 6) % len(_SYNTHETIC_SIGNER_NAMES)],
     )
+    if quality_variant == "partial_fields":
+        context["production_date"] = ""
+    elif quality_variant == "clerical_error":
+        # 실제 작성 중 문서에서 흔한 필드 누락을 상태 설명문 대신 남긴다.
+        context["production_date"] = ""
+        context["department"] = ""
     return context
 
 
@@ -458,8 +503,6 @@ def _render_context(
         if recipient == RECIPIENT_CIVIL_PETITIONER:
             recipient = f"{context['petitioner']['name']} 귀하"
         title = row.get("title") or "(제목 없음)"
-        if status is AdminStatus.DRAFT:
-            title = f"(초안) {title}"
         notice = None
         if status is AdminStatus.AGENCY_CONSULT:
             notice = f"※ {row.get('pending_agency') or '관계 부처'} 의견 조회 중 — 회신 접수 후 후속 절차 진행 예정"
@@ -484,6 +527,12 @@ def _render_context(
             disclosure_label=disclosure_label,
             release_due_date=release_due_date or "",
         )
+        quality_variant = context["document_quality_variant"]
+        if quality_variant == "partial_fields":
+            context["recipient"] = ""
+        elif quality_variant == "clerical_error":
+            context["doc_no"] = ""
+            context["department"] = ""
     return context
 
 
