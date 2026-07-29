@@ -308,12 +308,26 @@ class DocumentSelection(ContractModel):
 
 
 class LegalClassification(ContractModel):
+    """근거 → 이유 → 판정 순서로 필드를 선언한다.
+
+    OpenAI strict structured output은 스키마의 property 순서대로 자기회귀
+    생성하므로 **필드 순서가 곧 추론 순서**다. 판정을 먼저 두면
+    ``evidence_spans``가 판정의 근거가 아니라 이미 내린 답을 뒷받침할 인용구를
+    찾는 사후 정당화가 되고, 인용 불일치로 ``EVIDENCE_INVALID`` hard failure가
+    늘어난다.
+
+    순서를 바꿔도 JSON 구조는 동일하므로 ``CONTRACT_SCHEMA_VERSION``은 올리지
+    않는다. 바뀐 것은 산출물의 shape이 아니라 생성 방식이므로
+    ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
+    """
+
     document_type: SemanticDocumentType
     other_document_type: NonEmptyText | None = None
+    evidence_spans: tuple[EvidenceSpan, ...] = ()
+    rationale: NonEmptyText
     classification: CsoClassification
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
-    evidence_spans: tuple[EvidenceSpan, ...] = ()
 
     @model_validator(mode="after")
     def _classification_must_be_coherent(self) -> "LegalClassification":
@@ -362,8 +376,6 @@ class LegalClassification(ContractModel):
 
 
 class SourceClassification(LegalClassification):
-    rationale: NonEmptyText
-
     def validate_against_snapshot(self, snapshot: SourceDocumentSnapshot) -> None:
         self.validate_evidence_against(snapshot.block_text)
 
@@ -399,11 +411,13 @@ class AssessmentScope(str, Enum):
 
 
 class SourceSuitability(ContractModel):
-    evidence_level: SourceEvidenceLevel
+    """근거 → 이유 → 판정 순서. ``LegalClassification``의 주석 참고."""
+
     assessment_scope: AssessmentScope
     evidence_spans: tuple[EvidenceSpan, ...] = ()
-    reason_code: NonEmptyText
     rationale: NonEmptyText
+    evidence_level: SourceEvidenceLevel
+    reason_code: NonEmptyText
 
     @model_validator(mode="after")
     def _evidence_must_match_level(self) -> "SourceSuitability":
@@ -598,9 +612,11 @@ class GenerationProvenance(ContractModel):
 
 
 class AdministrativeStatusFinding(ContractModel):
-    status: AdminStatus
+    """근거 → 이유 → 판정 순서. ``LegalClassification``의 주석 참고."""
+
     evidence_spans: tuple[EvidenceSpan, ...] = Field(min_length=1)
     rationale: NonEmptyText
+    status: AdminStatus
 
     def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
         for span in self.evidence_spans:
@@ -620,7 +636,6 @@ class AdministrativeStatusFinding(ContractModel):
 class Pass2Assessment(LegalClassification):
     contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
     administrative_statuses: tuple[AdministrativeStatusFinding, ...] = ()
-    rationale: NonEmptyText
 
     @model_validator(mode="after")
     def _administrative_statuses_must_be_unique(self) -> "Pass2Assessment":

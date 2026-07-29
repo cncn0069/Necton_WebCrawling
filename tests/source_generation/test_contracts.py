@@ -13,6 +13,7 @@ from rd2.source_generation.classification_taxonomy import (
     SubclauseKey,
 )
 from rd2.source_generation.contracts import (
+    AdministrativeStatusFinding,
     AssessmentScope,
     AttachmentReferenceBlock,
     BulletListBlock,
@@ -574,3 +575,38 @@ def test_contract_models_forbid_extra_fields_and_are_frozen():
     block = ParagraphBlock(block_id="p1", text="본문")
     with pytest.raises(ValidationError, match="frozen"):
         block.text = "변경"
+
+
+def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
+    """필드 순서 = structured output의 생성 순서 = 추론 순서.
+
+    판정 필드가 evidence/rationale보다 앞서면 근거가 사후 정당화로 바뀌고
+    evidence span 인용 불일치가 늘어난다. 되돌아가면 이 테스트가 잡는다.
+    """
+
+    def index_of(model: type, field: str) -> int:
+        return list(model.model_fields).index(field)
+
+    for model, verdicts in (
+        (SourceClassification, ("classification", "clause_no", "subclause_key")),
+        (Pass2Assessment, ("classification", "clause_no", "subclause_key")),
+        (SourceSuitability, ("evidence_level", "reason_code")),
+        (AdministrativeStatusFinding, ("status",)),
+    ):
+        evidence_at = index_of(model, "evidence_spans")
+        rationale_at = index_of(model, "rationale")
+        assert evidence_at < rationale_at, model.__name__
+        for verdict in verdicts:
+            assert rationale_at < index_of(model, verdict), (
+                f"{model.__name__}.{verdict} must follow evidence and rationale"
+            )
+
+
+def test_pass1_result_orders_analysis_before_generation():
+    """분류·적합성을 먼저 확정한 뒤 route/target/본문을 생성한다."""
+
+    order = list(Pass1Result.model_fields)
+    assert order.index("source_classification") < order.index("source_suitability")
+    assert order.index("source_suitability") < order.index("generation_route")
+    assert order.index("generation_route") < order.index("generation_target")
+    assert order.index("generation_target") < order.index("generated_document")

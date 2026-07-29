@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v8"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v9"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
