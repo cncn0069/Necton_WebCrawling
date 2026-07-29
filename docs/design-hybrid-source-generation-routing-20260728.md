@@ -153,6 +153,21 @@ P1은 세부조항별 허용 route 안에서 다음 우선순위를 사용한다
 | 8 | `real_estate_speculation` | `source_aligned`, `fully_synthetic` |
 | 8 | `cornering` | `source_aligned`, `fully_synthetic` |
 
+### 범위 결정 (2026-07-29): 제1~4호는 공개 원문에서 파생시키지 않는다
+
+실문서 50건 실행 결과, 공개 원문에 counterfactual C 목표를 주면 P1은 대부분
+`no_usable_public_source`로 물러섰다. 기밀·국방·외교·생명·수사·재판 내용은
+공개 문서에 애초에 없으므로, `span_seeded`와 `anchored`는 근거 없는
+counterfactual이 되거나 원문을 형식적으로만 붙여 놓는 결과가 된다.
+
+따라서 **제1~4호에서는 공개(O) 원문을 재료로 쓰는 경로를 제거하고 완전 생성으로
+보낸다.** `source_aligned`는 원문 자체가 진짜 C/S일 때만 도달하므로 남겨둔다.
+원문 기반 경로는 **제5~8호와 행정상태**에 집중한다 — 입찰 평가, 원가, 감사
+지적, 개인정보, 결재 상태는 공개 문서에 실제로 존재하거나 인접해 있다.
+
+구현은 `pipeline.available_routes()`의 `CONFIDENTIAL_CLAUSES`이며, 아래 표의
+제1~4호 행에서 `anchored`는 이 결정에 따라 제외된다.
+
 별표의 `anchored`는 v1 포함 여부가 미결정이다. 표의 앞 route가 우선이지만 각
 route의 evidence prerequisite가 충족될 때만 선택한다. 근거가 없으면 다음 허용
 route로 내려가며 source 문서를 억지로 목표에 맞추지 않는다.

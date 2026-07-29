@@ -1013,3 +1013,54 @@ def test_generation_plan_tells_the_model_which_routes_are_available():
     payload = json.loads(plan.split("[GENERATION PLAN]\n")[1].split("\n\n[ASSESSMENT")[0])
     assert "anchored" not in payload["available_routes"]["routes"]
     assert "source_aligned" in payload["available_routes"]["routes"]
+
+
+def test_confidential_clauses_are_not_derived_from_public_sources():
+    """제1~4호는 공개 원문에서 파생시키지 않고 완전 생성으로 보낸다.
+
+    span_seeded와 anchored는 공개(O) 원문을 재료로 C 목표를 만드는 경로다.
+    기밀·국방·외교·수사 내용은 공개 문서에 애초에 없으므로 근거 없는
+    counterfactual이 된다.
+    """
+    from rd2.source_generation.pipeline import CONFIDENTIAL_CLAUSES, available_routes
+
+    for clause, subclause in (
+        (ClauseNumber.CLAUSE_1, SubclauseKey.LEGAL_SECRET),
+        (ClauseNumber.CLAUSE_2, SubclauseKey.SECURITY_DEFENSE),
+        (ClauseNumber.CLAUSE_3, SubclauseKey.LIFE_BODY),
+        (ClauseNumber.CLAUSE_4, SubclauseKey.PROSECUTION),
+    ):
+        target = GenerationTarget(
+            classification=TargetClassification.C,
+            clause_no=clause,
+            subclause_key=subclause,
+            generation_mode=GenerationMode.COUNTERFACTUAL,
+        )
+        routes = available_routes(
+            target=target, sensitive_seed="민감 seed", has_synthetic_generator=True
+        )
+        assert GenerationRoute.SPAN_SEEDED not in routes, clause
+        assert GenerationRoute.ANCHORED not in routes, clause
+        assert GenerationRoute.FULLY_SYNTHETIC in routes, clause
+        # 원문이 진짜로 C/S인 경우는 여전히 성립하므로 남겨둔다.
+        assert GenerationRoute.SOURCE_ALIGNED in routes, clause
+
+    # 제5~8호는 그대로 공개 원문을 재료로 쓸 수 있다.
+    for clause, subclause in (
+        (ClauseNumber.CLAUSE_5, SubclauseKey.BID_CONTRACT),
+        (ClauseNumber.CLAUSE_7, SubclauseKey.UNIT_COST),
+        (ClauseNumber.CLAUSE_8, SubclauseKey.CORNERING),
+    ):
+        target = GenerationTarget(
+            classification=TargetClassification.S,
+            clause_no=clause,
+            subclause_key=subclause,
+            generation_mode=GenerationMode.COUNTERFACTUAL,
+        )
+        routes = available_routes(
+            target=target, sensitive_seed="민감 seed", has_synthetic_generator=True
+        )
+        assert GenerationRoute.SPAN_SEEDED in routes, clause
+        assert GenerationRoute.ANCHORED in routes, clause
+
+    assert len(CONFIDENTIAL_CLAUSES) == 4

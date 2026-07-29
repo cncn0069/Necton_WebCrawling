@@ -438,6 +438,18 @@ def _selected_source_resolver(
     return resolve
 
 
+#: 공개 원문에서 파생시키지 않는 조항. 원문 기반 경로는 제5~8호와 행정상태에
+#: 집중하고, 기밀 셀은 완전 생성으로 보낸다(2026-07-29 범위 결정).
+CONFIDENTIAL_CLAUSES: frozenset[ClauseNumber] = frozenset(
+    {
+        ClauseNumber.CLAUSE_1,
+        ClauseNumber.CLAUSE_2,
+        ClauseNumber.CLAUSE_3,
+        ClauseNumber.CLAUSE_4,
+    }
+)
+
+
 def available_routes(
     *,
     target: GenerationTarget,
@@ -460,19 +472,35 @@ def available_routes(
     routes: list[GenerationRoute] = []
     admin_only = target.clause_no is None
 
-    if not admin_only:
-        # source가 C/S인지는 P1이 원문을 보고 판단한다.
-        routes.append(GenerationRoute.SOURCE_ALIGNED)
-        # 제6호는 비식별화 구현 전까지 span_seeded를 막아 두었다.
-        if target.clause_no != ClauseNumber.CLAUSE_6:
-            routes.append(GenerationRoute.SPAN_SEEDED)
-        if sensitive_seed:
-            routes.append(GenerationRoute.ANCHORED)
+    if admin_only:
+        # 법적 조항 없는 행정상태 단독 target은 이 route로만 성립한다.
+        return (GenerationRoute.ADMINISTRATIVE_AUGMENTED,)
+
+    # source가 C/S인지는 P1이 원문을 보고 판단한다. 원문이 진짜로 C/S인
+    # 경우에만 도달하므로 어느 조항에서든 남겨둔다.
+    routes.append(GenerationRoute.SOURCE_ALIGNED)
+
+    if target.clause_no in CONFIDENTIAL_CLAUSES:
+        # 공개 원문에서 기밀(제1~4호)을 파생시키지 않는다.
+        #
+        # span_seeded와 anchored는 공개(O) 원문을 재료로 C 목표를 만드는
+        # 경로다. 기밀·국방·외교·생명·수사·재판 내용은 공개 문서에 애초에
+        # 없으므로, 이 경로들은 근거 없는 counterfactual이 되거나 원문을
+        # 형식적으로만 붙여 놓는 결과가 된다. 실측에서도 P1은 공개 원문에
+        # C 목표를 받으면 대부분 no_usable_public_source로 물러섰다.
+        # 기밀 셀은 처음부터 완전 생성하는 편이 정직하고 품질도 낫다.
         if has_synthetic_generator:
             routes.append(GenerationRoute.FULLY_SYNTHETIC)
-    else:
-        # 법적 조항 없는 행정상태 단독 target은 이 route로만 성립한다.
-        routes.append(GenerationRoute.ADMINISTRATIVE_AUGMENTED)
+        return tuple(routes)
+
+    # 제5~8호는 공개 원문에 업무 맥락과 민감 span이 실제로 존재할 수 있다.
+    # 제6호는 비식별화 구현 전까지 span_seeded를 막아 두었다.
+    if target.clause_no != ClauseNumber.CLAUSE_6:
+        routes.append(GenerationRoute.SPAN_SEEDED)
+    if sensitive_seed:
+        routes.append(GenerationRoute.ANCHORED)
+    if has_synthetic_generator:
+        routes.append(GenerationRoute.FULLY_SYNTHETIC)
     return tuple(routes)
 
 
