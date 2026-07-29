@@ -621,6 +621,25 @@ SUBCLAUSE_BOUNDARY_RULES: tuple[str, ...] = (
 )
 
 
+BOUNDARY_PAIRS: tuple[tuple[SubclauseKey, SubclauseKey], ...] = (
+    (SubclauseKey.BID_CONTRACT, SubclauseKey.DECISION_REVIEW),
+    (SubclauseKey.AUDIT_INSPECTION, SubclauseKey.DECISION_REVIEW),
+    (SubclauseKey.PERSONNEL_MANAGEMENT, SubclauseKey.PERSONNEL_PII),
+    (SubclauseKey.TECHNOLOGY_DEVELOPMENT, SubclauseKey.TECHNOLOGY_PATENT),
+    (SubclauseKey.SECURITY_DEFENSE, SubclauseKey.SECURITY_DIAGNOSIS),
+    (SubclauseKey.PETITIONER_PII, SubclauseKey.WELFARE_PII),
+    (SubclauseKey.BID_CONTRACT, SubclauseKey.UNIT_COST),
+    (SubclauseKey.SUBJECT_PII, SubclauseKey.AUDIT_INSPECTION),
+)
+"""프롬프트 경계 규칙과 held-out 평가가 **같은 목록**을 보게 하는 단일 출처.
+
+설계 초기에는 프롬프트가 안내할 혼동 쌍과 평가가 측정할 혼동 쌍을 각각 손으로
+관리했고, 그 결과 `petitioner_pii`/`welfare_pii`가 양쪽에서 동시에 누락됐다 —
+가장 헷갈리는 쌍이 가이드도 측정도 없이 남은 것이다. 새 혼동 쌍은 여기에만
+추가하고, 경계 규칙과 평가 리포트가 이 목록을 함께 따른다.
+"""
+
+
 def render_taxonomy_guidance() -> str:
     """P1/P2가 같은 조항·세부조항 의미를 보도록 결정론적으로 렌더링한다."""
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from rd2.source_generation.classification_taxonomy import (
+    BOUNDARY_PAIRS,
     SUBCLAUSE_BOUNDARY_RULES,
     SUBCLAUSE_DEFINITIONS,
     TAXONOMY_VERSION,
@@ -127,20 +128,13 @@ def test_confusable_subclause_pairs_have_explicit_boundary_rules():
 
     rules = "\n".join(SUBCLAUSE_BOUNDARY_RULES)
 
-    for left, right in (
-        ("bid_contract", "decision_review"),
-        ("audit_inspection", "decision_review"),
-        ("personnel_management", "personnel_pii"),
-        ("technology_development", "technology_patent"),
-        ("security_defense", "security_diagnosis"),
-        # 라벨에 '민원'이 겹쳐 가장 헷갈리는데 v1에서 규칙이 없던 쌍.
-        ("petitioner_pii", "welfare_pii"),
-        ("bid_contract", "unit_cost"),
-        ("subject_pii", "audit_inspection"),
-    ):
+    # 프롬프트 가이드와 held-out 평가가 같은 목록을 보게 하는 것이 핵심이다.
+    # 두 목록을 따로 관리하던 것이 petitioner_pii/welfare_pii 누락의 원인이었다.
+    for left, right in BOUNDARY_PAIRS:
         assert any(
-            left in rule and right in rule for rule in SUBCLAUSE_BOUNDARY_RULES
-        ), f"no boundary rule distinguishes {left} from {right}"
+            left.value in rule and right.value in rule
+            for rule in SUBCLAUSE_BOUNDARY_RULES
+        ), f"no boundary rule distinguishes {left.value} from {right.value}"
 
     # 라벨 낱말 겹침으로 고르지 말라는 지시가 실제로 존재한다.
     assert "'민원'이라는 낱말로 구분하지 않는다" in rules
