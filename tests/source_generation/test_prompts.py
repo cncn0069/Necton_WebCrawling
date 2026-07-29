@@ -100,6 +100,36 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
     assert "classification=C/S이면" in pass2_system
 
 
+def test_relevance_prompt_carries_taxonomy_without_generation_leakage():
+    bundle = build_prompt_bundle()
+    relevance_system = bundle.definition("relevance").system_prompt
+
+    # 선택기는 P1/P2와 같은 세부조항 의미를 봐야 근거 block을 떨어뜨리지 않는다.
+    for expected in (
+        "제1호 (C)",
+        "제8호 (S)",
+        "bid_contract: 입찰계약",
+        "unit_cost: 원가·납품단가",
+        "security_diagnosis: 보안진단·취약점",
+        "[세부조항 경계 규칙]",
+    ):
+        assert expected in relevance_system
+
+    # 누락된 block의 근거가 되살아나지 않는다는 사실을 명시한다.
+    assert "영구히 보이지 않는다" in relevance_system
+
+    # 선택기는 생성 경로·목표를 알 필요가 없고, 알면 선택이 목표에 오염된다.
+    for forbidden in (
+        "source_aligned",
+        "span_seeded",
+        "anchored",
+        "fully_synthetic",
+        "generation_mode",
+        "counterfactual",
+    ):
+        assert forbidden not in relevance_system
+
+
 def test_prompts_require_semantic_p1_status_context_and_independent_p2_grading():
     bundle = build_prompt_bundle()
     pass1_system = bundle.definition("pass1").system_prompt

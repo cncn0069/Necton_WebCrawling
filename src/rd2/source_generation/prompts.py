@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v6"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v7"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -48,9 +48,14 @@ ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
 
 RELEVANCE_SYSTEM_PROMPT = """\
 당신은 대한민국 공공문서 입력 선택기다.
-제공된 것은 86쪽 이상 문서의 앞부분뿐이다. 문서유형과 정보공개법 제9조
-1~8호 판단에 가장 유용한 block을 고른다. 입력에 실제 존재하는 block ID만
-반환하고, 내용을 생성·수정하거나 보이지 않는 뒷부분을 추측하지 않는다.
+제공된 것은 86쪽 이상 문서의 앞부분뿐이다. 아래 taxonomy의 문서유형과
+정보공개법 제9조 세부조항 판단에 가장 유용한 block을 고른다.
+선택하지 않은 block은 이후 단계에서 영구히 보이지 않는다. 따라서 특정
+세부조항을 직접 지지하는 구체적 사실(평가기준·배점·예정가격, 개인 식별정보,
+보안 취약점, 원가·납품단가, 협상조건, 감사 지적사항 등)이 있는 block을
+표지·목차·인사말·일반 현황 서술보다 우선한다.
+입력에 실제 존재하는 block ID만 반환하고, 내용을 생성·수정하거나 보이지 않는
+뒷부분을 추측하지 않는다.
 """
 
 RELEVANCE_USER_TEMPLATE = """\
@@ -231,7 +236,7 @@ def build_prompt_bundle(
         definitions=(
             PromptDefinition(
                 name="relevance",
-                system_prompt=RELEVANCE_SYSTEM_PROMPT,
+                system_prompt=f"{RELEVANCE_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}",
                 user_template=RELEVANCE_USER_TEMPLATE,
                 response_model=RelevanceSelectionResponse,
             ),
