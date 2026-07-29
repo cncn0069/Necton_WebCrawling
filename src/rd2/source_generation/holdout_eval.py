@@ -91,6 +91,13 @@ class HoldoutCase(ContractModel):
 
     라벨은 모델이 아니라 원문 자체(PRISM 공개제한근거 등)에서 온 것이어야
     한다. 모델이 붙인 라벨을 정답으로 쓰면 이 평가는 자기 자신을 채점한다.
+
+    **라벨 세밀도는 축마다 다를 수 있다.** 실측 결과 코퍼스의 C/S 라벨은
+    정보공개법 '호'까지만 있고 24개 세부조항 정답은 어디에도 없다. 그래서
+    C/S 사례라도 ``subclause_key``를 비워둘 수 있고, 그 경우 세부조항 축은
+    채점에서 제외된다 — 정답이 없는 축을 0점으로 세면 정확도가 거짓으로
+    낮아진다. O 사례의 ``subclause_key=None``은 '모른다'가 아니라 '없다'가
+    정답이므로 채점 대상이다.
     """
 
     case_id: NonEmptyText
@@ -115,14 +122,17 @@ class HoldoutCase(ContractModel):
                 raise ValueError("O holdout case cannot have clause or subclause")
             return self
 
-        if self.clause_no is None or self.subclause_key is None:
-            raise ValueError("C/S holdout case requires clause and subclause")
+        if self.clause_no is None:
+            raise ValueError("C/S holdout case requires a clause")
         if expected_classification(self.clause_no) != self.classification:
             raise ValueError(
                 f"clause {self.clause_no.value} does not map to "
                 f"classification {self.classification.value}"
             )
-        if not subclause_belongs_to_clause(self.clause_no, self.subclause_key):
+        # subclause_key는 선택이다 — 없으면 세부조항 축을 채점하지 않는다.
+        if self.subclause_key is not None and not subclause_belongs_to_clause(
+            self.clause_no, self.subclause_key
+        ):
             raise ValueError(
                 f"subclause {self.subclause_key.value!r} does not belong to "
                 f"clause {self.clause_no.value}"
@@ -130,11 +140,27 @@ class HoldoutCase(ContractModel):
         return self
 
     @property
+    def has_subclause_label(self) -> bool:
+        """세부조항 축을 채점할 수 있는가.
+
+        O는 '세부조항 없음'이 정답이라 채점 대상이고, C/S인데 비어 있으면
+        정답을 모르는 것이라 채점 대상이 아니다.
+        """
+
+        return (
+            self.classification == CsoClassification.O
+            or self.subclause_key is not None
+        )
+
+    @property
     def stratum(self) -> str:
         """층화 표본 추출과 confusion matrix가 함께 쓰는 셀 키."""
 
-        if self.subclause_key is None:
+        if self.classification == CsoClassification.O:
             return CsoClassification.O.value
+        if self.subclause_key is None:
+            # 세부조항 정답이 없으면 호 단위까지만 층을 나눈다.
+            return f"clause{self.clause_no.value}"
         return self.subclause_key.value
 
 
@@ -226,12 +252,18 @@ class CaseOutcome(ContractModel):
 
 
 class AxisAccuracy(ContractModel):
-    """축별 정확도. 분모는 **호출에 성공한** 사례 수다."""
+    """축별 정확도.
+
+    **축마다 분모가 다르다.** 세부조항 정답이 없는 사례는 세부조항 축의
+    분모에서 빠진다. 정답 없는 축을 오답으로 세면 정확도가 거짓으로 낮아지고,
+    반대로 분모에 넣고 맞은 걸로 세면 거짓으로 높아진다.
+    """
 
     scored: int = Field(ge=0)
     document_type_correct: int = Field(ge=0)
     classification_correct: int = Field(ge=0)
     clause_correct: int = Field(ge=0)
+    subclause_scored: int = Field(ge=0)
     subclause_correct: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -240,34 +272,37 @@ class AxisAccuracy(ContractModel):
             ("document_type_correct", self.document_type_correct),
             ("classification_correct", self.classification_correct),
             ("clause_correct", self.clause_correct),
-            ("subclause_correct", self.subclause_correct),
+            ("subclause_scored", self.subclause_scored),
         ):
             if value > self.scored:
                 raise ValueError(f"{name} cannot exceed scored cases")
+        if self.subclause_correct > self.subclause_scored:
+            raise ValueError("subclause_correct cannot exceed subclause_scored")
         return self
 
-    def _rate(self, correct: int) -> float:
-        return (correct / self.scored) if self.scored else 0.0
+    @staticmethod
+    def _rate(correct: int, total: int) -> float:
+        return (correct / total) if total else 0.0
 
     @computed_field
     @property
     def document_type_accuracy(self) -> float:
-        return self._rate(self.document_type_correct)
+        return self._rate(self.document_type_correct, self.scored)
 
     @computed_field
     @property
     def classification_accuracy(self) -> float:
-        return self._rate(self.classification_correct)
+        return self._rate(self.classification_correct, self.scored)
 
     @computed_field
     @property
     def clause_accuracy(self) -> float:
-        return self._rate(self.clause_correct)
+        return self._rate(self.clause_correct, self.scored)
 
     @computed_field
     @property
     def subclause_accuracy(self) -> float:
-        return self._rate(self.subclause_correct)
+        return self._rate(self.subclause_correct, self.subclause_scored)
 
 
 class ConfusionCell(ContractModel):
@@ -292,9 +327,33 @@ class BoundaryPairResult(ContractModel):
         return self.left_predicted_as_right + self.right_predicted_as_left
 
 
+class OverFlagging(ContractModel):
+    """진짜 공개(O) 문서를 C/S로 잘못 찍은 비율.
+
+    실제 C/S 문서는 비공개라 본문을 갖고 있지 않으므로 재현율은 이 코퍼스로
+    잴 수 없다. 반대 방향인 오탐은 공개 문서만으로 측정 가능하고, 값이 높으면
+    채점자가 근거 없이 민감 판정을 남발한다는 뜻이라 그 자체로 신호다.
+    """
+
+    open_scored: int = Field(ge=0)
+    flagged_c_or_s: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _flagged_must_fit(self) -> "OverFlagging":
+        if self.flagged_c_or_s > self.open_scored:
+            raise ValueError("flagged_c_or_s cannot exceed open_scored")
+        return self
+
+    @computed_field
+    @property
+    def over_flagging_rate(self) -> float:
+        return (self.flagged_c_or_s / self.open_scored) if self.open_scored else 0.0
+
+
 class ModelEvalResult(ContractModel):
     model_id: NonEmptyText
     accuracy: AxisAccuracy
+    over_flagging: OverFlagging
     confusion: tuple[ConfusionCell, ...] = ()
     boundary_pairs: tuple[BoundaryPairResult, ...] = ()
     failed_case_ids: tuple[NonEmptyText, ...] = ()
@@ -419,7 +478,8 @@ def _predicted_stratum(assessment: Pass2Assessment) -> str:
 def _score_axes(
     pairs: Sequence[tuple[HoldoutCase, Pass2Assessment]],
 ) -> AxisAccuracy:
-    document_type = classification = clause = subclause = 0
+    document_type = classification = clause = 0
+    subclause_scored = subclause_correct = 0
     for case, assessment in pairs:
         if case.document_type == assessment.document_type:
             document_type += 1
@@ -427,14 +487,17 @@ def _score_axes(
             classification += 1
         if case.clause_no == assessment.clause_no:
             clause += 1
-        if case.subclause_key == assessment.subclause_key:
-            subclause += 1
+        if case.has_subclause_label:
+            subclause_scored += 1
+            if case.subclause_key == assessment.subclause_key:
+                subclause_correct += 1
     return AxisAccuracy(
         scored=len(pairs),
         document_type_correct=document_type,
         classification_correct=classification,
         clause_correct=clause,
-        subclause_correct=subclause,
+        subclause_scored=subclause_scored,
+        subclause_correct=subclause_correct,
     )
 
 
@@ -571,9 +634,22 @@ def summarize_outcomes(
             continue
         pairs.append((case, outcome.assessment))
 
+    open_pairs = [
+        (case, assessment)
+        for case, assessment in pairs
+        if case.classification == CsoClassification.O
+    ]
     return ModelEvalResult(
         model_id=model_id,
         accuracy=_score_axes(pairs),
+        over_flagging=OverFlagging(
+            open_scored=len(open_pairs),
+            flagged_c_or_s=sum(
+                1
+                for _, assessment in open_pairs
+                if assessment.classification != CsoClassification.O
+            ),
+        ),
         confusion=_build_confusion(pairs),
         boundary_pairs=_build_boundary_pairs(pairs),
         failed_case_ids=tuple(sorted(failed)),

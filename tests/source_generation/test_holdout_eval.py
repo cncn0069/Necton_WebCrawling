@@ -459,3 +459,76 @@ def test_report_knows_it_is_stale_when_the_prompt_bundle_changes():
     )
     assert report.is_stale_against(changed) is True
     assert report.contract_version == CONTRACT_SCHEMA_VERSION
+
+
+def test_cs_case_may_omit_subclause_when_the_corpus_has_no_such_label():
+    """코퍼스의 C/S 라벨은 '호'까지만 있다. 세부조항 정답은 존재하지 않는다."""
+
+    case = _case("c1", subclause=None)
+
+    assert case.subclause_key is None
+    assert case.has_subclause_label is False
+    # 세부조항 정답이 없으면 호 단위까지만 층을 나눈다.
+    assert case.stratum == "clause5"
+
+    # 정답이 있으면 여전히 조항 소속을 강제한다.
+    with pytest.raises(ValidationError):
+        _case("c2", clause=ClauseNumber.CLAUSE_5, subclause=SubclauseKey.LEGAL_SECRET)
+
+
+def test_subclause_axis_excludes_cases_without_a_subclause_label():
+    """정답 없는 축을 오답으로 세면 정확도가 거짓으로 낮아진다."""
+
+    manifest = HoldoutManifest(
+        manifest_id="m1",
+        created_at=NOW,
+        seed=1,
+        cases=(
+            _case("c1", document_id="doc-1"),                      # 세부조항 정답 있음
+            _case("c2", document_id="doc-2", subclause=None),      # 세부조항 정답 없음
+        ),
+    )
+    outcomes = [
+        _outcome(manifest, "c1", _assessment()),
+        _outcome(manifest, "c2", _assessment()),
+    ]
+
+    accuracy = summarize_outcomes(manifest, outcomes, model_id="grader").accuracy
+
+    assert accuracy.scored == 2
+    assert accuracy.clause_correct == 2
+    # 분모가 2가 아니라 1이어야 한다.
+    assert accuracy.subclause_scored == 1
+    assert accuracy.subclause_correct == 1
+    assert accuracy.subclause_accuracy == pytest.approx(1.0)
+
+
+def test_open_documents_measure_over_flagging():
+    """실제 C/S는 본문이 없어 재현율을 못 잰다. 오탐은 공개 문서로 잴 수 있다."""
+
+    manifest = HoldoutManifest(
+        manifest_id="m1",
+        created_at=NOW,
+        seed=1,
+        cases=(
+            _o_case("open-1"),
+            _o_case("open-2"),
+            _o_case("open-3"),
+            _case("cs-1", document_id="doc-cs-1"),
+        ),
+    )
+    outcomes = [
+        _outcome(manifest, "open-1", _assessment(classification=CsoClassification.O,
+                                                 clause=None, subclause=None)),
+        # 공개 문서를 민감으로 잘못 찍은 두 건
+        _outcome(manifest, "open-2", _assessment()),
+        _outcome(manifest, "open-3", _assessment()),
+        _outcome(manifest, "cs-1", _assessment()),
+    ]
+
+    result = summarize_outcomes(manifest, outcomes, model_id="grader")
+
+    # 분모는 O 사례만 — C/S 사례는 오탐 계산에 들어가지 않는다.
+    assert result.over_flagging.open_scored == 3
+    assert result.over_flagging.flagged_c_or_s == 2
+    assert result.over_flagging.over_flagging_rate == pytest.approx(2 / 3)

@@ -81,9 +81,22 @@ def _print_report_summary(report_json: str) -> None:
             ("문서유형", "document_type_accuracy"),
             ("C/S/O ", "classification_accuracy"),
             ("조항  ", "clause_accuracy"),
-            ("세부조항", "subclause_accuracy"),
         ):
             print(f"  {label} {accuracy[key]:.3f}")
+        if accuracy["subclause_scored"]:
+            print(
+                f"  세부조항 {accuracy['subclause_accuracy']:.3f} "
+                f"(정답 있는 {accuracy['subclause_scored']}건 기준)"
+            )
+        else:
+            print("  세부조항 (정답 라벨이 없어 채점 제외)")
+        over = result["over_flagging"]
+        if over["open_scored"]:
+            print(
+                f"  오탐률 {over['over_flagging_rate']:.3f} "
+                f"— 공개문서 {over['open_scored']}건 중 "
+                f"{over['flagged_c_or_s']}건을 C/S로 판정"
+            )
         if result["failed_case_ids"]:
             print(f"  실패 {len(result['failed_case_ids'])}건")
         confused = [
