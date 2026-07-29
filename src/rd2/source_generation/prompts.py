@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v12"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v13"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -76,6 +76,10 @@ administrative_augmented, fully_synthetic 중 실제 입력 근거에 맞는 rou
 기반 추론을 사용하지 않는다.
 
 route 규칙:
+- generation plan의 available_routes에 있는 route만 선택한다. 목록에 없는
+  route는 이번 입력에서 전제 조건 자체가 성립하지 않으므로, 그 route가 더
+  적합해 보여도 선택하지 않는다. 예를 들어 [SENSITIVE SEED]가 (없음)이면
+  anchored는 목록에 없다.
 - source_aligned: C/S source + direct_legal_evidence +
   generation_mode=source_aligned 조합이다. 명시적 조항·비공개 사유를 지지하는
   source evidence가 필요하고 target은 source 분류와 일치해야 한다.

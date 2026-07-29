@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -951,3 +952,64 @@ def test_retrying_gateway_gives_up_after_max_attempts():
         )
 
     assert len(inner.calls) == 3
+
+
+def test_available_routes_excludes_prerequisites_that_are_not_met():
+    """실측: P1이 seed 없이 anchored를 25/50건 선택해 전량 실패했다.
+
+    모델이 추론해야 할 것을 코드가 미리 계산해 목록으로 준다. 걸러지는 건
+    내용 판단이 필요 없는 것들뿐이다.
+    """
+    from rd2.source_generation.pipeline import available_routes
+
+    legal_target = _target()
+
+    # seed가 없으면 anchored는 목록에 없다.
+    without_seed = available_routes(
+        target=legal_target, sensitive_seed=None, has_synthetic_generator=True
+    )
+    assert GenerationRoute.ANCHORED not in without_seed
+
+    with_seed = available_routes(
+        target=legal_target, sensitive_seed="민감 seed", has_synthetic_generator=True
+    )
+    assert GenerationRoute.ANCHORED in with_seed
+
+    # 합성 실행기가 없으면 fully_synthetic도 목록에 없다.
+    no_generator = available_routes(
+        target=legal_target, sensitive_seed=None, has_synthetic_generator=False
+    )
+    assert GenerationRoute.FULLY_SYNTHETIC not in no_generator
+
+    # 제6호는 비식별화 구현 전까지 span_seeded가 막혀 있다.
+    clause6 = GenerationTarget(
+        classification=TargetClassification.S,
+        clause_no=ClauseNumber.CLAUSE_6,
+        subclause_key=SubclauseKey.PERSONNEL_PII,
+        generation_mode=GenerationMode.COUNTERFACTUAL,
+    )
+    assert GenerationRoute.SPAN_SEEDED not in available_routes(
+        target=clause6, sensitive_seed="seed", has_synthetic_generator=True
+    )
+
+    # 행정상태 단독 target은 administrative_augmented로만 성립한다.
+    admin_only = available_routes(
+        target=_admin_only_target(), sensitive_seed="seed", has_synthetic_generator=True
+    )
+    assert admin_only == (GenerationRoute.ADMINISTRATIVE_AUGMENTED,)
+
+    # 원문 내용 판단이 필요한 route는 코드가 미리 배제하지 않는다.
+    assert GenerationRoute.SOURCE_ALIGNED in without_seed
+
+
+def test_generation_plan_tells_the_model_which_routes_are_available():
+    gateway = FakeGateway([_pass1(), _pass2()])
+    _run(gateway)
+
+    plan = gateway.calls[0]["user_prompt"]
+    assert "available_routes" in plan
+    assert "목록에 없는 route는" in plan
+    # seed를 안 넘긴 실행이므로 anchored가 목록에서 빠져 있어야 한다.
+    payload = json.loads(plan.split("[GENERATION PLAN]\n")[1].split("\n\n[ASSESSMENT")[0])
+    assert "anchored" not in payload["available_routes"]["routes"]
+    assert "source_aligned" in payload["available_routes"]["routes"]

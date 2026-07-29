@@ -23,6 +23,7 @@ from openai import (
 from pydantic import BaseModel, ValidationError
 
 from rd2.schema.models import CsoClassification
+from rd2.source_generation.classification_taxonomy import ClauseNumber
 from rd2.source_generation.administrative import (
     administrative_status_generation_requirements,
     validate_status_date_coherence,
@@ -437,10 +438,49 @@ def _selected_source_resolver(
     return resolve
 
 
+def available_routes(
+    *,
+    target: GenerationTarget,
+    sensitive_seed: str | None,
+    has_synthetic_generator: bool,
+) -> tuple[GenerationRoute, ...]:
+    """이번 호출의 **입력만 보고** 성립 가능한 route를 계산한다.
+
+    실측에서 P1은 ``[SENSITIVE SEED] (없음)``을 보고도 50건 중 25건에서
+    ``anchored``를 선택했다. anchored는 별도 seed가 전제 조건인데 그 전제를
+    확인하지 않은 것이다. 결과는 전량 route validation 실패였다.
+
+    프롬프트에 조건을 적어두는 것만으로는 부족하다는 뜻이므로, 모델이 추론해야
+    할 것을 코드가 미리 계산해 목록으로 건넨다. 여기서 걸러지는 것은 모델의
+    판단이 필요 없는 것들 — seed가 실제로 왔는가, 합성 실행기가 연결돼 있는가,
+    target이 행정상태 단독인가 — 뿐이다. 원문이 C/S인지, 민감 span이 있는지
+    같은 **내용 판단은 여전히 P1의 몫**이라 목록에 남겨둔다.
+    """
+
+    routes: list[GenerationRoute] = []
+    admin_only = target.clause_no is None
+
+    if not admin_only:
+        # source가 C/S인지는 P1이 원문을 보고 판단한다.
+        routes.append(GenerationRoute.SOURCE_ALIGNED)
+        # 제6호는 비식별화 구현 전까지 span_seeded를 막아 두었다.
+        if target.clause_no != ClauseNumber.CLAUSE_6:
+            routes.append(GenerationRoute.SPAN_SEEDED)
+        if sensitive_seed:
+            routes.append(GenerationRoute.ANCHORED)
+        if has_synthetic_generator:
+            routes.append(GenerationRoute.FULLY_SYNTHETIC)
+    else:
+        # 법적 조항 없는 행정상태 단독 target은 이 route로만 성립한다.
+        routes.append(GenerationRoute.ADMINISTRATIVE_AUGMENTED)
+    return tuple(routes)
+
+
 def _generation_plan_json(
     counterfactual_target: GenerationTarget,
     *,
     reference_date: date | None = None,
+    routes: tuple[GenerationRoute, ...] = (),
 ) -> str:
     payload = {
         "when_source_is_c_or_s": {
@@ -461,6 +501,14 @@ def _generation_plan_json(
                 reference_date=reference_date,
             )
         ),
+        "available_routes": {
+            "routes": [route.value for route in routes],
+            "instruction": (
+                "이 목록에 없는 route는 이번 입력에서 전제 조건이 성립하지 "
+                "않으므로 선택하지 않는다. 목록 안에서 실제 원문 근거에 맞는 "
+                "route를 고른다."
+            ),
+        },
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -682,9 +730,14 @@ def execute_pass1(
             user_prompt=render_pass1_user_prompt(
                 source_document,
                 generation_plan=_generation_plan_json(
-                counterfactual_target,
-                reference_date=config.reference_date,
-            ),
+                    counterfactual_target,
+                    reference_date=config.reference_date,
+                    routes=available_routes(
+                        target=counterfactual_target,
+                        sensitive_seed=sensitive_seed,
+                        has_synthetic_generator=fully_synthetic_generator is not None,
+                    ),
+                ),
                 assessment_scope=_assessment_scope(selection).value,
                 sensitive_seed=sensitive_seed,
             ),
