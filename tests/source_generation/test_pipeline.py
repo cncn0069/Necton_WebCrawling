@@ -875,3 +875,79 @@ def test_openai_gateway_reports_validation_paths_without_response_values():
     assert raised.value.code == FailureCode.STRUCTURED_OUTPUT_INVALID
     assert "source_classification.document_type: Field required" in str(raised.value)
     assert repr(invalid_response) not in str(raised.value)
+
+
+def test_retrying_gateway_retries_only_stochastic_contract_violations():
+    """실측: 20건 x 3회에서 3회 모두 실패한 케이스가 0건이었다.
+
+    모든 실패가 실행마다 뒤집혔다 — 결정론적 버그가 아니라 확률적 사건이므로
+    같은 요청을 한 번 더 보내는 것이 가장 큰 레버다.
+    """
+    from rd2.source_generation.pipeline import RetryingGateway
+
+    # 1회차 계약 위반 -> 2회차 성공
+    inner = FakeGateway([
+        StructuredCallError(
+            FailureCode.STRUCTURED_OUTPUT_INVALID, "self-contradiction", retryable=False
+        ),
+        _pass2(),
+    ])
+    gateway = RetryingGateway(inner, max_attempts=2)
+    call = gateway.parse(
+        model="grader",
+        system_prompt="s",
+        user_prompt="u",
+        response_model=Pass2Assessment,
+        max_output_tokens=100,
+    )
+    assert call.parsed == _pass2()
+    assert len(inner.calls) == 2
+    # 재시도가 조용히 일어나지 않도록 기록된다.
+    assert gateway.retried == [(FailureCode.STRUCTURED_OUTPUT_INVALID, 1)]
+
+
+def test_retrying_gateway_does_not_retry_deterministic_failures():
+    """다시 보내도 같은 결과인 실패까지 재시도하면 비용만 두 배가 된다."""
+    from rd2.source_generation.pipeline import RetryingGateway
+
+    inner = FakeGateway([
+        StructuredCallError(
+            FailureCode.MODEL_REFUSAL, "content filter", retryable=False
+        ),
+        _pass2(),
+    ])
+    gateway = RetryingGateway(inner, max_attempts=3)
+
+    with pytest.raises(StructuredCallError) as excinfo:
+        gateway.parse(
+            model="grader",
+            system_prompt="s",
+            user_prompt="u",
+            response_model=Pass2Assessment,
+            max_output_tokens=100,
+        )
+
+    assert excinfo.value.code == FailureCode.MODEL_REFUSAL
+    assert len(inner.calls) == 1
+    assert gateway.retried == []
+
+
+def test_retrying_gateway_gives_up_after_max_attempts():
+    from rd2.source_generation.pipeline import RetryingGateway
+
+    inner = FakeGateway([
+        StructuredCallError(FailureCode.STRUCTURED_OUTPUT_INVALID, "bad", retryable=False)
+        for _ in range(3)
+    ])
+    gateway = RetryingGateway(inner, max_attempts=3)
+
+    with pytest.raises(StructuredCallError):
+        gateway.parse(
+            model="grader",
+            system_prompt="s",
+            user_prompt="u",
+            response_model=Pass2Assessment,
+            max_output_tokens=100,
+        )
+
+    assert len(inner.calls) == 3

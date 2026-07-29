@@ -6,6 +6,7 @@ import json
 import os
 from hashlib import sha256
 from dataclasses import dataclass
+from datetime import date
 from typing import Generic, Protocol, TypeVar, cast
 
 from openai import (
@@ -24,6 +25,7 @@ from pydantic import BaseModel, ValidationError
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.administrative import (
     administrative_status_generation_requirements,
+    validate_status_date_coherence,
 )
 from rd2.source_generation.contracts import (
     CallReceipt,
@@ -210,6 +212,70 @@ class OpenAIResponsesGateway:
         )
 
 
+#: 재시도가 의미 있는 실패. 모델이 확률적으로 자기모순 응답을 낼 때만 해당한다.
+#:
+#: 20건 fixture를 동일 조건으로 3회 돌린 결과 3회 모두 실패하는 케이스가
+#: 0건이었다 — 모든 실패가 실행마다 뒤집혔다. 즉 이 실패들은 결정론적 버그가
+#: 아니라 확률적 사건이고, 같은 입력을 한 번 더 보내는 것만으로 상당수가
+#: 해소된다. 설정·소스·모델 구성 문제처럼 다시 보내도 같은 결과인 실패는
+#: 여기 넣지 않는다.
+STOCHASTIC_FAILURE_CODES: frozenset[FailureCode] = frozenset(
+    {
+        FailureCode.STRUCTURED_OUTPUT_INVALID,
+        FailureCode.MODEL_RESPONSE_EMPTY,
+        FailureCode.SDK_ERROR,
+    }
+)
+
+
+class RetryingGateway:
+    """확률적 계약 위반에만 같은 요청을 다시 보내는 gateway decorator.
+
+    설계 문서의 "executor refusal/SDK transient error: 같은 route만 제한
+    재시도" 규칙을 따른다 — route나 target을 바꿔 조용히 우회하지 않고,
+    **완전히 같은 요청**을 정해진 횟수만큼만 다시 보낸다.
+    """
+
+    def __init__(
+        self,
+        inner: StructuredOutputGateway,
+        *,
+        max_attempts: int = 2,
+        retry_codes: frozenset[FailureCode] = STOCHASTIC_FAILURE_CODES,
+    ) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        self._inner = inner
+        self._max_attempts = max_attempts
+        self._retry_codes = retry_codes
+        #: (code, 시도횟수) 기록. 재시도가 조용히 일어나지 않게 남긴다.
+        self.retried: list[tuple[FailureCode, int]] = []
+
+    def parse(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ParsedT],
+        max_output_tokens: int,
+    ) -> StructuredCall[ParsedT]:
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                return self._inner.parse(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    max_output_tokens=max_output_tokens,
+                )
+            except StructuredCallError as exc:
+                if exc.code not in self._retry_codes or attempt == self._max_attempts:
+                    raise
+                self.retried.append((exc.code, attempt))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _validation_error_summary(exc: ValidationError, *, limit: int = 8) -> str:
     summaries: list[str] = []
     for error in exc.errors(include_input=False, include_url=False)[:limit]:
@@ -231,14 +297,26 @@ def _response_has_refusal(response: object) -> bool:
     return False
 
 
-def default_openai_gateway(*, api_key: str | None = None) -> OpenAIResponsesGateway:
+def default_openai_gateway(
+    *,
+    api_key: str | None = None,
+    max_attempts: int = 2,
+) -> StructuredOutputGateway:
+    """기본 gateway는 확률적 계약 위반을 한 번 재시도한다.
+
+    ``max_attempts=1``을 주면 재시도 없이 원래 동작으로 돌아간다.
+    """
+
     resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not resolved_key:
         raise RuntimeError(
             "OPENAI_API_KEY 환경변수가 설정되지 않았습니다 — .env 또는 실행 "
             "환경에 키를 설정하세요."
         )
-    return OpenAIResponsesGateway(OpenAI(api_key=resolved_key))
+    gateway = OpenAIResponsesGateway(OpenAI(api_key=resolved_key))
+    if max_attempts == 1:
+        return gateway
+    return RetryingGateway(gateway, max_attempts=max_attempts)
 
 
 @dataclass(frozen=True)
@@ -247,6 +325,8 @@ class PipelineConfig:
     grader_model: str
     max_pass1_output_tokens: int = 8_000
     max_pass2_output_tokens: int = 4_000
+    #: '오늘'에 해당하는 기준일. 주면 P1에 전달하고 날짜 모순을 검증한다.
+    reference_date: date | None = None
 
     def __post_init__(self) -> None:
         if not self.generator_model.strip() or not self.grader_model.strip():
@@ -357,7 +437,11 @@ def _selected_source_resolver(
     return resolve
 
 
-def _generation_plan_json(counterfactual_target: GenerationTarget) -> str:
+def _generation_plan_json(
+    counterfactual_target: GenerationTarget,
+    *,
+    reference_date: date | None = None,
+) -> str:
     payload = {
         "when_source_is_c_or_s": {
             "generation_mode": GenerationMode.SOURCE_ALIGNED.value,
@@ -373,7 +457,8 @@ def _generation_plan_json(counterfactual_target: GenerationTarget) -> str:
         },
         "administrative_status_generation_requirements": (
             administrative_status_generation_requirements(
-                counterfactual_target.administrative_statuses
+                counterfactual_target.administrative_statuses,
+                reference_date=reference_date,
             )
         ),
     }
@@ -596,7 +681,10 @@ def execute_pass1(
             system_prompt=pass1_prompt.system_prompt,
             user_prompt=render_pass1_user_prompt(
                 source_document,
-                generation_plan=_generation_plan_json(counterfactual_target),
+                generation_plan=_generation_plan_json(
+                counterfactual_target,
+                reference_date=config.reference_date,
+            ),
                 assessment_scope=_assessment_scope(selection).value,
                 sensitive_seed=sensitive_seed,
             ),
@@ -650,6 +738,15 @@ def execute_pass1(
         if pass1_result.source_suitability.assessment_scope != expected_scope:
             raise ValueError(
                 "source suitability assessment_scope does not match document selection"
+            )
+        if config.reference_date is not None:
+            # '아직 오지 않았다'는 상태가 지난 날짜로 쓰여 있으면 그 문서는
+            # 스스로와 모순된다. forbidden_phrases는 고정 문구만 보고
+            # 날짜는 안 보므로 여기서 따로 확인한다.
+            validate_status_date_coherence(
+                pass1_result.generated_document.body_text,
+                pass1_result.generation_target.administrative_statuses,
+                reference_date=config.reference_date,
             )
     except ValueError as exc:
         return Pass1Execution(
