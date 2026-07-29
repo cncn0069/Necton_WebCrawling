@@ -1,13 +1,17 @@
 """원본문서 기반 2-pass 생성 파이프라인의 독립 계약 경계."""
 
 from rd2.source_generation.classification_taxonomy import (
+    SUBCLAUSE_BOUNDARY_RULES,
+    SUBCLAUSE_DEFINITIONS,
     SUBCLAUSE_LABELS,
     SUBCLAUSES_BY_CLAUSE,
     TAXONOMY_VERSION,
     ClauseNumber,
     SemanticDocumentType,
+    SubclauseDefinition,
     SubclauseKey,
     expected_classification,
+    render_taxonomy_guidance,
     subclause_belongs_to_clause,
 )
 from rd2.source_generation.contracts import (
@@ -53,7 +57,11 @@ from rd2.source_generation.contracts import (
 
 __all__ = [
     "CONTRACT_SCHEMA_VERSION",
+    "SUBCLAUSE_BOUNDARY_RULES",
+    "SUBCLAUSE_DEFINITIONS",
     "SUBCLAUSE_LABELS",
+    "SubclauseDefinition",
+    "render_taxonomy_guidance",
     "SUBCLAUSES_BY_CLAUSE",
     "TAXONOMY_VERSION",
     "AttachmentReferenceBlock",

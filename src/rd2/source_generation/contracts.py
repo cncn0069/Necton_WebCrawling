@@ -905,7 +905,7 @@ class SecurityMode(str, Enum):
 
 class RunManifest(ContractModel):
     contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    taxonomy_version: Literal["source-generation-taxonomy-v1"] = TAXONOMY_VERSION
+    taxonomy_version: Literal["source-generation-taxonomy-v2"] = TAXONOMY_VERSION
     run_id: NonEmptyText
     created_at: datetime
     generator_model: NonEmptyText

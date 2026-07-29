@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from rd2.source_generation.classification_taxonomy import TAXONOMY_VERSION
+from rd2.source_generation.classification_taxonomy import (
+    SUBCLAUSE_BOUNDARY_RULES,
+    SUBCLAUSE_DEFINITIONS,
+    TAXONOMY_VERSION,
+    render_taxonomy_guidance,
+)
 from rd2.source_generation.document_select import SelectionConfig
 from rd2.source_generation.prompts import (
     PASS2_SYSTEM_PROMPT,
@@ -73,9 +78,13 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
     for expected in (
         "제1호 (C)",
         "제8호 (S)",
-        "bid_contract: 입찰계약",
-        "decision_review: 의사결정·내부검토",
-        "personnel_pii: 인사·채용 개인정보",
+        "bid_contract (입찰계약):",
+        "decision_review (의사결정·내부검토):",
+        "personnel_pii (인사·채용 개인정보):",
+        # 라벨이 아니라 판정 정의·포함·제외 기준이 양쪽에 동일하게 간다.
+        "예정가격 산정 근거",
+        "핵심 업무가 입찰이면 bid_contract",
+        "절차의 공정성이 핵심이고 개인 식별이 부수적이면",
     ):
         assert expected in pass1_system
         assert expected in pass2_system
@@ -100,6 +109,45 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
     assert "classification=C/S이면" in pass2_system
 
 
+def test_every_subclause_carries_a_definition_beyond_its_label():
+    """라벨은 enum 키의 번역일 뿐이라 혼동 쌍을 구분하지 못한다."""
+
+    guidance = render_taxonomy_guidance()
+
+    for key, definition in SUBCLAUSE_DEFINITIONS.items():
+        # 정의가 라벨을 되풀이하는 수준이면 모델에게 정보가 없는 것과 같다.
+        assert len(definition.definition) > len(definition.label) + 20, key
+        assert definition.includes, key
+        assert definition.excludes, key
+        assert f"- {key.value} ({definition.label}):" in guidance
+
+
+def test_confusable_subclause_pairs_have_explicit_boundary_rules():
+    """정의만으로 갈리지 않는 쌍은 경계 규칙으로 한 번 더 못박는다."""
+
+    rules = "\n".join(SUBCLAUSE_BOUNDARY_RULES)
+
+    for left, right in (
+        ("bid_contract", "decision_review"),
+        ("audit_inspection", "decision_review"),
+        ("personnel_management", "personnel_pii"),
+        ("technology_development", "technology_patent"),
+        ("security_defense", "security_diagnosis"),
+        # 라벨에 '민원'이 겹쳐 가장 헷갈리는데 v1에서 규칙이 없던 쌍.
+        ("petitioner_pii", "welfare_pii"),
+        ("bid_contract", "unit_cost"),
+        ("subject_pii", "audit_inspection"),
+    ):
+        assert any(
+            left in rule and right in rule for rule in SUBCLAUSE_BOUNDARY_RULES
+        ), f"no boundary rule distinguishes {left} from {right}"
+
+    # 라벨 낱말 겹침으로 고르지 말라는 지시가 실제로 존재한다.
+    assert "'민원'이라는 낱말로 구분하지 않는다" in rules
+    # 제1호 과잉 적용 방지 규칙이 P2 전용이 아니라 공유 taxonomy에 있다.
+    assert "표현만으로 legal_secret을 선택하지" in rules
+
+
 def test_relevance_prompt_carries_taxonomy_without_generation_leakage():
     bundle = build_prompt_bundle()
     relevance_system = bundle.definition("relevance").system_prompt
@@ -108,10 +156,13 @@ def test_relevance_prompt_carries_taxonomy_without_generation_leakage():
     for expected in (
         "제1호 (C)",
         "제8호 (S)",
-        "bid_contract: 입찰계약",
-        "unit_cost: 원가·납품단가",
-        "security_diagnosis: 보안진단·취약점",
+        "bid_contract (입찰계약):",
+        "unit_cost (원가·납품단가):",
+        "security_diagnosis (보안진단·취약점):",
         "[세부조항 경계 규칙]",
+        # 선택기에게 가장 필요한 건 "무엇이 근거로 보이는가"다.
+        "포함: 예정가격 산정 근거",
+        "모의해킹 결과와 미조치 취약점 목록",
     ):
         assert expected in relevance_system
 

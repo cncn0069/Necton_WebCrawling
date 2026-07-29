@@ -457,8 +457,11 @@ def test_p2_receives_taxonomy_but_no_route_or_suitability_metadata():
     assert result.succeeded is True
     pass2_system_prompt = gateway.calls[1]["system_prompt"]
     pass2_user_prompt = gateway.calls[1]["user_prompt"]
-    assert "bid_contract: 입찰계약" in pass2_system_prompt
-    assert "decision_review: 의사결정·내부검토" in pass2_system_prompt
+    assert "bid_contract (입찰계약):" in pass2_system_prompt
+    assert "decision_review (의사결정·내부검토):" in pass2_system_prompt
+    # 라벨만이 아니라 판정 정의와 포함·제외 기준까지 채점자에게 전달된다.
+    assert "예정가격 산정 근거" in pass2_system_prompt
+    assert "핵심 업무가 감사면 audit_inspection" in pass2_system_prompt
     for forbidden in (
         "generation_route",
         "source_suitability",

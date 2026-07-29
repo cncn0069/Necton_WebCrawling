@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v7"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v8"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -150,11 +150,8 @@ type, C/S/O, 정보공개법 제9조 호·세부조항을 독립 예측하고, �
   존재하는 evidence span을 반환한다.
 
 반환하는 clause_no와 subclause_key는 아래 taxonomy의 같은 조항에 속하는
-조합이어야 한다. '비밀', '대외비', 비밀유지협약이라는 표현만으로 제1호로
-판정하지 않는다. 제1호는 별도 법률이 비밀·비공개를 명시한 근거가 문서에
-있을 때만 적용한다. 입찰의 예정가격·평가기준·배점·평가위원·낙찰 전 내부
-검토가 공개되어 공정한 업무수행을 해칠 우려가 핵심이면 제5호 bid_contract를
-우선한다.
+조합이어야 한다. 각 세부조항의 판정 정의와 포함·제외 기준, 경계 규칙을
+그대로 적용하고, 라벨의 낱말이 겹친다는 이유로 세부조항을 고르지 않는다.
 
 행정상태는 법적 조항과 별개의 축이다. 결재 진행 중, 초안, 내부 검토 중 등의
 상태 표시를 법적 S 또는 제5호의 근거로 사용하지 않는다. 반대로 문서에 상태
