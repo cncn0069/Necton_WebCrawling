@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from rd2.administrative_status import AdminStatus
+
 from rd2.storage.naming import (
     DOC_TYPE_APPROVAL,
     DOC_TYPE_AUDIT_RESULT,
@@ -53,29 +55,6 @@ class ApprovalState(str, Enum):
     NONE = "none"  # 결재란 없음
     PENDING = "pending"  # 담당만 기재, 검토/결재는 공란 (내부검토 진행중)
     COMPLETE = "complete"  # 3단 전부 기재 (기존 동작)
-
-
-class AdminStatus(str, Enum):
-    """행정 상태 축 — 조항(제9조) 축과 별개로 문서에 얹히는 상태 변형.
-
-    제9조 1~8호 어느 문서에도 결합할 수 있는 독립 메타데이터다. 일부 상태는
-    결재선·본문에 시각적으로 드러나고, 시스템 등록 오류처럼 시스템 메타데이터로
-    관리되는 상태도 있다. 값은 CSV/DB의 document_status 컬럼에 그대로 쓰이며
-    파일명에는 절대 반영하지 않는다.
-    """
-
-    APPROVAL_PENDING = "결재진행중"
-    RELEASE_NOT_DUE = "공개예정일미도래"
-    DRAFT = "초안"  # 3: 문서 미완성/초안
-    INTERNAL_REVIEW = "내부검토중"
-    ATTACHMENT_MISSING = "첨부미등록"  # 5: 붙임 문구는 있는데 첨부 실물 없음
-    DISCLOSURE_REVIEW = "공개심사중"
-    AGENCY_CONSULT = "타기관협의중"  # 7: 타 기관 의견 회신 대기
-    DEIDENTIFY_PENDING = "비식별처리중"  # 8: PII 비식별 처리 전 원본
-    SYSTEM_REGISTRATION_ERROR = "시스템등록오류"
-    DOCUMENT_DISPOSITION = "문서정리중"
-    PETITION_IN_PROGRESS = "민원처리중"  # 11: 민원 사실확인·조사 중
-    AUDIT_IN_PROGRESS = "감사진행중"
 
 
 @dataclass(frozen=True)
@@ -114,8 +93,9 @@ STATUS_VARIANTS: dict[str, StatusVariantSpec] = {
         applies_to=None,
         forbidden_phrases=("최종 확정", "시행 완료"),
         description=(
-            "초안 — 제목에 (초안) 접두, 결재선 전원 공란, 본문 '끝.' 대신 "
-            "[이하 작성 중] 표기. 완결 표현이 있으면 모순."
+            "초안 — 결재선은 전원 공란이다. 제목에 상태 설명을 강제로 붙이지 않고, "
+            "일부 필드·후반 내용 누락이나 작성상 오류 같은 구조적 미완성으로 표현한다. "
+            "완결 표현이 있으면 모순."
         ),
     ),
     AdminStatus.INTERNAL_REVIEW.value: StatusVariantSpec(

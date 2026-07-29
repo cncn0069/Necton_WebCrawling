@@ -23,6 +23,7 @@ coverage_slot/coverage_plan_run_id 컬럼이 없다(§5의 --coverage-plan 생�
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -36,7 +37,7 @@ ensure_src_on_path()
 from rd2.audit.orchestrator import run_audit
 from rd2.audit.row_contract import AuditContractError
 from rd2.generators.generation_plan_schema import GenerationPlan
-import json
+from rd2.source_generation.audit_bridge import load_classification_sidecar
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -46,6 +47,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pdf-dir", type=Path, default=None, help="PDF가 있는 디렉터리(없으면 pdf_unavailable로만 기록)")
     parser.add_argument("--sample-count", type=int, default=15, help="검수 샘플 수(10~20 권장, 기본 15)")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--classification-artifacts",
+        type=Path,
+        default=None,
+        help=(
+            "source-generation classification_artifacts.jsonl; "
+            "불일치 row를 검수 표본에 강제 포함"
+        ),
+    )
     return parser
 
 
@@ -57,12 +67,37 @@ def main(argv: list[str] | None = None) -> int:
     plan = GenerationPlan.from_dict(plan_data, source_path=str(args.plan))
 
     try:
+        classification_sidecar = (
+            load_classification_sidecar(args.classification_artifacts)
+            if args.classification_artifacts is not None
+            else None
+        )
         summary = run_audit(
             plan=plan,
             input_csv=args.input,
             pdf_dir=args.pdf_dir,
             sample_count=args.sample_count,
             output_dir=args.output_dir,
+            forced_review_reasons=(
+                classification_sidecar.forced_review_reasons
+                if classification_sidecar is not None
+                else None
+            ),
+            classification_metrics=(
+                classification_sidecar.metrics
+                if classification_sidecar is not None
+                else None
+            ),
+            audit_context_sha256=(
+                classification_sidecar.sha256
+                if classification_sidecar is not None
+                else None
+            ),
+            classification_expectations=(
+                classification_sidecar.target_labels
+                if classification_sidecar is not None
+                else None
+            ),
         )
     except AuditContractError as exc:
         print(f"감사 실패(계약 위반): {exc}", file=sys.stderr)

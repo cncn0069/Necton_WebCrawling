@@ -122,6 +122,7 @@ def _build_user_prompt(
     ordering_agency: str,
     production_date: str,
     military_secret_grade: str | None = None,
+    generation_guidance: str | None = None,
 ) -> str:
     grade_line = ""
     if military_secret_grade:
@@ -133,6 +134,9 @@ def _build_user_prompt(
             f"맞는 심각성과 구체성으로 내용을 작성하라(등급이 높을수록 더 치명적이고 "
             f"광범위한 파급효과를 가정하라)."
         )
+    guidance_line = ""
+    if generation_guidance:
+        guidance_line = f"\n\n세부 생성 지침:\n{generation_guidance.strip()}"
     return (
         f"다음 시나리오에 해당하는 공공기관 내부 문서를 작성하라.\n\n"
         f"분류: {clause.classification.value} (제{clause.clause_no}호 - {clause.title})\n"
@@ -146,6 +150,7 @@ def _build_user_prompt(
         f"담당자명·전화번호·금액·문서번호는 완전히 가상으로 지어내라. "
         f"실제 사건을 지칭하지 마라."
         f"{grade_line}"
+        f"{guidance_line}"
     )
 
 
@@ -158,6 +163,7 @@ def generate_clause_document(
     model: str = "gpt-4o-mini",
     scenario_index: int | None = None,
     military_secret_grade: str | None = None,
+    generation_guidance: str | None = None,
 ) -> Document:
     """조항 하나에 대해 합성 문서 1건을 생성한다 (텍스트만, Genalog 미적용).
 
@@ -190,6 +196,7 @@ def generate_clause_document(
                     clause, scenario, ordering_agency=ordering_agency,
                     production_date=production_date,
                     military_secret_grade=military_secret_grade,
+                    generation_guidance=generation_guidance,
                 ),
             },
         ],

@@ -41,8 +41,9 @@ def build_diversity_summary(
     exact_metrics: dict,
     format_metrics: dict,
     review_count: int,
+    classification_metrics: dict | None = None,
 ) -> dict:
-    return {
+    summary = {
         "schema_version": SCHEMA_VERSION,
         "run": run,
         "coverage": {"status": "ok", "metrics": coverage_metrics},
@@ -52,3 +53,9 @@ def build_diversity_summary(
         "agency_fit_proxy": {"status": "not_run", "metrics": {}},
         "review_selection": {"status": "ok", "count": review_count},
     }
+    if classification_metrics is not None:
+        summary["classification_consistency"] = {
+            "status": "ok",
+            "metrics": classification_metrics,
+        }
+    return summary

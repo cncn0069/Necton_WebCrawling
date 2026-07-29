@@ -23,6 +23,8 @@ from rd2.generators.pdf_render import (
     _build_personnel_order_body_flowables,
     _build_signature_line,
     _build_unit_price_body_flowables,
+    _body_context,
+    _document_quality_variant,
     Table,
 )
 from rd2.generators.template_matrix import infer_subclause_key
@@ -109,6 +111,48 @@ class TestAdministrativeStatusDefinitions:
             variant = find_status_variant(status.value)
             assert variant is not None
             assert variant.status is status
+
+
+class TestDocumentQualityVariants:
+    def test_draft_does_not_insert_explanatory_ending(self):
+        row = {
+            "row_id": "draft-partial",
+            "body_text": "첫 번째 문단\n두 번째 문단",
+            "document_quality_variant": "partial_fields",
+        }
+        context = _body_context(row, "standard", AdminStatus.DRAFT)
+
+        assert context["ending"] == ""
+        assert context["production_date"] == ""
+        assert "[이하 작성 중]" not in " ".join(context["paragraphs"])
+
+    def test_near_complete_draft_can_still_have_normal_ending(self):
+        row = {
+            "row_id": "draft-near-complete",
+            "body_text": "첫 번째 문단",
+            "document_quality_variant": "near_complete",
+        }
+        context = _body_context(row, "standard", AdminStatus.DRAFT)
+
+        assert context["ending"] == "끝."
+
+    def test_quality_variant_is_reproducible_and_not_tied_to_status(self):
+        row = {"row_id": "same-row"}
+        first = _document_quality_variant(row, None, 20)
+        second = _document_quality_variant(row, None, 20)
+
+        assert first == second == "ending_omitted"
+
+    def test_interrupted_variant_drops_later_paragraphs(self):
+        row = {
+            "row_id": "interrupted",
+            "body_text": "첫 문단\n둘째 문단\n셋째 문단\n넷째 문단",
+            "document_quality_variant": "interrupted",
+        }
+        context = _body_context(row, "standard", AdminStatus.DRAFT)
+
+        assert context["paragraphs"] == ["첫 문단", "둘째 문단"]
+        assert context["ending"] == ""
 
 
 class TestSignatureLine:

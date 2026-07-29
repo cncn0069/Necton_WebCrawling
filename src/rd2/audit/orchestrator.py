@@ -21,14 +21,21 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from rd2.audit.content_normalize import normalized_content_hash
 from rd2.audit.coverage_actual import COVERAGE_ACTUAL_FIELDNAMES, CoverageActualAccumulator
 from rd2.audit.diversity_summary import build_diversity_summary, summarize_coverage, summarize_exact_duplicates
 from rd2.audit.duplicates import DIVERSITY_PAIRS_FIELDNAMES, DUPLICATE_GROUPS_FIELDNAMES, ExactDuplicateAccumulator
 from rd2.audit.format_concentration import FormatConcentrationAccumulator
-from rd2.audit.review_sampler import REVIEW_SAMPLES_FIELDNAMES, RowSummary, select_review_samples
+from rd2.audit.review_sampler import (
+    CONTENT_SAMPLES_FIELDNAMES,
+    REVIEW_SAMPLES_FIELDNAMES,
+    RowSummary,
+    pdf_status,
+    select_content_samples,
+    select_review_samples,
+)
 from rd2.audit.row_contract import AuditContractError, RowError, parse_row, validate_header
 from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.extraction.storage import compute_source_sha256
@@ -65,6 +72,52 @@ def determine_run_status(*, row_errors: list[RowError], coverage_actual_rows: li
     return "complete"
 
 
+def _materialize_content_samples(
+    *,
+    input_csv: Path,
+    selections: list,
+    pdf_dir: Path | None,
+) -> list[dict]:
+    """선정된 소수 행만 두 번째 CSV pass에서 생성 내용과 함께 물질화한다."""
+    selected_ids = {selection.row_id for selection in selections if selection.row_id}
+    raw_by_row_id: dict[str, dict[str, str]] = {}
+    if selected_ids:
+        with Path(input_csv).open("r", encoding="utf-8", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                row_id = raw.get("row_id") or ""
+                if row_id in selected_ids:
+                    raw_by_row_id[row_id] = raw
+
+    rows: list[dict] = []
+    for selection in selections:
+        raw = raw_by_row_id.get(selection.row_id, {})
+        path, resolved_pdf_status = (
+            pdf_status(selection.row_id, pdf_dir)
+            if selection.row_id
+            else ("", "pdf_unavailable")
+        )
+        rows.append(
+            {
+                "sample_rank": selection.sample_rank,
+                "sample_axis": selection.sample_axis,
+                "sample_value": selection.sample_value,
+                "sample_status": selection.sample_status,
+                "row_id": selection.row_id,
+                "cso_classification": raw.get("cso_classification", ""),
+                "clause_no": raw.get("clause_no", ""),
+                "cso_subclause_key": raw.get("cso_subclause_key", ""),
+                "doc_type": raw.get("doc_type", ""),
+                "document_status": raw.get("document_status", ""),
+                "title": raw.get("title", ""),
+                "body_text": raw.get("body_text", ""),
+                "coverage_cell_key": raw.get("coverage_cell_key", ""),
+                "pdf_path": path,
+                "pdf_status": resolved_pdf_status,
+            }
+        )
+    return rows
+
+
 def run_audit(
     *,
     plan: "GenerationPlan",
@@ -72,8 +125,23 @@ def run_audit(
     pdf_dir: Path | None,
     sample_count: int,
     output_dir: Path,
+    forced_review_reasons: Mapping[str, str] | None = None,
+    classification_metrics: Mapping[str, Any] | None = None,
+    audit_context_sha256: str | None = None,
+    classification_expectations: Mapping[
+        str,
+        tuple[str, str, str],
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     input_csv = Path(input_csv)
+    if audit_context_sha256 is not None and (
+        len(audit_context_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in audit_context_sha256)
+    ):
+        raise AuditContractError(
+            "audit_context_sha256는 lowercase SHA-256 hex여야 합니다"
+        )
     plan_cell_keys = frozenset(cell.coverage_cell_key for cell in plan.cells)
 
     coverage_acc = CoverageActualAccumulator()
@@ -84,6 +152,7 @@ def run_audit(
     seen_row_ids: set[str] = set()
     seen_slots: set[str] = set()
     total_ok = 0
+    expected_labels = dict(classification_expectations or {})
 
     with input_csv.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -100,6 +169,23 @@ def run_audit(
             seen_row_ids.add(row.row_id)
 
             if row.is_ok:
+                if expected_labels:
+                    expected = expected_labels.get(row.row_id)
+                    if expected is None:
+                        raise AuditContractError(
+                            "audit input row is missing from classification sidecar: "
+                            f"{row.row_id!r}"
+                        )
+                    actual = (
+                        row.classification,
+                        row.clause_no,
+                        row.subclause_key,
+                    )
+                    if actual != expected:
+                        raise AuditContractError(
+                            "audit target label does not match classification sidecar "
+                            f"generation target: row_id={row.row_id!r}"
+                        )
                 if row.coverage_slot:
                     slot_key = f"{row.coverage_cell_key}|{row.coverage_slot}"
                     if slot_key in seen_slots:
@@ -129,16 +215,34 @@ def run_audit(
                         row.title, row.body_text, ordering_agency=row.ordering_agency
                     ),
                     structure_fingerprint=format_acc.fingerprint_of(row),
+                    clause_no=row.clause_no,
+                    document_status=row.document_status,
                 )
 
     coverage_actual_rows = coverage_acc.finalize(plan)
+    if expected_labels and set(row_summaries) != set(expected_labels):
+        missing = sorted(set(expected_labels) - set(row_summaries))
+        raise AuditContractError(
+            "classification sidecar rows do not match valid audit input rows: "
+            f"missing={missing}"
+        )
+    forced_reasons = dict(forced_review_reasons or {})
+    unknown_forced_rows = sorted(set(forced_reasons) - set(row_summaries))
+    if unknown_forced_rows:
+        raise AuditContractError(
+            "classification sidecar가 audit input에 없는 row_id를 참조합니다: "
+            f"{unknown_forced_rows}"
+        )
     input_csv_sha256 = compute_source_sha256(input_csv)
+    audit_identity = {
+        "plan_run_id": plan.run_id,
+        "input_csv_sha256": input_csv_sha256,
+        "sample_count": sample_count,
+    }
+    if audit_context_sha256 is not None:
+        audit_identity["audit_context_sha256"] = audit_context_sha256
     audit_run_id = "sha256:" + canonical_sha256(
-        {
-            "plan_run_id": plan.run_id,
-            "input_csv_sha256": input_csv_sha256,
-            "sample_count": sample_count,
-        },
+        audit_identity,
         normalization_version=NORMALIZATION_VERSION,
     )
 
@@ -152,29 +256,44 @@ def run_audit(
         coverage_actual_rows=coverage_actual_rows,
         format_result=format_result,
         pdf_dir=pdf_dir,
+        forced_review_reasons=forced_reasons,
+    )
+    content_sample_selections = select_content_samples(row_summaries)
+    content_samples = _materialize_content_samples(
+        input_csv=input_csv,
+        selections=content_sample_selections,
+        pdf_dir=pdf_dir,
     )
 
     status = determine_run_status(
         row_errors=row_errors, coverage_actual_rows=coverage_actual_rows, total_ok=total_ok
     )
 
+    run_info = {
+        "schema_version": 1,
+        "audit_run_id": audit_run_id,
+        "plan_run_id": plan.run_id,
+        "input_csv_sha256": input_csv_sha256,
+        "status": status,
+        "row_count_ok": total_ok,
+        "row_error_count": len(row_errors),
+        "sample_count_requested": sample_count,
+    }
+    if audit_context_sha256 is not None:
+        run_info["audit_context_sha256"] = audit_context_sha256
     summary = build_diversity_summary(
-        run={
-            "schema_version": 1,
-            "audit_run_id": audit_run_id,
-            "plan_run_id": plan.run_id,
-            "input_csv_sha256": input_csv_sha256,
-            "status": status,
-            "row_count_ok": total_ok,
-            "row_error_count": len(row_errors),
-            "sample_count_requested": sample_count,
-        },
+        run=run_info,
         coverage_metrics=summarize_coverage(
             coverage_actual_rows, max_seed_source_share=coverage_acc.max_seed_source_share()
         ),
         exact_metrics=summarize_exact_duplicates(duplicate_groups),
         format_metrics=format_result,
         review_count=len(review_samples),
+        classification_metrics=(
+            dict(classification_metrics)
+            if classification_metrics is not None
+            else None
+        ),
     )
 
     _publish_audit_artifacts(
@@ -185,6 +304,7 @@ def run_audit(
         duplicate_groups=duplicate_groups,
         diversity_pairs=diversity_pairs,
         review_samples=review_samples,
+        content_samples=content_samples,
         row_errors=row_errors,
     )
 
@@ -213,6 +333,7 @@ def _publish_audit_artifacts(
     duplicate_groups: list[dict],
     diversity_pairs: list[dict],
     review_samples: list,
+    content_samples: list[dict],
     row_errors: list[RowError],
 ) -> dict:
     audit_manifest_path = output_dir / "_audit_manifest.json"
@@ -248,6 +369,7 @@ def _publish_audit_artifacts(
         ("duplicate_groups.csv", DUPLICATE_GROUPS_FIELDNAMES, duplicate_groups),
         ("diversity_pairs.csv", DIVERSITY_PAIRS_FIELDNAMES, diversity_pairs),
         ("review_samples.csv", REVIEW_SAMPLES_FIELDNAMES, review_sample_dicts),
+        ("content_samples.csv", CONTENT_SAMPLES_FIELDNAMES, content_samples),
         ("row_errors.csv", ROW_ERRORS_FIELDNAMES, row_error_dicts),
     ]
 

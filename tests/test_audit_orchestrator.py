@@ -85,7 +85,23 @@ class TestRunAuditEndToEnd:
         assert (output_dir / "duplicate_groups.csv").exists()
         assert (output_dir / "diversity_pairs.csv").exists()
         assert (output_dir / "review_samples.csv").exists()
+        assert (output_dir / "content_samples.csv").exists()
         assert (output_dir / "row_errors.csv").exists()
+
+        with (output_dir / "content_samples.csv").open(
+            "r", encoding="utf-8", newline=""
+        ) as handle:
+            content_samples = list(csv.DictReader(handle))
+        assert len(content_samples) == 20
+        clause_sample = next(
+            row
+            for row in content_samples
+            if row["sample_axis"] == "clause"
+            and row["sample_value"] == cell.clause_no
+        )
+        assert clause_sample["sample_status"] == "ok"
+        assert clause_sample["title"]
+        assert clause_sample["body_text"]
         assert (output_dir / "diversity_summary.json").exists()
         assert (output_dir / "_audit_manifest.json").exists()
         assert not list(output_dir.glob(".*.tmp"))
