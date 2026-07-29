@@ -35,14 +35,19 @@ sys.path.insert(0, str(ROOT / "src"))
 import pymysql  # noqa: E402
 from openai import OpenAI  # noqa: E402
 
-from rd2.administrative_status import AdminStatus  # noqa: E402
+from rd2.administrative_status import (  # noqa: E402
+    ADMIN_STATUS_TEXT_POLICIES,
+    AdminStatus,
+)
 from rd2.source_generation.classification_taxonomy import (  # noqa: E402
     SUBCLAUSES_BY_CLAUSE,
     ClauseNumber,
+    SUBCLAUSE_LABELS,
     SemanticDocumentType,
     expected_classification,
 )
 from rd2.source_generation.contracts import (  # noqa: E402
+    GeneratedDocumentIR,
     GenerationMode,
     GenerationTarget,
     SourceDocumentSnapshot,
@@ -51,6 +56,10 @@ from rd2.source_generation.contracts import (  # noqa: E402
 from rd2.source_generation.document_select import (  # noqa: E402
     SelectionConfig,
     prepare_document_selection,
+)
+from rd2.source_generation.legacy_synthetic import (  # noqa: E402
+    FullySyntheticContext,
+    FullySyntheticDocumentGenerator,
 )
 from rd2.source_generation.pipeline import (  # noqa: E402
     OpenAIResponsesGateway,
@@ -61,6 +70,65 @@ from rd2.source_generation.pipeline import (  # noqa: E402
 from rd2.source_generation.prompts import build_prompt_bundle  # noqa: E402
 
 BLOCKS_PER_PAGE = 12
+
+
+class BatchSyntheticGenerator(FullySyntheticDocumentGenerator):
+    """P1이 ``fully_synthetic``을 고를 때 원문 없이 본문을 만드는 실행기.
+
+    이 경로가 없으면 P1이 route를 골라도 파이프라인이 진행되지 않는다. 실제
+    원문 50건 실측에서 P1은 절반 이상을 ``fully_synthetic``으로 보냈다 —
+    공개 원문에 counterfactual C/S 목표를 지지하는 근거가 없을 때 억지로
+    맞추지 않고 물러서는 것이 설계된 동작이기 때문이다.
+
+    입력은 최종 target과 시나리오 컨텍스트뿐이다. 원문 block·인용·근거는
+    전달하지 않는다.
+    """
+
+    def __init__(self, gateway, model: str) -> None:
+        self._gateway = gateway
+        self._model = model
+
+    def generate(
+        self,
+        *,
+        target: GenerationTarget,
+        context: FullySyntheticContext,
+    ) -> GeneratedDocumentIR:
+        payload = {
+            "instruction": (
+                "원문을 사용하지 않는 완전 합성 대한민국 공공문서를 작성하라. "
+                "상태명이나 정답용 고정 문구를 억지로 쓰지 말고 상황과 문맥으로 "
+                "드러내라. 허용된 5개 block 종류만 사용하라."
+            ),
+            "classification": target.classification.value,
+            "clause_no": target.clause_no.value if target.clause_no else "",
+            "subclause_key": (
+                target.subclause_key.value if target.subclause_key else ""
+            ),
+            "subclause_label": (
+                SUBCLAUSE_LABELS[target.subclause_key] if target.subclause_key else ""
+            ),
+            "administrative_status_context": [
+                ADMIN_STATUS_TEXT_POLICIES[status].detail
+                for status in target.administrative_statuses
+            ],
+            "scenario_id": context.scenario_id,
+            "ordering_agency": context.ordering_agency,
+            "production_date": context.production_date,
+        }
+        call = self._gateway.parse(
+            model=self._model,
+            system_prompt=(
+                "당신은 학습용 합성 공공문서 생성기다. 실존 개인정보·기밀을 쓰지 "
+                "않고 입력 목표에 맞는 GeneratedDocumentIR만 반환한다."
+            ),
+            user_prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+            response_model=GeneratedDocumentIR,
+            max_output_tokens=8_000,
+        )
+        if not isinstance(call.parsed, GeneratedDocumentIR):
+            raise ValueError("synthetic batch generator returned wrong contract")
+        return call.parsed
 
 
 def _connect() -> pymysql.connections.Connection:
@@ -250,6 +318,7 @@ def main() -> int:
         grader_model=args.grader_model,
         reference_date=date.today(),
     )
+    synthetic_generator = BatchSyntheticGenerator(gateway, args.generator_model)
     selection_config = SelectionConfig()
     prompt_bundle = build_prompt_bundle(selection_config)
     targets = _target_cycle()
@@ -281,6 +350,12 @@ def main() -> int:
                 config=config,
                 selection_config=selection_config,
                 prompt_bundle=prompt_bundle,
+                fully_synthetic_generator=synthetic_generator,
+                fully_synthetic_context=FullySyntheticContext(
+                    scenario_id=f"batch-{document_id}",
+                    ordering_agency="가상행정기관",
+                    production_date=date.today().isoformat(),
+                ),
             )
             record = _record(row, target, result, snapshot)
             records.append(record)
