@@ -174,8 +174,42 @@ class TableBlock(_ContractModel):
         return self
 
 
+class AttachmentReferenceBlock(_ContractModel):
+    kind: Literal["attachment_reference"]
+    block_id: str
+    attachment_id: str
+    label: str
+    description: str | None = None
+
+    @field_validator("block_id", "attachment_id", "label")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info: Any) -> str:
+        return _non_empty(value, info.field_name)
+
+    @field_validator("description")
+    @classmethod
+    def _validate_description(cls, value: str | None) -> str | None:
+        return None if value is None else _non_empty(value, "description")
+
+    def render_text(self) -> str:
+        rendered = f"[첨부] {self.label} ({self.attachment_id})"
+        if self.description:
+            rendered = f"{rendered}: {self.description}"
+        return rendered
+
+    def display_text(self) -> str:
+        rendered = f"{self.label} ({self.attachment_id})"
+        if self.description:
+            rendered = f"{rendered}: {self.description}"
+        return rendered
+
+
 GeneratedBlock = Annotated[
-    ParagraphBlock | KeyValueBlock | BulletListBlock | TableBlock,
+    ParagraphBlock
+    | KeyValueBlock
+    | BulletListBlock
+    | TableBlock
+    | AttachmentReferenceBlock,
     Field(discriminator="kind"),
 ]
 
@@ -370,10 +404,14 @@ def blocks_to_body_text(blocks: list[GeneratedBlock]) -> str:
             )
         elif isinstance(block, BulletListBlock):
             chunks.append("\n".join(f"- {item}" for item in block.items))
-        else:
+        elif isinstance(block, TableBlock):
             rows = ["\t".join(block.columns)]
             rows.extend("\t".join(row) for row in block.rows)
             chunks.append("\n".join(rows))
+        elif isinstance(block, AttachmentReferenceBlock):
+            chunks.append(block.render_text())
+        else:
+            raise TypeError(f"Unsupported generated block: {type(block)!r}")
     return "\n\n".join(chunks)
 
 
@@ -445,10 +483,16 @@ def source_text_atoms(document: GeneratedDocumentContract) -> tuple[str, ...]:
                 atoms.extend((entry.key, entry.value))
         elif isinstance(block, BulletListBlock):
             atoms.extend(block.items)
-        else:
+        elif isinstance(block, TableBlock):
             atoms.extend(block.columns)
             for row in block.rows:
                 atoms.extend(row)
+        elif isinstance(block, AttachmentReferenceBlock):
+            atoms.extend((block.attachment_id, block.label))
+            if block.description:
+                atoms.append(block.description)
+        else:
+            raise TypeError(f"Unsupported generated block: {type(block)!r}")
     metadata = document.document_metadata
     if metadata and metadata.approval_line:
         for slot in metadata.approval_line.slots:
@@ -512,6 +556,7 @@ def build_template_context(
     sections: list[dict[str, Any]] = []
     details: list[dict[str, str]] = []
     tables: list[TableBlock] = []
+    attachments: list[str] = []
     long_sections: list[dict[str, Any]] = []
     checklist_items: list[dict[str, str]] = []
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
@@ -547,7 +592,7 @@ def build_template_context(
                 }
                 for item in block.items
             )
-        else:
+        elif isinstance(block, TableBlock):
             tables.append(block)
             checklist_items.append(
                 {
@@ -566,6 +611,10 @@ def build_template_context(
                 }
                 for row in block.rows
             )
+        elif isinstance(block, AttachmentReferenceBlock):
+            attachments.append(block.display_text())
+        else:
+            raise TypeError(f"Unsupported generated block: {type(block)!r}")
 
     primary_table = {"headers": [], "rows": []}
     if tables:
@@ -696,7 +745,7 @@ def build_template_context(
         "long_sections": long_sections,
         "details": details,
         "table": primary_table,
-        "attachments": [],
+        "attachments": attachments,
         "checklist_items": checklist_items,
         "issuer_title": "",
         "copy_recipients": "",

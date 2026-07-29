@@ -1,12 +1,15 @@
 from pathlib import Path
+from typing import Annotated, get_args, get_origin
 
 import fitz
 import pytest
 from pydantic import ValidationError
 
 from rd2.generators.generated_document_pipeline import (
+    AttachmentReferenceBlock,
     FailedGenerationPayloadError,
     GeneratedDocumentContentMismatch,
+    GeneratedBlock,
     ParagraphBlock,
     blocks_to_body_text,
     build_template_context,
@@ -14,6 +17,7 @@ from rd2.generators.generated_document_pipeline import (
     render_generation_payload,
     source_text_atoms,
 )
+from rd2.source_generation.contracts import DocumentBlock
 
 
 def _payload() -> dict:
@@ -153,6 +157,39 @@ def _add_document_metadata(payload: dict) -> dict:
     return payload
 
 
+def _add_attachment_reference(payload: dict) -> dict:
+    document = payload["result"]["generated_document"]
+    document["blocks"].append(
+        {
+            "kind": "attachment_reference",
+            "block_id": "g6",
+            "attachment_id": "att-fire-report",
+            "label": "화재현장 출동보고서 1부",
+            "description": "끝.",
+        }
+    )
+    document["body_text"] += (
+        "\n\n[첨부] 화재현장 출동보고서 1부 (att-fire-report): 끝."
+    )
+    return payload
+
+
+def _block_kinds(block_union: object) -> set[str]:
+    union = (
+        get_args(block_union)[0]
+        if get_origin(block_union) is Annotated
+        else block_union
+    )
+    return {
+        get_args(model.model_fields["kind"].annotation)[0]
+        for model in get_args(union)
+    }
+
+
+def test_renderer_block_kinds_match_generated_document_ir() -> None:
+    assert _block_kinds(GeneratedBlock) == _block_kinds(DocumentBlock)
+
+
 def test_structured_blocks_are_the_source_of_truth_for_template_context() -> None:
     envelope = parse_generation_payload(_payload())
     document = envelope.result.generated_document
@@ -168,6 +205,46 @@ def test_structured_blocks_are_the_source_of_truth_for_template_context() -> Non
     assert context["table"]["headers"] == ["구분", "성명", "역할"]
     assert context["table"]["rows"][1] == ["과제담당관", "성현재", "확인"]
     assert "정책연구 목적과의 부합성" in source_text_atoms(document)
+
+
+def test_attachment_reference_matches_generated_document_ir_contract() -> None:
+    envelope = parse_generation_payload(_add_attachment_reference(_payload()))
+    document = envelope.result.generated_document
+    attachment = document.blocks[-1]
+    context = build_template_context(envelope, seed=100)
+
+    assert isinstance(attachment, AttachmentReferenceBlock)
+    assert attachment.render_text() == (
+        "[첨부] 화재현장 출동보고서 1부 (att-fire-report): 끝."
+    )
+    assert blocks_to_body_text(document.blocks) == document.body_text
+    assert context["attachments"] == [
+        "화재현장 출동보고서 1부 (att-fire-report): 끝."
+    ]
+    assert {"att-fire-report", "화재현장 출동보고서 1부", "끝."} <= set(
+        source_text_atoms(document)
+    )
+
+
+def test_all_templates_render_attachment_reference(tmp_path: Path) -> None:
+    manifest = render_generation_payload(
+        _add_attachment_reference(_payload()),
+        tmp_path,
+        per_template=1,
+        base_seed=20260728,
+    )
+
+    assert len(manifest) == 10
+    assert all(entry["status"] == "ok" for entry in manifest)
+    assert all(entry["source_text_present"] is True for entry in manifest)
+    for entry in manifest:
+        with fitz.open(str(entry["pdf"])) as pdf:
+            rendered_text = "".join(
+                page.get_text() for page in pdf
+            ).replace("\n", "")
+        assert "화재현장 출동보고서 1부" in rendered_text
+        assert "att-fire-report" in rendered_text
+        assert "끝." in rendered_text
 
 
 def test_missing_document_metadata_is_not_synthesized() -> None:

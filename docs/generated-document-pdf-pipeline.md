@@ -57,7 +57,8 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 
 ## 입력 규칙
 
-- 지원 block: `paragraph`, `key_value`, `bullet_list`, `table`
+- 지원 block: `paragraph`, `key_value`, `bullet_list`, `table`,
+  `attachment_reference`
 - `result.contract_version`과
   `result.generated_document.contract_version`은 같은 `1.x.x` 값이어야 한다.
 - `blocks`가 내용의 기준이다.

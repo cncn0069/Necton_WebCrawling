@@ -44,8 +44,8 @@ python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 ### 구조화 생성 문서 렌더링
 
 `result.generated_document`에 `paragraph`, `key_value`, `bullet_list`,
-`table` blocks가 들어 있는 계약 JSON은 공문 템플릿 10종으로 바로 렌더링할 수 있다.
-JSON 배열과 JSONL 배치 입력도 지원한다.
+`table`, `attachment_reference` blocks가 들어 있는 계약 JSON은 공문 템플릿
+10종으로 바로 렌더링할 수 있다. JSON 배열과 JSONL 배치 입력도 지원한다.
 
 단일 파일과 디렉터리 일괄 실행, 입력 규칙, 템플릿 선택 방법은
 [`docs/generated-document-pdf-pipeline.md`](./docs/generated-document-pdf-pipeline.md)에
