@@ -346,13 +346,21 @@ class LegalClassification(ContractModel):
     순서를 바꿔도 JSON 구조는 동일하므로 ``CONTRACT_SCHEMA_VERSION``은 올리지
     않는다. 바뀐 것은 산출물의 shape이 아니라 생성 방식이므로
     ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
+
+    **예외: 근거의 허용 여부를 결정하는 필드는 근거보다 앞에 둔다.**
+    ``classification``은 evidence의 gate다 — C/S는 span을 최소 1개 요구하고
+    O는 clause/subclause를 금지한다. 이 필드를 근거 뒤로 보냈더니 모델이
+    span을 먼저 뱉고 나중에 그 조합을 금지하는 값을 골라 계약 위반으로
+    거절되는 사례가 실측에서 나왔다. gate는 앞에, 세부 판정
+    (``clause_no``/``subclause_key``)은 근거 뒤에 둔다 — 24개 중 하나를 고르는
+    어려운 판단이 바로 근거를 보고 이뤄져야 하는 쪽이다.
     """
 
     document_type: SemanticDocumentType
     other_document_type: NonEmptyText | None = None
+    classification: CsoClassification
     evidence_spans: tuple[EvidenceSpan, ...] = ()
     rationale: NonEmptyText
-    classification: CsoClassification
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
 
@@ -428,12 +436,18 @@ class AssessmentScope(str, Enum):
 
 
 class SourceSuitability(ContractModel):
-    """근거 → 이유 → 판정 순서. ``LegalClassification``의 주석 참고."""
+    """``evidence_level``이 span 허용 여부를 결정하는 gate라 근거보다 앞에 온다.
+
+    ``no_usable_public_source``는 span을 **금지**하고 나머지 level은 span을
+    **요구**한다. level을 뒤에 두면 모델이 span을 먼저 뱉고 나중에
+    ``no_usable_public_source``를 골라 스스로 모순되는 응답을 만든다(실측 확인).
+    나머지 순서는 ``LegalClassification``의 주석 참고.
+    """
 
     assessment_scope: AssessmentScope
+    evidence_level: SourceEvidenceLevel
     evidence_spans: tuple[EvidenceSpan, ...] = ()
     rationale: NonEmptyText
-    evidence_level: SourceEvidenceLevel
     reason_code: NonEmptyText
 
     @model_validator(mode="after")

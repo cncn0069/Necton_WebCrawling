@@ -565,9 +565,9 @@ def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
         return list(model.model_fields).index(field)
 
     for model, verdicts in (
-        (SourceClassification, ("classification", "clause_no", "subclause_key")),
-        (Pass2Assessment, ("classification", "clause_no", "subclause_key")),
-        (SourceSuitability, ("evidence_level", "reason_code")),
+        (SourceClassification, ("clause_no", "subclause_key")),
+        (Pass2Assessment, ("clause_no", "subclause_key")),
+        (SourceSuitability, ("reason_code",)),
         (AdministrativeStatusFinding, ("status",)),
     ):
         evidence_at = index_of(model, "evidence_spans")
@@ -577,6 +577,29 @@ def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
             assert rationale_at < index_of(model, verdict), (
                 f"{model.__name__}.{verdict} must follow evidence and rationale"
             )
+
+
+def test_gating_fields_precede_the_evidence_they_gate():
+    """근거의 허용 여부를 결정하는 필드는 근거보다 앞에 와야 한다.
+
+    gate를 근거 뒤에 두면 모델이 span을 먼저 뱉고 나중에 그 조합을 금지하는
+    값을 골라 스스로 모순되는 응답을 만든다 — 실측에서 20건 중 4건이
+    이 방식으로 계약 위반 거절됐다.
+    """
+
+    def index_of(model: type, field: str) -> int:
+        return list(model.model_fields).index(field)
+
+    for model, gate in (
+        # classification: C/S는 span을 요구하고 O는 clause/subclause를 금지한다.
+        (SourceClassification, "classification"),
+        (Pass2Assessment, "classification"),
+        # evidence_level: no_usable_public_source는 span을 금지한다.
+        (SourceSuitability, "evidence_level"),
+    ):
+        assert index_of(model, gate) < index_of(model, "evidence_spans"), (
+            f"{model.__name__}.{gate} gates evidence and must precede it"
+        )
 
 
 def test_pass1_result_orders_analysis_before_generation():
