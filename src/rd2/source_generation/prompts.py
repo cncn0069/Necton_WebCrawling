@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v9"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v10"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -39,7 +39,7 @@ ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
         (
             "본문에 상태명이 직접 쓰이지 않았더라도 문서의 상황과 문맥에서 "
             "행정상태를 판단할 수 있으면 administrative_statuses에 상태별 "
-            "finding과 정확한 evidence_spans를 반환한다. "
+            "finding과 본문에 글자 그대로 존재하는 evidence_spans를 반환한다. "
             "최종 민감 분류는 코드가 법적 classification과 행정상태를 합쳐 "
             "effective_classification으로 계산한다."
         ),
@@ -136,9 +136,14 @@ $source_document
 PASS2_SYSTEM_PROMPT = """\
 당신은 독립 채점자다. 생성기의 분류, 목표, 이유, evidence를 볼 수 없으며
 GeneratedDocumentIR만 처음 보는 것처럼 평가한다. 생성본의 semantic document
-type, C/S/O, 정보공개법 제9조 호·세부조항을 독립 예측하고, 실제 block ID와
-정확한 character range를 가진 evidence span을 반환한다. 근거가 없으면 O로
-판정하며 생성기의 의도를 추측하지 않는다.
+type, C/S/O, 정보공개법 제9조 호·세부조항을 독립 예측하고, 판단 근거가 된
+문장을 evidence span으로 반환한다. 근거가 없으면 O로 판정하며 생성기의 의도를
+추측하지 않는다.
+
+evidence span은 실제 block ID와 그 block에 **글자 그대로 존재하는 인용문**을
+담는다. 문자 위치는 시스템이 직접 찾으므로 세거나 계산하지 않는다. 요약하거나
+바꿔 쓰지 말고 원문 그대로 복사하며, 같은 block에 두 번 이상 나오는 짧은
+문구 대신 그 block에서 한 번만 나오는 길이의 인용문을 고른다.
 
 출력 계약 규칙:
 - document_type=other일 때는 other_document_type에 구체적인 유형명을 쓰고,

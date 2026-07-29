@@ -81,12 +81,7 @@ def _source_classification() -> SourceClassification:
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.BID_CONTRACT,
         evidence_spans=(
-            EvidenceSpan(
-                block_id="source-block-1",
-                start=text.index(quote),
-                end=text.index(quote) + len(quote),
-                quote=quote,
-            ),
+            EvidenceSpan(block_id="source-block-1", quote=quote),
         ),
         rationale="입찰계약 내부 검토 정보가 포함되어 있다.",
     )
@@ -245,7 +240,7 @@ def test_document_selection_enforces_85_86_boundary():
 
 
 def test_classification_rejects_wrong_clause_subclause_and_o_with_clause():
-    span = EvidenceSpan(block_id="b1", start=0, end=1, quote="x")
+    span = EvidenceSpan(block_id="b1", quote="x")
     with pytest.raises(ValidationError, match="does not map"):
         SourceClassification(
             document_type=SemanticDocumentType.REPORT,
@@ -285,23 +280,20 @@ def test_other_type_requires_free_text_description():
         )
 
 
-def test_source_evidence_span_must_match_exact_snapshot_range():
+def test_source_evidence_quote_must_actually_exist_in_the_snapshot():
+    """모델이 오프셋을 안 내도 '근거가 실재해야 한다'는 속성은 유지된다."""
+
     classification = _source_classification()
     classification.validate_against_snapshot(_source_snapshot())
 
     bad = classification.model_copy(
         update={
             "evidence_spans": (
-                EvidenceSpan(
-                    block_id="source-block-1",
-                    start=0,
-                    end=2,
-                    quote="불일치",
-                ),
+                EvidenceSpan(block_id="source-block-1", quote="불일치"),
             )
         }
     )
-    with pytest.raises(ValueError, match="quote mismatch"):
+    with pytest.raises(ValueError, match="not found"):
         bad.validate_against_snapshot(_source_snapshot())
 
 
@@ -392,12 +384,7 @@ def test_pass1_route_requires_matching_source_evidence_level():
         subclause_key=SubclauseKey.BID_CONTRACT,
         generation_mode=GenerationMode.COUNTERFACTUAL,
     )
-    evidence = EvidenceSpan(
-        block_id="source-block-1",
-        start=0,
-        end=2,
-        quote="입찰",
-    )
+    evidence = EvidenceSpan(block_id="source-block-1", quote="입찰")
 
     with pytest.raises(ValidationError, match="direct_sensitive_span"):
         Pass1Result(
@@ -427,12 +414,7 @@ def test_clause_6_span_seeded_is_disabled_until_deidentification_exists():
                 evidence_level=SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN,
                 assessment_scope=AssessmentScope.FULL_DOCUMENT,
                 evidence_spans=(
-                    EvidenceSpan(
-                        block_id="source-block-1",
-                        start=0,
-                        end=2,
-                        quote="성명",
-                    ),
+                    EvidenceSpan(block_id="source-block-1", quote="성명"),
                 ),
                 reason_code="PII_SPAN",
                 rationale="개인 식별정보로 보이는 span이 있다.",
@@ -458,12 +440,7 @@ def test_pass2_span_is_validated_only_against_generated_ir():
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.DECISION_REVIEW,
         evidence_spans=(
-            EvidenceSpan(
-                block_id="p1",
-                start=block_text.index(quote),
-                end=block_text.index(quote) + len(quote),
-                quote=quote,
-            ),
+            EvidenceSpan(block_id="p1", quote=quote),
         ),
         rationale="내부 검토 중인 평가 기준이 핵심 근거다.",
     )
@@ -472,7 +449,7 @@ def test_pass2_span_is_validated_only_against_generated_ir():
     bad = assessment.model_copy(
         update={
             "evidence_spans": (
-                EvidenceSpan(block_id="missing", start=0, end=1, quote="x"),
+                EvidenceSpan(block_id="missing", quote="x"),
             )
         }
     )

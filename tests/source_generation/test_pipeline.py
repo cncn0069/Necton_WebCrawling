@@ -100,12 +100,7 @@ def _pass1(*, source_o: bool = False, source_block_id: str = "p1:b0") -> Pass1Re
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.BID_CONTRACT,
             evidence_spans=(
-                EvidenceSpan(
-                    block_id=source_block_id,
-                    start=snapshot_text.index(quote),
-                    end=snapshot_text.index(quote) + len(quote),
-                    quote=quote,
-                ),
+                EvidenceSpan(block_id=source_block_id, quote=quote),
             ),
             rationale="입찰 평가 기준이 내부 검토 중이다.",
         )
@@ -147,12 +142,7 @@ def _o_route_pass1(
 ) -> Pass1Result:
     text = _snapshot().block_text("p1:b0")
     quote = "평가 기준"
-    evidence = EvidenceSpan(
-        block_id="p1:b0",
-        start=text.index(quote),
-        end=text.index(quote) + len(quote),
-        quote=quote,
-    )
+    evidence = EvidenceSpan(block_id="p1:b0", quote=quote)
     level_by_route = {
         GenerationRoute.SPAN_SEEDED: SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN,
         GenerationRoute.ANCHORED: SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
@@ -197,12 +187,7 @@ def _pass2(
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=subclause,
         evidence_spans=(
-            EvidenceSpan(
-                block_id=block_id,
-                start=text.index(quote),
-                end=text.index(quote) + len(quote),
-                quote=quote,
-            ),
+            EvidenceSpan(block_id=block_id, quote=quote),
         ),
         rationale="생성본에 내부 평가 기준이 있다.",
     )
@@ -624,12 +609,7 @@ def _admin_only_pass1(
             evidence_level=SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
             assessment_scope=AssessmentScope.FULL_DOCUMENT,
             evidence_spans=(
-                EvidenceSpan(
-                    block_id="p1:b0",
-                    start=source_text.index(quote),
-                    end=source_text.index(quote) + len(quote),
-                    quote=quote,
-                ),
+                EvidenceSpan(block_id="p1:b0", quote=quote),
             ),
             reason_code="ADMIN_CONTEXT",
             rationale="문서 유형과 업무 맥락만 생성에 사용한다.",
@@ -664,12 +644,7 @@ def _admin_only_pass2(
             AdministrativeStatusFinding(
                 status=status,
                 evidence_spans=(
-                    EvidenceSpan(
-                        block_id="generated-admin",
-                        start=offset,
-                        end=offset + len(phrase),
-                        quote=phrase,
-                    ),
+                    EvidenceSpan(block_id="generated-admin", quote=phrase),
                 ),
                 rationale="기안 후 검토를 거쳐 최종 승인할 예정이므로 결재가 완료되지 않았다.",
             ),

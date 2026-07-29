@@ -124,7 +124,7 @@ def _assessment(
         # "예정가격 산정 근거를 검토한다"의 0:4 — 실제 원문과 정확히 일치해야
         # validate_against_document를 통과한다.
         spans = (
-            EvidenceSpan(block_id="p1:b0", start=0, end=4, quote="예정가격"),
+            EvidenceSpan(block_id="p1:b0", quote="예정가격"),
         )
     return Pass2Assessment(
         document_type=document_type,
@@ -261,7 +261,7 @@ def test_classify_case_records_evidence_failures_instead_of_raising():
     bad = Pass2Assessment(
         document_type=SemanticDocumentType.OFFICIAL_DOCUMENT,
         evidence_spans=(
-            EvidenceSpan(block_id="p1:b0", start=0, end=6, quote="없는인용구"),
+            EvidenceSpan(block_id="p1:b0", quote="없는인용구"),
         ),
         rationale="근거",
         classification=CsoClassification.S,

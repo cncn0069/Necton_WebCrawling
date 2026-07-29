@@ -1,4 +1,4 @@
-"""LLM evidence quote를 canonical character span으로 정규화한다."""
+"""LLM evidence quote가 실제 block text에 유일하게 대응하는지 검증한다."""
 
 from __future__ import annotations
 
@@ -11,17 +11,23 @@ class EvidenceResolutionError(ValueError):
     """Evidence quote가 실제 block text에 유일하게 대응하지 않을 때 발생한다."""
 
 
-def canonicalize_evidence_spans(
+def validate_evidence_quotes(
     spans: Iterable[EvidenceSpan],
     block_text: Callable[[str], str],
 ) -> tuple[EvidenceSpan, ...]:
-    """모델의 start/end를 신뢰하지 않고 block text에서 정확한 좌표를 계산한다.
+    """각 quote가 해당 block에 정확히 한 번 나타나는지 확인한다.
 
-    동일 quote가 같은 block에 두 번 이상 있으면 임의의 occurrence를 고르지 않는다.
-    모델은 더 긴 고유 quote를 반환해야 한다.
+    모델은 인용문만 반환하고 위치는 코드가 찾는다(``EvidenceSpan`` 참고).
+    따라서 여기서 걸러야 하는 것은 오프셋 오류가 아니라 다음 두 가지다.
+
+    - 입력에 없는 문장을 지어낸 경우
+    - 같은 block에 두 번 이상 나오는 문장이라 어느 쪽인지 모르는 경우
+
+    같은 (block, quote) 쌍을 중복 반환하는 것도 거부한다 — 근거 개수를
+    부풀려 신뢰도가 높아 보이게 만들 수 있다.
     """
 
-    canonical: list[EvidenceSpan] = []
+    validated: list[EvidenceSpan] = []
     seen: set[tuple[str, str]] = set()
     for span in spans:
         key = (span.block_id, span.quote)
@@ -30,24 +36,9 @@ def canonicalize_evidence_spans(
                 f"duplicate evidence quote for block {span.block_id!r}"
             )
         seen.add(key)
-
-        text = block_text(span.block_id)
-        start = text.find(span.quote)
-        if start < 0:
-            raise EvidenceResolutionError(
-                f"evidence quote not found in block {span.block_id!r}"
-            )
-        if text.find(span.quote, start + 1) >= 0:
-            raise EvidenceResolutionError(
-                f"evidence quote is ambiguous in block {span.block_id!r}; "
-                "return a longer unique quote"
-            )
-        canonical.append(
-            EvidenceSpan(
-                block_id=span.block_id,
-                start=start,
-                end=start + len(span.quote),
-                quote=span.quote,
-            )
-        )
-    return tuple(canonical)
+        try:
+            span.locate_in(block_text(span.block_id))
+        except ValueError as exc:
+            raise EvidenceResolutionError(str(exc)) from exc
+        validated.append(span)
+    return tuple(validated)

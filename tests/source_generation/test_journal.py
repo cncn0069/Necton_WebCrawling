@@ -97,12 +97,7 @@ def _target() -> GenerationTarget:
 def _pass1() -> Pass1Result:
     text = _snapshot().block_text("p1:b0")
     quote = "평가 기준"
-    evidence = EvidenceSpan(
-        block_id="p1:b0",
-        start=text.index(quote),
-        end=text.index(quote) + len(quote),
-        quote=quote,
-    )
+    evidence = EvidenceSpan(block_id="p1:b0", quote=quote)
     return Pass1Result(
         source_classification=SourceClassification(
             document_type=SemanticDocumentType.BID_NOTICE,
@@ -147,12 +142,7 @@ def _pass2() -> Pass2Assessment:
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.BID_CONTRACT,
         evidence_spans=(
-            EvidenceSpan(
-                block_id="generated-p1",
-                start=text.index(quote),
-                end=text.index(quote) + len(quote),
-                quote=quote,
-            ),
+            EvidenceSpan(block_id="generated-p1", quote=quote),
         ),
         rationale="생성본에 입찰 평가 기준이 있다.",
     )

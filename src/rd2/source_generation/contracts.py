@@ -51,16 +51,43 @@ class ContractModel(BaseModel):
 
 
 class EvidenceSpan(ContractModel):
+    """모델이 **무엇을** 인용했는지만 담는다. **어디인지**는 코드가 찾는다.
+
+    이전 계약은 ``start``/``end`` 문자 오프셋을 모델에게 요구했다. 실측 결과
+    모델은 인용문 자체는 정확히 고르면서 오프셋은 거의 항상 틀렸다 — 3글자
+    ``"요약문"``에 ``end=9``(UTF-8 바이트 수)를 반환하는 식이다. LLM은 글자를
+    셀 수 없고 한글 멀티바이트에서 특히 그렇다.
+
+    오프셋은 어차피 코드가 ``locate_in``으로 다시 계산했고 그 값을 읽는
+    downstream도 없었다. 그래서 모델에게 묻지 않는다 — 못 하는 일을 시켜
+    출력 토큰을 쓰고 틀릴 기회만 주는 계약이었다.
+
+    근거가 실재해야 한다는 보안 속성은 그대로다. 인용문이 block에 없으면
+    여전히 실패한다.
+    """
+
     block_id: NonEmptyText
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
     quote: NonEmptyText
 
-    @model_validator(mode="after")
-    def _end_must_follow_start(self) -> "EvidenceSpan":
-        if self.end <= self.start:
-            raise ValueError("evidence span end must be greater than start")
-        return self
+    def locate_in(self, text: str) -> int:
+        """block text에서 인용문의 시작 위치를 찾는다.
+
+        같은 인용문이 두 번 이상 나오면 임의의 occurrence를 고르지 않고
+        실패시킨다 — 어느 쪽을 가리키는지 모르는 근거는 근거가 아니다.
+        모델은 더 긴 고유 인용문을 반환해야 한다.
+        """
+
+        start = text.find(self.quote)
+        if start < 0:
+            raise ValueError(
+                f"evidence quote not found in block {self.block_id!r}"
+            )
+        if text.find(self.quote, start + 1) >= 0:
+            raise ValueError(
+                f"evidence quote is ambiguous in block {self.block_id!r}; "
+                "return a longer unique quote"
+            )
+        return start
 
 
 class ParagraphBlock(ContractModel):
@@ -362,17 +389,7 @@ class LegalClassification(ContractModel):
         """``block_text(block_id) -> str`` resolver에 span을 대조한다."""
 
         for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
-                raise ValueError(
-                    f"evidence span for block {span.block_id!r} ends outside the block"
-                )
-            actual = text[span.start : span.end]
-            if actual != span.quote:
-                raise ValueError(
-                    f"evidence quote mismatch for block {span.block_id!r} "
-                    f"at range {span.start}:{span.end}"
-                )
+            span.locate_in(block_text(span.block_id))
 
 
 class SourceClassification(LegalClassification):
@@ -432,16 +449,7 @@ class SourceSuitability(ContractModel):
 
     def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
         for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
-                raise ValueError(
-                    f"suitability span for block {span.block_id!r} ends outside the block"
-                )
-            if text[span.start : span.end] != span.quote:
-                raise ValueError(
-                    f"suitability quote mismatch for block {span.block_id!r} "
-                    f"at range {span.start}:{span.end}"
-                )
+            span.locate_in(block_text(span.block_id))
 
 
 class GenerationTarget(ContractModel):
@@ -620,17 +628,7 @@ class AdministrativeStatusFinding(ContractModel):
 
     def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
         for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
-                raise ValueError(
-                    f"administrative status span for block {span.block_id!r} "
-                    "ends outside the block"
-                )
-            if text[span.start : span.end] != span.quote:
-                raise ValueError(
-                    f"administrative status quote mismatch for block "
-                    f"{span.block_id!r} at range {span.start}:{span.end}"
-                )
+            span.locate_in(block_text(span.block_id))
 
 
 class Pass2Assessment(LegalClassification):

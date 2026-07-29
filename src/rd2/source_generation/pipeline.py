@@ -50,7 +50,7 @@ from rd2.source_generation.document_select import (
     SelectionConfig,
     render_selected_source,
 )
-from rd2.source_generation.evidence import canonicalize_evidence_spans
+from rd2.source_generation.evidence import validate_evidence_quotes
 from rd2.source_generation.legacy_synthetic import (
     FullySyntheticContext,
     FullySyntheticDocumentGenerator,
@@ -393,7 +393,7 @@ def _canonicalize_pass1_evidence(
 ) -> Pass1Result:
     source_classification = result.source_classification.model_copy(
         update={
-            "evidence_spans": canonicalize_evidence_spans(
+            "evidence_spans": validate_evidence_quotes(
                 result.source_classification.evidence_spans,
                 block_text,
             )
@@ -401,7 +401,7 @@ def _canonicalize_pass1_evidence(
     )
     source_suitability = result.source_suitability.model_copy(
         update={
-            "evidence_spans": canonicalize_evidence_spans(
+            "evidence_spans": validate_evidence_quotes(
                 result.source_suitability.evidence_spans,
                 block_text,
             )
@@ -428,7 +428,7 @@ def _canonicalize_pass2_evidence(
     administrative_statuses = tuple(
         finding.model_copy(
             update={
-                "evidence_spans": canonicalize_evidence_spans(
+                "evidence_spans": validate_evidence_quotes(
                     finding.evidence_spans,
                     block_text,
                 )
@@ -443,7 +443,7 @@ def _canonicalize_pass2_evidence(
                 exclude={"evidence_spans", "administrative_statuses"},
                 exclude_computed_fields=True,
             ),
-            "evidence_spans": canonicalize_evidence_spans(
+            "evidence_spans": validate_evidence_quotes(
                 assessment.evidence_spans,
                 block_text,
             ),

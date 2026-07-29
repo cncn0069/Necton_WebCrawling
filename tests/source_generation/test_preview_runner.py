@@ -38,12 +38,7 @@ from scripts.generate_source_generation_previews import (
 
 
 def test_load_p1_accepts_legacy_cache_with_computed_body_text(tmp_path):
-    evidence = EvidenceSpan(
-        block_id="p1:b0",
-        start=0,
-        end=2,
-        quote="공개",
-    )
+    evidence = EvidenceSpan(block_id="p1:b0", quote="공개")
     target = GenerationTarget(
         classification=TargetClassification.C,
         clause_no=ClauseNumber.CLAUSE_1,

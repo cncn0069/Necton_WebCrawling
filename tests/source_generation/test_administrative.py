@@ -97,12 +97,7 @@ def test_pass2_legal_o_plus_admin_status_computes_effective_s():
             AdministrativeStatusFinding(
                 status=AdminStatus.APPROVAL_PENDING,
                 evidence_spans=(
-                    EvidenceSpan(
-                        block_id="g1",
-                        start=5,
-                        end=5 + len(phrase),
-                        quote=phrase,
-                    ),
+                    EvidenceSpan(block_id="g1", quote=phrase),
                 ),
                 rationale="결재가 완료되지 않은 상태가 본문에 명시됐다.",
             ),

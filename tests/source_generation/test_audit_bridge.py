@@ -173,12 +173,7 @@ def _pass2(*, mismatch: bool = True) -> Pass2Assessment:
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.BID_CONTRACT,
         evidence_spans=(
-            EvidenceSpan(
-                block_id="generated-p1",
-                start=text.index(quote),
-                end=text.index(quote) + len(quote),
-                quote=quote,
-            ),
+            EvidenceSpan(block_id="generated-p1", quote=quote),
         ),
         rationale="생성본에 입찰 평가 기준이 포함되어 있다.",
     )
@@ -383,12 +378,7 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
             evidence_level=SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
             assessment_scope=AssessmentScope.FULL_DOCUMENT,
             evidence_spans=(
-                EvidenceSpan(
-                    block_id="p1:b0",
-                    start=0,
-                    end=len("입찰 평가"),
-                    quote="입찰 평가",
-                ),
+                EvidenceSpan(block_id="p1:b0", quote="입찰 평가"),
             ),
             reason_code="ADMIN_CONTEXT",
             rationale="업무 맥락만 사용한다.",
@@ -409,12 +399,7 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
             AdministrativeStatusFinding(
                 status=AdminStatus.APPROVAL_PENDING,
                 evidence_spans=(
-                    EvidenceSpan(
-                        block_id="generated-admin",
-                        start=text.index(phrase),
-                        end=text.index(phrase) + len(phrase),
-                        quote=phrase,
-                    ),
+                    EvidenceSpan(block_id="generated-admin", quote=phrase),
                 ),
                 rationale="결재 진행 상태가 직접 명시됐다.",
             ),
