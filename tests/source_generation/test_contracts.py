@@ -564,9 +564,8 @@ def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
     def index_of(model: type, field: str) -> int:
         return list(model.model_fields).index(field)
 
+    # 교차 제약이 없는 모델에서는 근거를 판정보다 앞에 둔다.
     for model, verdicts in (
-        (SourceClassification, ("clause_no", "subclause_key")),
-        (Pass2Assessment, ("clause_no", "subclause_key")),
         (SourceSuitability, ("reason_code",)),
         (AdministrativeStatusFinding, ("status",)),
     ):
@@ -577,6 +576,27 @@ def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
             assert rationale_at < index_of(model, verdict), (
                 f"{model.__name__}.{verdict} must follow evidence and rationale"
             )
+
+
+def test_mutually_constrained_verdict_fields_stay_adjacent():
+    """서로를 제약하는 필드를 떼어놓으면 모델이 모순을 만든다.
+
+    classification·clause_no·subclause_key는 C=제1~4호, S=제5~8호, O=둘 다
+    null, subclause는 clause 소속이라는 제약으로 묶여 있다. 실측에서 이
+    셋 사이에 evidence_spans를 끼워넣자 "clause 5 does not map to
+    classification C" 같은 자기모순 응답이 나왔다.
+    """
+
+    for model in (SourceClassification, Pass2Assessment):
+        fields = list(model.model_fields)
+        cluster = [fields.index(name) for name in
+                   ("classification", "clause_no", "subclause_key")]
+        assert cluster == sorted(cluster), model.__name__
+        assert cluster[-1] - cluster[0] == 2, (
+            f"{model.__name__}: 제약으로 묶인 판정 필드 사이에 다른 필드가 있다"
+        )
+        # 덩어리 전체가 근거보다 앞에 온다.
+        assert cluster[-1] < fields.index("evidence_spans"), model.__name__
 
 
 def test_gating_fields_precede_the_evidence_they_gate():

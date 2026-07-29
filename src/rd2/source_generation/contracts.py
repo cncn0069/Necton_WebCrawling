@@ -338,31 +338,38 @@ class LegalClassification(ContractModel):
     """근거 → 이유 → 판정 순서로 필드를 선언한다.
 
     OpenAI strict structured output은 스키마의 property 순서대로 자기회귀
-    생성하므로 **필드 순서가 곧 추론 순서**다. 판정을 먼저 두면
-    ``evidence_spans``가 판정의 근거가 아니라 이미 내린 답을 뒷받침할 인용구를
-    찾는 사후 정당화가 되고, 인용 불일치로 ``EVIDENCE_INVALID`` hard failure가
-    늘어난다.
+    생성하므로 **필드 순서가 곧 추론 순서**다. 그래서 근거를 판정보다 앞에
+    두는 편이 원칙적으로 낫다 — 판정이 먼저 나오면 근거가 사후 정당화가 된다.
+
+    **그러나 이 모델에서는 그 원칙을 적용하지 않는다.** 실측으로 두 번 시도해
+    두 번 다 실패했다.
+
+    1. ``evidence_spans``를 ``classification`` 앞에 두자 모델이 span을 먼저
+       뱉고 나중에 그 조합을 금지하는 값(O + clause)을 골라 계약 위반.
+    2. ``classification``만 앞으로 빼고 ``clause_no``를 근거 뒤에 남기자
+       둘 사이가 멀어져 매핑이 표류했다 — "clause 5 does not map to
+       classification C".
+
+    ``classification``·``clause_no``·``subclause_key``는 서로를 제약하는
+    **한 덩어리**다(C=제1~4호, S=제5~8호, O=둘 다 null, subclause는 clause
+    소속). 제약으로 묶인 필드를 떼어놓으면 모델은 앞서 emit한 값을 잊고
+    모순을 만든다. 그래서 덩어리를 붙여 앞에 두고 근거를 뒤에 둔다.
+
+    교차 제약이 없는 곳(``AdministrativeStatusFinding``)에서는 근거를 앞에
+    두는 원칙을 그대로 유지한다.
 
     순서를 바꿔도 JSON 구조는 동일하므로 ``CONTRACT_SCHEMA_VERSION``은 올리지
     않는다. 바뀐 것은 산출물의 shape이 아니라 생성 방식이므로
     ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
-
-    **예외: 근거의 허용 여부를 결정하는 필드는 근거보다 앞에 둔다.**
-    ``classification``은 evidence의 gate다 — C/S는 span을 최소 1개 요구하고
-    O는 clause/subclause를 금지한다. 이 필드를 근거 뒤로 보냈더니 모델이
-    span을 먼저 뱉고 나중에 그 조합을 금지하는 값을 골라 계약 위반으로
-    거절되는 사례가 실측에서 나왔다. gate는 앞에, 세부 판정
-    (``clause_no``/``subclause_key``)은 근거 뒤에 둔다 — 24개 중 하나를 고르는
-    어려운 판단이 바로 근거를 보고 이뤄져야 하는 쪽이다.
     """
 
     document_type: SemanticDocumentType
     other_document_type: NonEmptyText | None = None
     classification: CsoClassification
-    evidence_spans: tuple[EvidenceSpan, ...] = ()
-    rationale: NonEmptyText
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
+    evidence_spans: tuple[EvidenceSpan, ...] = ()
+    rationale: NonEmptyText
 
     @model_validator(mode="after")
     def _classification_must_be_coherent(self) -> "LegalClassification":
