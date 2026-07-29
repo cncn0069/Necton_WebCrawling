@@ -9,6 +9,7 @@ import pytest
 
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -100,7 +101,7 @@ def _pass1() -> Pass1Result:
     evidence = EvidenceSpan(block_id="p1:b0", quote=quote)
     return Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.S,
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.BID_CONTRACT,
@@ -137,7 +138,7 @@ def _pass2() -> Pass2Assessment:
     text = _pass1().generated_document.block_text("generated-p1")
     quote = "평가 기준"
     return Pass2Assessment(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.BID_CONTRACT,

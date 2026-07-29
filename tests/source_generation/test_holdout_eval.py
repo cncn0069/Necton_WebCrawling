@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -78,7 +79,7 @@ def _case(
         case_id=case_id,
         source_document_id=document_id or f"doc-{case_id}",
         source_sha256=source_sha256,
-        document_type=SemanticDocumentType.OFFICIAL_DOCUMENT,
+        document_form=DocumentForm.OFFICIAL_LETTER,
         classification=classification,
         clause_no=clause,
         subclause_key=subclause,
@@ -117,7 +118,7 @@ def _assessment(
     subclause: SubclauseKey | None = SubclauseKey.BID_CONTRACT,
     clause: ClauseNumber | None = ClauseNumber.CLAUSE_5,
     classification: CsoClassification = CsoClassification.S,
-    document_type: SemanticDocumentType = SemanticDocumentType.OFFICIAL_DOCUMENT,
+    document_type: SemanticDocumentType = DocumentForm.OFFICIAL_LETTER,
 ) -> Pass2Assessment:
     spans = ()
     if classification != CsoClassification.O:
@@ -127,7 +128,7 @@ def _assessment(
             EvidenceSpan(block_id="p1:b0", quote="예정가격"),
         )
     return Pass2Assessment(
-        document_type=document_type,
+        document_form=document_type,
         evidence_spans=spans,
         rationale="근거를 확인했다",
         classification=classification,
@@ -259,7 +260,7 @@ def test_classify_case_records_evidence_failures_instead_of_raising():
     case = _case("c1")
     document = snapshot_to_document_ir(_snapshot("doc-c1"), title="제목")
     bad = Pass2Assessment(
-        document_type=SemanticDocumentType.OFFICIAL_DOCUMENT,
+        document_form=DocumentForm.OFFICIAL_LETTER,
         evidence_spans=(
             EvidenceSpan(block_id="p1:b0", quote="없는인용구"),
         ),

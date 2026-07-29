@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -47,7 +48,7 @@ def test_load_p1_accepts_legacy_cache_with_computed_body_text(tmp_path):
     )
     result = Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.REPORT,
+            document_form=DocumentForm.REPORT,
             classification=CsoClassification.O,
             evidence_spans=(evidence,),
             rationale="공개 업무 맥락이다.",

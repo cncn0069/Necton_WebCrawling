@@ -123,9 +123,9 @@ class ClassificationAuditArtifact(ContractModel):
     @model_validator(mode="after")
     def _review_fields_must_match_comparison(self) -> "ClassificationAuditArtifact":
         expected_comparison = GradeComparison(
-            document_type_match=(
-                self.pass2_assessment.document_type
-                == self.source_classification.document_type
+            document_form_match=(
+                self.pass2_assessment.document_form
+                == self.source_classification.document_form
             ),
             classification_match=(
                 effective_classification(
@@ -222,7 +222,7 @@ def _comparison_review_reasons(
     comparison: GradeComparison,
 ) -> tuple[str, ...]:
     reasons = []
-    if not comparison.document_type_match:
+    if not comparison.document_form_match:
         reasons.append("document_type_mismatch")
     if not comparison.classification_match:
         reasons.append("classification_mismatch")
@@ -429,7 +429,7 @@ def summarize_classification_artifacts(
         "match_count": total - mismatch_count,
         "mismatch_count": mismatch_count,
         "mismatch_rate": (mismatch_count / total) if total else 0.0,
-        "document_type_match_count": matched("document_type_match"),
+        "document_form_match_count": matched("document_form_match"),
         "classification_match_count": matched("classification_match"),
         "clause_match_count": matched("clause_match"),
         "subclause_match_count": matched("subclause_match"),

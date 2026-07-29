@@ -12,6 +12,7 @@ from rd2.source_generation.administrative import (
     administrative_status_generation_requirements,
 )
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -97,7 +98,7 @@ def test_declared_status_makes_effective_classification_s_without_p2_detection()
     from rd2.source_generation.contracts import effective_classification
 
     legal_only = Pass2Assessment(
-        document_type=SemanticDocumentType.REPORT,
+        document_form=DocumentForm.REPORT,
         classification=CsoClassification.O,
         rationale="정보공개법 조항 근거는 없다.",
     )

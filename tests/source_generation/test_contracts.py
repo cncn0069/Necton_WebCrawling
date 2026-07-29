@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     SUBCLAUSES_BY_CLAUSE,
     ClauseNumber,
     SemanticDocumentType,
@@ -75,7 +76,7 @@ def _source_classification() -> SourceClassification:
     text = _source_snapshot().pages[0].blocks[0].text
     quote = "입찰 예정가격"
     return SourceClassification(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.BID_CONTRACT,
@@ -116,7 +117,7 @@ def _generated_document() -> GeneratedDocumentIR:
 
 def test_taxonomy_has_26_real_types_plus_other_and_24_subclauses():
     assert len(SemanticDocumentType) == 27
-    assert SemanticDocumentType.OTHER.value == "other"
+    assert DocumentForm.OTHER.value == "other"
     assert "synthetic_document" not in {item.value for item in SemanticDocumentType}
     assert len({key for keys in SUBCLAUSES_BY_CLAUSE.values() for key in keys}) == 24
     assert set(SUBCLAUSES_BY_CLAUSE) == set(ClauseNumber)
@@ -242,7 +243,7 @@ def test_classification_rejects_wrong_clause_subclause_and_o_with_clause():
     span = EvidenceSpan(block_id="b1", quote="x")
     with pytest.raises(ValidationError, match="does not map"):
         SourceClassification(
-            document_type=SemanticDocumentType.REPORT,
+            document_form=DocumentForm.REPORT,
             classification=CsoClassification.C,
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.BID_CONTRACT,
@@ -252,7 +253,7 @@ def test_classification_rejects_wrong_clause_subclause_and_o_with_clause():
 
     with pytest.raises(ValidationError, match="does not belong"):
         SourceClassification(
-            document_type=SemanticDocumentType.REPORT,
+            document_form=DocumentForm.REPORT,
             classification=CsoClassification.S,
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.PERSONNEL_PII,
@@ -262,7 +263,7 @@ def test_classification_rejects_wrong_clause_subclause_and_o_with_clause():
 
     with pytest.raises(ValidationError, match="cannot have clause"):
         SourceClassification(
-            document_type=SemanticDocumentType.REPORT,
+            document_form=DocumentForm.REPORT,
             classification=CsoClassification.O,
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.BID_CONTRACT,
@@ -271,9 +272,9 @@ def test_classification_rejects_wrong_clause_subclause_and_o_with_clause():
 
 
 def test_other_type_requires_free_text_description():
-    with pytest.raises(ValidationError, match="other_document_type is required"):
+    with pytest.raises(ValidationError, match="other_document_form is required"):
         SourceClassification(
-            document_type=SemanticDocumentType.OTHER,
+            document_form=DocumentForm.OTHER,
             classification=CsoClassification.O,
             rationale="기존 enum 밖 문서",
         )
@@ -298,7 +299,7 @@ def test_source_evidence_quote_must_actually_exist_in_the_snapshot():
 
 def test_pass1_requires_counterfactual_for_o_source():
     source = SourceClassification(
-        document_type=SemanticDocumentType.RESEARCH_REPORT,
+        document_form=DocumentForm.REPORT,
         classification=CsoClassification.O,
         rationale="공개 연구보고서",
     )
@@ -373,7 +374,7 @@ def test_pass1_source_aligned_target_must_exactly_match_source_label():
 
 def test_pass1_route_requires_matching_source_evidence_level():
     source = SourceClassification(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.O,
         rationale="명시적인 비공개 법적 근거가 없다.",
     )
@@ -405,7 +406,7 @@ def test_clause_6_span_seeded_is_disabled_until_deidentification_exists():
     with pytest.raises(ValidationError, match="de-identification"):
         Pass1Result(
             source_classification=SourceClassification(
-                document_type=SemanticDocumentType.REPORT,
+                document_form=DocumentForm.REPORT,
                 classification=CsoClassification.O,
                 rationale="개인정보 비공개 조항은 명시되지 않았다.",
             ),
@@ -434,7 +435,7 @@ def test_pass2_span_is_validated_only_against_generated_ir():
     quote = "평가 기준"
     block_text = document.block_text("p1")
     assessment = Pass2Assessment(
-        document_type=SemanticDocumentType.APPROVAL,
+        document_form=DocumentForm.APPROVAL_REQUEST,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=SubclauseKey.DECISION_REVIEW,

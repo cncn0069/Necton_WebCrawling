@@ -12,6 +12,7 @@ from rd2.administrative_status import ADMIN_STATUS_TEXT_POLICIES
 from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.source_generation.classification_taxonomy import (
     TAXONOMY_VERSION,
+    render_document_form_guidance,
     render_taxonomy_guidance,
 )
 from rd2.source_generation.contracts import (
@@ -21,9 +22,10 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v16"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v17"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
+DOCUMENT_FORM_GUIDANCE = render_document_form_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
     (
         "행정상태 taxonomy(법적 정보공개법 조항과 독립적으로 판정):",
@@ -66,7 +68,7 @@ $source_blocks
 
 PASS1_SYSTEM_PROMPT = """\
 당신은 대한민국 공공문서를 분석하고 학습용 불완전 문서를 만드는 생성기다.
-먼저 원문의 semantic document type, C/S/O, 정보공개법 제9조 호와 세부조항을
+먼저 원문의 문서 형식, C/S/O, 정보공개법 제9조 호와 세부조항을
 분류한다. 이어서 source evidence 수준에 맞는 generation route를 선택한다.
 C/S 원문은 source_aligned를 선택하고 그 분류를 생성 목표로 유지한다. O 원문은
 source label을 O로 보존하면서 span_seeded, anchored,
@@ -148,8 +150,7 @@ $source_document
 
 PASS2_SYSTEM_PROMPT = """\
 당신은 독립 채점자다. 생성기의 분류, 목표, 이유, evidence를 볼 수 없으며
-GeneratedDocumentIR만 처음 보는 것처럼 평가한다. 생성본의 semantic document
-type, C/S/O, 정보공개법 제9조 호·세부조항을 독립 예측하고, 판단 근거가 된
+GeneratedDocumentIR만 처음 보는 것처럼 평가한다. 생성본의 문서 형식, C/S/O, 정보공개법 제9조 호·세부조항을 독립 예측하고, 판단 근거가 된
 문장을 evidence span으로 반환한다. 근거가 없으면 O로 판정하며 생성기의 의도를
 추측하지 않는다.
 
@@ -159,8 +160,10 @@ evidence span은 실제 block ID와 그 block에 **글자 그대로 존재하는
 문구 대신 그 block에서 한 번만 나오는 길이의 인용문을 고른다.
 
 출력 계약 규칙:
-- document_type=other일 때는 other_document_type에 구체적인 유형명을 쓰고,
-  other가 아니면 other_document_type=null로 반환한다.
+- document_form은 아래 [문서 형식] 목록에서 고른다. 묻는 것은 **어떤 서식인가**이지
+  무엇에 관한 내용인가가 아니다 — 주제를 형식 이름 자리에 적지 않는다.
+- other는 형식을 특정할 단서가 본문에 전혀 없을 때만 고르고, 그때만
+  other_document_form에 구체적인 형식명을 쓴다. other가 아니면 null로 반환한다.
 - classification=O이면 clause_no=null, subclause_key=null로 반환한다.
 - classification=C/S이면 해당 분류와 맞는 clause_no·subclause_key 조합 및
   최소 1개의 정확한 evidence span이 반드시 필요하다.
@@ -247,13 +250,19 @@ def build_prompt_bundle(
         definitions=(
             PromptDefinition(
                 name="relevance",
-                system_prompt=f"{RELEVANCE_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}",
+                system_prompt=(
+                    f"{RELEVANCE_SYSTEM_PROMPT}\n\n{DOCUMENT_FORM_GUIDANCE}"
+                    f"\n\n{TAXONOMY_GUIDANCE}"
+                ),
                 user_template=RELEVANCE_USER_TEMPLATE,
                 response_model=RelevanceSelectionResponse,
             ),
             PromptDefinition(
                 name="pass1",
-                system_prompt=f"{PASS1_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}",
+                system_prompt=(
+                    f"{PASS1_SYSTEM_PROMPT}\n\n{DOCUMENT_FORM_GUIDANCE}"
+                    f"\n\n{TAXONOMY_GUIDANCE}"
+                ),
                 user_template=PASS1_USER_TEMPLATE,
                 response_model=Pass1Result,
             ),
@@ -261,7 +270,10 @@ def build_prompt_bundle(
                 name="pass2",
                 # 행정상태 taxonomy는 더 이상 P2에 주지 않는다 — 상태는 생성계획이
                 # 못 박고 문서 서식이 구성하는 선언 메타데이터이지 채점 대상이 아니다.
-                system_prompt=f"{PASS2_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}",
+                system_prompt=(
+                    f"{PASS2_SYSTEM_PROMPT}\n\n{DOCUMENT_FORM_GUIDANCE}"
+                    f"\n\n{TAXONOMY_GUIDANCE}"
+                ),
                 user_template=PASS2_USER_TEMPLATE,
                 response_model=Pass2Assessment,
             ),

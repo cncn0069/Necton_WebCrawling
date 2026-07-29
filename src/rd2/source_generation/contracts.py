@@ -26,7 +26,7 @@ from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
     TAXONOMY_VERSION,
     ClauseNumber,
-    SemanticDocumentType,
+    DocumentForm,
     SubclauseKey,
     expected_classification,
     subclause_belongs_to_clause,
@@ -363,8 +363,8 @@ class LegalClassification(ContractModel):
     ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
     """
 
-    document_type: SemanticDocumentType
-    other_document_type: NonEmptyText | None = None
+    document_form: DocumentForm
+    other_document_form: NonEmptyText | None = None
     classification: CsoClassification
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
@@ -373,11 +373,11 @@ class LegalClassification(ContractModel):
 
     @model_validator(mode="after")
     def _classification_must_be_coherent(self) -> "LegalClassification":
-        if self.document_type == SemanticDocumentType.OTHER:
-            if self.other_document_type is None:
-                raise ValueError("other_document_type is required for document_type=other")
-        elif self.other_document_type is not None:
-            raise ValueError("other_document_type is only allowed for document_type=other")
+        if self.document_form == DocumentForm.OTHER:
+            if self.other_document_form is None:
+                raise ValueError("other_document_form is required for document_form=other")
+        elif self.other_document_form is not None:
+            raise ValueError("other_document_form is only allowed for document_form=other")
 
         if self.classification == CsoClassification.O:
             if self.clause_no is not None or self.subclause_key is not None:
@@ -742,7 +742,7 @@ class CallReceipt(ContractModel):
 
 
 class GradeComparison(ContractModel):
-    document_type_match: bool
+    document_form_match: bool
     classification_match: bool
     clause_match: bool
     subclause_match: bool
@@ -752,7 +752,7 @@ class GradeComparison(ContractModel):
     def requires_review(self) -> bool:
         return not all(
             (
-                self.document_type_match,
+                self.document_form_match,
                 self.classification_match,
                 self.clause_match,
                 self.subclause_match,

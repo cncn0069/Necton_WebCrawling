@@ -44,7 +44,7 @@ from rd2.source_generation.classification_taxonomy import (
     BOUNDARY_PAIRS,
     TAXONOMY_VERSION,
     ClauseNumber,
-    SemanticDocumentType,
+    DocumentForm,
     SubclauseKey,
     expected_classification,
     subclause_belongs_to_clause,
@@ -107,19 +107,19 @@ class HoldoutCase(ContractModel):
     case_id: NonEmptyText
     source_document_id: NonEmptyText
     source_sha256: Sha256Hex
-    document_type: SemanticDocumentType
-    other_document_type: NonEmptyText | None = None
+    document_form: DocumentForm
+    other_document_form: NonEmptyText | None = None
     classification: CsoClassification
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
 
     @model_validator(mode="after")
     def _label_must_be_coherent(self) -> "HoldoutCase":
-        if self.document_type == SemanticDocumentType.OTHER:
-            if self.other_document_type is None:
-                raise ValueError("other_document_type is required for document_type=other")
-        elif self.other_document_type is not None:
-            raise ValueError("other_document_type is only allowed for document_type=other")
+        if self.document_form == DocumentForm.OTHER:
+            if self.other_document_form is None:
+                raise ValueError("other_document_form is required for document_form=other")
+        elif self.other_document_form is not None:
+            raise ValueError("other_document_form is only allowed for document_form=other")
 
         if self.classification == CsoClassification.O:
             if self.clause_no is not None or self.subclause_key is not None:
@@ -210,7 +210,7 @@ class HoldoutManifest(ContractModel):
                     "case_id": case.case_id,
                     "source_document_id": case.source_document_id,
                     "source_sha256": case.source_sha256,
-                    "document_type": case.document_type.value,
+                    "document_form": case.document_form.value,
                     "classification": case.classification.value,
                     "clause_no": case.clause_no.value if case.clause_no else None,
                     "subclause_key": (
@@ -485,7 +485,7 @@ def _score_axes(
     document_type = classification = clause = 0
     subclause_scored = subclause_correct = 0
     for case, assessment in pairs:
-        if case.document_type == assessment.document_type:
+        if case.document_form == assessment.document_form:
             document_type += 1
         if case.classification == assessment.classification:
             classification += 1

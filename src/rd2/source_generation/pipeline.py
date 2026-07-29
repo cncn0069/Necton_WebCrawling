@@ -664,8 +664,8 @@ def _build_provenance(
 def _compare_grade(pass1: Pass1Result, pass2: Pass2Assessment) -> GradeComparison:
     target = pass1.generation_target
     return GradeComparison(
-        document_type_match=(
-            pass2.document_type == pass1.source_classification.document_type
+        document_form_match=(
+            pass2.document_form == pass1.source_classification.document_form
         ),
         classification_match=(
             effective_classification(

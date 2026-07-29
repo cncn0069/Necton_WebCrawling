@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from rd2.administrative_status import AdminStatus
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -80,7 +81,7 @@ def _pass1(*, source_o: bool = False, source_block_id: str = "p1:b0") -> Pass1Re
     snapshot_text = _snapshot().block_text("p1:b0")
     if source_o:
         source = SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.O,
             rationale="공개 입찰공고다.",
         )
@@ -95,7 +96,7 @@ def _pass1(*, source_o: bool = False, source_block_id: str = "p1:b0") -> Pass1Re
     else:
         quote = "평가 기준"
         source = SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.S,
             clause_no=ClauseNumber.CLAUSE_5,
             subclause_key=SubclauseKey.BID_CONTRACT,
@@ -149,7 +150,7 @@ def _o_route_pass1(
     }
     return Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.O,
             rationale="명시적 비공개 조항은 없지만 입찰 평가 맥락이 있다.",
         ),
@@ -182,7 +183,7 @@ def _pass2(
     text = _pass1().generated_document.block_text("generated-p1")
     quote = "평가 기준"
     return Pass2Assessment(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_5,
         subclause_key=subclause,
@@ -313,7 +314,7 @@ def test_fully_synthetic_discards_the_document_created_in_source_seeing_pass1():
     source_leaking = source_leaking.model_copy(
         update={
             "source_classification": source_leaking.source_classification.model_copy(
-                update={"document_type": SemanticDocumentType.RESEARCH_REPORT}
+                update={"document_form": DocumentForm.REPORT}
             )
         }
     )
@@ -601,7 +602,7 @@ def _admin_only_pass1(
     quote = "평가 기준"
     return Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.O,
             rationale="법적 비공개 사유가 명시되지 않은 공개 업무 문서다.",
         ),
@@ -638,7 +639,7 @@ def _admin_only_pass2(
     )
     offset = text.index(phrase) if start is None else start
     return Pass2Assessment(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.O,
         rationale="법적 비공개 조항 근거는 없고 행정상태만 확인된다.",
     )
@@ -696,7 +697,7 @@ def test_admin_only_target_no_longer_depends_on_p2_detecting_the_status():
                 paragraph="본 검토보고서는 담당 부서에서 내용을 확인하고 있다."
             ),
             Pass2Assessment(
-                document_type=SemanticDocumentType.BID_NOTICE,
+                document_form=DocumentForm.BID_MATERIAL,
                 classification=CsoClassification.O,
                 rationale="법적 비공개 근거는 없다.",
             ),
@@ -872,7 +873,7 @@ def test_openai_gateway_reports_validation_paths_without_response_values():
         )
 
     assert raised.value.code == FailureCode.STRUCTURED_OUTPUT_INVALID
-    assert "source_classification.document_type: Field required" in str(raised.value)
+    assert "source_classification.document_form: Field required" in str(raised.value)
     assert repr(invalid_response) not in str(raised.value)
 
 

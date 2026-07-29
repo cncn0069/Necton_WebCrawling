@@ -36,6 +36,7 @@ from rd2.source_generation.audit_bridge import (
     run_source_generation_audit,
 )
 from rd2.source_generation.classification_taxonomy import (
+    DocumentForm,
     ClauseNumber,
     SemanticDocumentType,
     SubclauseKey,
@@ -138,7 +139,7 @@ def _generated_document() -> GeneratedDocumentIR:
 def _pass1() -> Pass1Result:
     return Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.O,
             rationale="공개 입찰 공고 자체에는 비공개 근거가 없다.",
         ),
@@ -163,10 +164,10 @@ def _pass2(*, mismatch: bool = True) -> Pass2Assessment:
     text = _generated_document().block_text("generated-p1")
     quote = "평가 기준"
     return Pass2Assessment(
-        document_type=(
-            SemanticDocumentType.REPORT
+        document_form=(
+            DocumentForm.REPORT
             if mismatch
-            else SemanticDocumentType.BID_NOTICE
+            else DocumentForm.BID_MATERIAL
         ),
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_5,
@@ -182,7 +183,7 @@ def _pipeline_result(*, mismatch: bool = True) -> DocumentPipelineResult:
     pass1 = _pass1()
     pass2 = _pass2(mismatch=mismatch)
     comparison = GradeComparison(
-        document_type_match=not mismatch,
+        document_form_match=not mismatch,
         classification_match=True,
         clause_match=True,
         subclause_match=True,
@@ -369,7 +370,7 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
     )
     pass1 = Pass1Result(
         source_classification=SourceClassification(
-            document_type=SemanticDocumentType.BID_NOTICE,
+            document_form=DocumentForm.BID_MATERIAL,
             classification=CsoClassification.O,
             rationale="법적 비공개 사유는 없다.",
         ),
@@ -392,7 +393,7 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
     )
     phrase = "결재 진행 중"
     pass2 = Pass2Assessment(
-        document_type=SemanticDocumentType.BID_NOTICE,
+        document_form=DocumentForm.BID_MATERIAL,
         classification=CsoClassification.O,
         rationale="법적 조항은 없고 행정상태만 있다.",
     )
@@ -411,7 +412,7 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
             response_id="response-pass2",
         ),
         comparison=GradeComparison(
-            document_type_match=True,
+            document_form_match=True,
             classification_match=True,
             clause_match=True,
             subclause_match=True,
@@ -640,7 +641,7 @@ def test_classification_sidecar_rejects_torn_and_duplicate_records(tmp_path):
         load_classification_sidecar(sidecar)
 
     tampered = json.loads(payload.decode("utf-8"))
-    tampered["comparison"]["document_type_match"] = True
+    tampered["comparison"]["document_form_match"] = True
     tampered["requires_review"] = False
     tampered["review_reasons"] = []
     sidecar.write_text(

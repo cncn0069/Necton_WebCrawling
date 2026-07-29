@@ -86,6 +86,11 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
         "예정가격 산정 근거",
         "핵심 업무가 입찰이면 bid_contract",
         "절차의 공정성이 핵심이고 개인 식별이 부수적이면",
+        # 문서 형식 축도 라벨이 아니라 판정 정의를 받는다.
+        "[문서 형식]",
+        "bid_material (입찰자료):",
+        "investigation_report (수사보고서):",
+        "[문서 형식 경계 규칙]",
     ):
         assert expected in pass1_system
         assert expected in pass2_system
@@ -105,7 +110,8 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
     assert "문서가 무엇을 포함하거나 다룬다고 소개하지 말고" in pass1_system
     assert "최소 3개의 구체적 사실" in pass1_system
     assert '"합성", "가상", "예시"라는 표지' in pass1_system
-    assert "document_type=other일 때는 other_document_type" in pass2_system
+    assert "묻는 것은 **어떤 서식인가**" in pass2_system
+    assert "other는 형식을 특정할 단서가 본문에 전혀 없을 때만" in pass2_system
     assert "classification=O이면 clause_no=null" in pass2_system
     assert "classification=C/S이면" in pass2_system
 

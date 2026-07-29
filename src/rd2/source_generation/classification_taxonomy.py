@@ -661,3 +661,328 @@ def render_taxonomy_guidance() -> str:
     lines.append("[세부조항 경계 규칙]")
     lines.extend(f"- {rule}" for rule in SUBCLAUSE_BOUNDARY_RULES)
     return "\n".join(lines)
+
+
+class DocumentForm(str, Enum):
+    """본문만 보고 구분할 수 있는 **문서 형식**. 채점 축은 이것이다.
+
+    ``SemanticDocumentType`` 26개는 수집 휴리스틱의 산물이다 — 출처별 기본값과
+    제목 키워드로 붙였고, ``notice``는 "키워드 미매칭 시 최종 폴백"이며
+    ``press_release``는 한 출처 전용이다. 본문만 보고 그걸 맞히라는 것은 문서
+    형식이 아니라 **출처를 맞히라는 요구**라 채점이 성립하지 않는다.
+
+    실측이 이를 보여줬다 — P2는 생성물 37건 중 35건을 ``other``로 판정했고,
+    구체적 유형을 낸 경우에도 "국가안전보장 및 국방 규정"처럼 **형식이 아니라
+    주제**를 적었다.
+
+    아래 목록은 실무에서 실제로 쓰이는 문서 형식명을 받아 정리한 것이다.
+    수집 라벨 26개는 버리지 않고 provenance 메타데이터로 계속 보존한다 —
+    역할을 나누는 것이지 폐기하는 것이 아니다.
+    """
+
+    MEETING_MINUTES = "meeting_minutes"
+    OFFICIAL_LETTER = "official_letter"
+    REPORT = "report"
+    AUDIT_MATERIAL = "audit_material"
+    PERSONNEL_MATERIAL = "personnel_material"
+    BID_MATERIAL = "bid_material"
+    APPROVAL_REQUEST = "approval_request"
+    REPLY_NOTICE = "reply_notice"
+    POLICY_MATERIAL = "policy_material"
+    PLAN_DRAFT = "plan_draft"
+    LEGAL_REVIEW = "legal_review"
+    INSPECTION_REPORT = "inspection_report"
+    RESPONSE_PLAN = "response_plan"
+    INVESTIGATION_REPORT = "investigation_report"
+    PRESS_RELEASE = "press_release"
+    ADMINISTRATIVE_RULE = "administrative_rule"
+    OTHER = "other"
+
+
+@dataclass(frozen=True)
+class DocumentFormDefinition:
+    """세부조항과 같은 처방 — 이름만 던지면 모델은 형식을 구분하지 못한다."""
+
+    label: str
+    definition: str
+    includes: tuple[str, ...]
+    excludes: tuple[str, ...]
+
+
+DOCUMENT_FORM_DEFINITIONS: Mapping[DocumentForm, DocumentFormDefinition] = MappingProxyType(
+    {
+        DocumentForm.MEETING_MINUTES: DocumentFormDefinition(
+            label="회의록",
+            definition="회의 진행과 참석자의 발언·의결을 시간 순으로 기록한 문서",
+            includes=(
+                "회차, 개최일시, 장소, 참석자 명단",
+                "안건별 논의 내용과 의결 사항",
+            ),
+            excludes=(
+                "회의 결론만 정리해 상급자에게 보고하면 report",
+                "심의 결과를 상대에게 알리면 reply_notice",
+            ),
+        ),
+        DocumentForm.OFFICIAL_LETTER: DocumentFormDefinition(
+            label="공문",
+            definition="수신처를 특정해 사안을 알리거나 협조를 요청하는 일반 시행문",
+            includes=(
+                "수신·경유가 명시된 협조 요청, 자료 제출 요구",
+                "제목-본문-붙임의 표준 시행문 구성",
+            ),
+            excludes=(
+                "받은 문서에 대한 답변이면 reply_notice",
+                "불특정 다수에게 참여를 구하면 bid_material 또는 policy_material",
+            ),
+        ),
+        DocumentForm.REPORT: DocumentFormDefinition(
+            label="보고서",
+            definition="조사·연구·업무 수행 결과를 정리해 보고하는 일반 보고 문서",
+            includes=(
+                "조사 범위와 방법, 결과, 결론·건의",
+                "연구보고서, 결과보고, 현황·통계 보고",
+            ),
+            excludes=(
+                "감사·검사 수행이면 audit_material",
+                "시설·시스템 점검이면 inspection_report",
+                "범죄 수사면 investigation_report",
+                "앞으로 할 일을 정하면 plan_draft",
+            ),
+        ),
+        DocumentForm.AUDIT_MATERIAL: DocumentFormDefinition(
+            label="감사자료",
+            definition="감사·검사의 계획, 수행, 지적사항과 처분을 담은 문서",
+            includes=(
+                "감사 대상과 기간, 표본 선정 기준",
+                "지적사항, 조치 요구, 처분 의견",
+            ),
+            excludes=(
+                "설비·보안 상태 점검이면 inspection_report",
+                "감사와 무관한 일반 업무 결과는 report",
+            ),
+        ),
+        DocumentForm.PERSONNEL_MATERIAL: DocumentFormDefinition(
+            label="인사자료",
+            definition="채용·평정·승진·징계 등 인사 행위와 그 근거를 담은 문서",
+            includes=(
+                "발령 사항, 평정 결과, 징계 사유와 처분",
+                "채용 전형 단계와 합격자 결정",
+            ),
+            excludes=(
+                "발령 사실만 상대에게 통보하면 reply_notice",
+                "인사 제도 자체를 설명하면 policy_material",
+            ),
+        ),
+        DocumentForm.BID_MATERIAL: DocumentFormDefinition(
+            label="입찰자료",
+            definition="입찰·계약 절차에서 공고·평가·계약을 다루는 문서",
+            includes=(
+                "입찰공고와 재공고, 사전규격공개, 공모",
+                "참가자격, 평가 기준과 배점, 예정가격, 낙찰자 결정",
+            ),
+            excludes=(
+                "집행할 예산의 지출 결재면 approval_request",
+                "계약 관련 회신이면 reply_notice",
+            ),
+        ),
+        DocumentForm.APPROVAL_REQUEST: DocumentFormDefinition(
+            label="승인·품의",
+            definition="특정 행위나 지출을 하기 위해 결재권자의 승인을 구하는 문서",
+            includes=(
+                "품의 사유, 소요 금액과 예산 과목, 지급 상대방",
+                "승인 요청 사항과 결재 의견란",
+            ),
+            excludes=(
+                "사업 전체 방향을 설계하면 plan_draft",
+                "승인 결과를 상대에게 알리면 reply_notice",
+            ),
+        ),
+        DocumentForm.REPLY_NOTICE: DocumentFormDefinition(
+            label="회신·통보",
+            definition="받은 질의·요청·신청에 대한 답변이나 결과를 알리는 문서",
+            includes=(
+                "회신 대상 문서번호와 접수일 인용",
+                "질의 요지와 그에 대한 답변, 결정 결과 통지",
+            ),
+            excludes=(
+                "먼저 요청을 보내는 쪽이면 official_letter",
+                "질의응답을 모아 안내하면 policy_material",
+            ),
+        ),
+        DocumentForm.POLICY_MATERIAL: DocumentFormDefinition(
+            label="정책자료",
+            definition="제도·정책의 내용과 운영 방법을 설명해 안내하는 자료",
+            includes=(
+                "제도 취지, 적용 대상, 신청 절차와 서식 안내",
+                "지침·매뉴얼, 질의회시 모음, 정책 설명자료",
+            ),
+            excludes=(
+                "조문 형식으로 효력을 갖는 규범이면 administrative_rule",
+                "언론 배포가 목적이면 press_release",
+            ),
+        ),
+        DocumentForm.PLAN_DRAFT: DocumentFormDefinition(
+            label="계획안",
+            definition="앞으로 수행할 사업·조치의 목표와 추진 방법을 설계한 문서",
+            includes=(
+                "추진 배경과 목표, 대안 비교, 일정, 소요 예산",
+                "단계별 추진 과제와 담당 부서",
+            ),
+            excludes=(
+                "사고·위험에 대한 대응 절차면 response_plan",
+                "이미 수행한 결과 정리는 report",
+            ),
+        ),
+        DocumentForm.LEGAL_REVIEW: DocumentFormDefinition(
+            label="법률검토서",
+            definition="법령 해석과 법적 쟁점을 검토해 의견을 제시하는 문서",
+            includes=(
+                "적용 법령 조문과 해석, 쟁점별 검토 의견",
+                "법률상 비밀·비공개 근거 조항의 적용 판단",
+            ),
+            excludes=(
+                "질의에 대한 답변 형식이면 reply_notice",
+                "제도 안내가 목적이면 policy_material",
+            ),
+        ),
+        DocumentForm.INSPECTION_REPORT: DocumentFormDefinition(
+            label="점검보고서",
+            definition="시설·시스템·보안 상태를 점검한 결과와 취약점을 담은 문서",
+            includes=(
+                "점검 항목과 기준, 발견된 취약점과 위험도",
+                "보안 진단 결과, 조치 필요 사항과 기한",
+            ),
+            excludes=(
+                "회계·업무 적정성 감사면 audit_material",
+                "발견한 위험에 대한 대응 절차 설계면 response_plan",
+            ),
+        ),
+        DocumentForm.RESPONSE_PLAN: DocumentFormDefinition(
+            label="대응계획서",
+            definition="사고·재난·위험 상황에 대한 대응 절차와 역할을 정한 문서",
+            includes=(
+                "상황 단계별 조치 절차, 비상 연락 체계",
+                "보호 대상과 대피·통제 방안",
+            ),
+            excludes=(
+                "일반 사업 추진 설계면 plan_draft",
+                "이미 발생한 사고의 경위 정리는 report",
+            ),
+        ),
+        DocumentForm.INVESTIGATION_REPORT: DocumentFormDefinition(
+            label="수사보고서",
+            definition="범죄 수사·조사의 진행 상황과 확인 사실을 기록한 문서",
+            includes=(
+                "사건번호, 조사 대상자와 진술 요지",
+                "확보 증거, 추가 확인 필요 사항, 향후 수사 계획",
+            ),
+            excludes=(
+                "행정 감사면 audit_material",
+                "시설 점검이면 inspection_report",
+            ),
+        ),
+        DocumentForm.PRESS_RELEASE: DocumentFormDefinition(
+            label="보도자료",
+            definition="언론 배포를 목적으로 정책·성과를 알리는 문서",
+            includes=(
+                "배포 일시, 담당 부서와 연락처, 요약 리드 문단",
+                "인용문과 사진·붙임 안내",
+            ),
+            excludes=(
+                "제도 운영 방법 안내면 policy_material",
+            ),
+        ),
+        DocumentForm.ADMINISTRATIVE_RULE: DocumentFormDefinition(
+            label="행정규칙",
+            definition="고시·훈령·예규처럼 조문 형식으로 효력을 갖는 규범 문서",
+            includes=(
+                "제1조·제2조 같은 조문 구성과 시행일",
+                "제정·개정 사유, 신구 조문 대비",
+            ),
+            excludes=(
+                "규범이 아니라 운영 방법 안내면 policy_material",
+                "개별 사안 처분은 official_letter",
+            ),
+        ),
+        DocumentForm.OTHER: DocumentFormDefinition(
+            label="기타",
+            definition="위 어느 형식에도 해당하지 않을 때만 고른다",
+            includes=("형식을 특정할 단서가 본문에 전혀 없는 경우",),
+            excludes=(
+                "주제가 낯설다는 이유로 고르지 않는다 — 묻는 것은 무엇에 "
+                "관한 내용인가가 아니라 어떤 서식인가다",
+            ),
+        ),
+    }
+)
+
+#: 수집 라벨 26개를 채점 축인 문서 형식으로 접는 표.
+#: 수집 라벨 자체는 provenance 메타데이터로 계속 보존한다.
+DOCUMENT_FORM_BY_TYPE: Mapping[SemanticDocumentType, DocumentForm] = MappingProxyType(
+    {
+        SemanticDocumentType.BID_NOTICE: DocumentForm.BID_MATERIAL,
+        SemanticDocumentType.BID_RENOTICE: DocumentForm.BID_MATERIAL,
+        SemanticDocumentType.PRE_SPEC_NOTICE: DocumentForm.BID_MATERIAL,
+        SemanticDocumentType.PUBLIC_OFFERING: DocumentForm.BID_MATERIAL,
+        SemanticDocumentType.NOTICE: DocumentForm.OTHER,
+        SemanticDocumentType.RESEARCH_REPORT: DocumentForm.REPORT,
+        SemanticDocumentType.REPORT: DocumentForm.REPORT,
+        SemanticDocumentType.STATUS_REPORT: DocumentForm.REPORT,
+        SemanticDocumentType.AUDIT_RESULT: DocumentForm.AUDIT_MATERIAL,
+        SemanticDocumentType.NOTIFICATION: DocumentForm.ADMINISTRATIVE_RULE,
+        SemanticDocumentType.DIRECTIVE: DocumentForm.ADMINISTRATIVE_RULE,
+        SemanticDocumentType.REGULATION: DocumentForm.ADMINISTRATIVE_RULE,
+        SemanticDocumentType.PLAN: DocumentForm.PLAN_DRAFT,
+        SemanticDocumentType.APPROVAL: DocumentForm.APPROVAL_REQUEST,
+        SemanticDocumentType.BUDGET_EXECUTION: DocumentForm.APPROVAL_REQUEST,
+        SemanticDocumentType.BUDGET_MATERIAL: DocumentForm.REPORT,
+        SemanticDocumentType.MEETING_MINUTES: DocumentForm.MEETING_MINUTES,
+        SemanticDocumentType.DIRECTOR_ACTIVITY: DocumentForm.MEETING_MINUTES,
+        SemanticDocumentType.GUIDE: DocumentForm.POLICY_MATERIAL,
+        SemanticDocumentType.INTERPRETATION_COMPILATION: DocumentForm.POLICY_MATERIAL,
+        SemanticDocumentType.POLICY_MATERIAL: DocumentForm.POLICY_MATERIAL,
+        SemanticDocumentType.OFFICIAL_DOCUMENT: DocumentForm.OFFICIAL_LETTER,
+        SemanticDocumentType.REPLY_NOTIFICATION: DocumentForm.REPLY_NOTICE,
+        SemanticDocumentType.PERSONNEL: DocumentForm.PERSONNEL_MATERIAL,
+        SemanticDocumentType.BUSINESS_TRIP: DocumentForm.APPROVAL_REQUEST,
+        SemanticDocumentType.PRESS_RELEASE: DocumentForm.PRESS_RELEASE,
+        SemanticDocumentType.OTHER: DocumentForm.OTHER,
+    }
+)
+
+#: 본문 서술만으로는 갈리기 어려워 명시적 우선순위가 필요한 형식 쌍.
+DOCUMENT_FORM_BOUNDARY_RULES: tuple[str, ...] = (
+    "수행 결과를 정리한 문서라도 감사·검사면 audit_material, 시설·시스템 "
+    "점검이면 inspection_report, 범죄 수사면 investigation_report를 선택하고, "
+    "그 어느 것도 아닐 때만 report를 선택한다.",
+    "앞으로 할 일을 정한 문서라도 사고·재난 대응 절차면 response_plan, "
+    "일반 사업 추진 설계면 plan_draft를 선택한다.",
+    "결재를 구하는 문서라도 사업 방향 설계가 핵심이면 plan_draft, 특정 지출이나 "
+    "행위의 승인이 핵심이면 approval_request를 선택한다.",
+    "받은 문서에 답하는 것이면 reply_notice, 먼저 보내는 것이면 "
+    "official_letter를 선택한다.",
+    "조문 형식으로 효력을 갖는 규범이면 administrative_rule, 운영 방법 안내면 "
+    "policy_material을 선택한다.",
+    "인사 관련 문서라도 발령·평정·징계 자체를 담으면 personnel_material, "
+    "그 결과를 상대에게 알리기만 하면 reply_notice를 선택한다.",
+)
+
+if set(DOCUMENT_FORM_BY_TYPE) != set(SemanticDocumentType):
+    raise RuntimeError("every collected document type needs a document form")
+if set(DOCUMENT_FORM_DEFINITIONS) != set(DocumentForm):
+    raise RuntimeError("every document form requires a definition")
+
+
+def render_document_form_guidance() -> str:
+    """P1/P2가 같은 문서 형식 의미를 보도록 결정론적으로 렌더링한다."""
+
+    lines = ["[문서 형식]"]
+    for form in DocumentForm:
+        definition = DOCUMENT_FORM_DEFINITIONS[form]
+        lines.append(f"- {form.value} ({definition.label}): {definition.definition}")
+        lines.append(f"  포함: {' / '.join(definition.includes)}")
+        lines.append(f"  제외: {' / '.join(definition.excludes)}")
+    lines.append("")
+    lines.append("[문서 형식 경계 규칙]")
+    lines.extend(f"- {rule}" for rule in DOCUMENT_FORM_BOUNDARY_RULES)
+    return "\n".join(lines)
