@@ -1,4 +1,5 @@
 {% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
 {% block body_class %}theme-modular{% endblock %}
 {% block document %}
 <main class="page modular-page">
@@ -66,7 +67,7 @@
 
   <section class="modular-signers">
     {% for signer in signers %}
-    <div><small>{{ signer.role }}</small><strong>{{ signer.name }}</strong><span>{{ signer.date or "확인" }}</span></div>
+    <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><small>{{ signer.role }}</small><strong>{{ signer.name }}</strong>{% if signer.date %}<span>{{ signer.date }}</span>{% endif %}{{ approval_stamp(signer) }}</div>
     {% endfor %}
   </section>
 

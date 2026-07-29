@@ -1,4 +1,5 @@
 {% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
 {% block body_class %}theme-checklist{% endblock %}
 {% block document %}
 <main class="page checklist-page">
@@ -65,7 +66,7 @@
     <div class="checklist-decision"><span>최종 판정</span><strong>□ 적합&nbsp;&nbsp;&nbsp; □ 조건부 적합&nbsp;&nbsp;&nbsp; □ 재점검</strong></div>
     <table>
       <thead><tr>{% for signer in signers %}<th>{{ signer.role }}</th>{% endfor %}</tr></thead>
-      <tbody><tr>{% for signer in signers %}<td><strong>{{ signer.name }}</strong><small>{{ signer.date or "서명" }}</small></td>{% endfor %}</tr></tbody>
+      <tbody><tr>{% for signer in signers %}<td class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</td>{% endfor %}</tr></tbody>
     </table>
   </section>
 

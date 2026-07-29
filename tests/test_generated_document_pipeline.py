@@ -109,6 +109,50 @@ def _payload() -> dict:
     }
 
 
+def _add_document_metadata(payload: dict) -> dict:
+    payload["result"]["generated_document"]["document_metadata"] = {
+        "approval_line": {
+            "slots": [
+                {
+                    "role": "담당",
+                    "name": "김가온",
+                    "status": "approved",
+                    "approved_at": "2024-12-20",
+                    "stamp": {
+                        "mode": "synthetic",
+                        "stamp_text": "해솔공공서비스원장인",
+                        "seed": 18273,
+                        "profile": "damaged",
+                        "shape": "round",
+                    },
+                },
+                {
+                    "role": "과장",
+                    "name": "이도담",
+                    "status": "approved",
+                    "approved_at": "2024-12-21",
+                    "stamp": None,
+                },
+                {
+                    "role": "기관장",
+                    "name": None,
+                    "status": "pending",
+                    "approved_at": None,
+                    "stamp": None,
+                },
+            ]
+        },
+        "administrative_events": [
+            {
+                "type": "review_deadline",
+                "date": "2025-01-15",
+                "text": "2025년 1월 15일까지 심사할 예정입니다.",
+            }
+        ],
+    }
+    return payload
+
+
 def test_structured_blocks_are_the_source_of_truth_for_template_context() -> None:
     envelope = parse_generation_payload(_payload())
     document = envelope.result.generated_document
@@ -152,6 +196,76 @@ def test_missing_document_metadata_is_not_synthesized() -> None:
         "brand_note",
     ):
         assert context[key] == ""
+
+
+def test_optional_approval_metadata_is_rendered_without_filling_blanks() -> None:
+    envelope = parse_generation_payload(_add_document_metadata(_payload()))
+    document = envelope.result.generated_document
+    context = build_template_context(envelope, seed=100)
+
+    assert [signer["role"] for signer in context["signers"]] == [
+        "담당",
+        "과장",
+        "기관장",
+    ]
+    assert context["signers"][0]["stamp_data_uri"].startswith(
+        "data:image/png;base64,"
+    )
+    assert context["signers"][0]["date"] == "2024-12-20"
+    assert context["signers"][1]["stamp_data_uri"] == ""
+    assert context["signers"][2]["name"] == ""
+    assert context["signers"][2]["date"] == ""
+    assert context["approval_manifest"][0]["stamp"]["parameters"][
+        "profile"
+    ] == "damaged"
+    assert context["approval_manifest"][0]["stamp"]["parameters"][
+        "shape"
+    ] == "round"
+    assert context["approval_manifest"][0]["stamp"]["placement"]["mode"] in {
+        "standard",
+        "boundary",
+        "lower_overlap",
+    }
+    assert context["administrative_events"] == [
+        {
+            "type": "review_deadline",
+            "date": "2025-01-15",
+            "text": "2025년 1월 15일까지 심사할 예정입니다.",
+        }
+    ]
+    assert "2025년 1월 15일까지 심사할 예정입니다." in {
+        section["text"] for section in context["sections"]
+    }
+    atoms = source_text_atoms(document)
+    assert "담당" in atoms
+    assert "김가온" in atoms
+    assert "2024-12-20" in atoms
+    assert "2025년 1월 15일까지 심사할 예정입니다." in atoms
+
+
+def test_stamp_and_approval_date_are_rejected_for_unapproved_slot() -> None:
+    payload = _add_document_metadata(_payload())
+    pending = payload["result"]["generated_document"]["document_metadata"][
+        "approval_line"
+    ]["slots"][2]
+    pending["stamp"] = {
+        "mode": "synthetic",
+        "stamp_text": "합성확인인",
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="stamp is only allowed when status is approved",
+    ):
+        parse_generation_payload(payload)
+
+    pending["stamp"] = None
+    pending["approved_at"] = "2024-12-22"
+    with pytest.raises(
+        ValidationError,
+        match="approved_at is only allowed when status is approved",
+    ):
+        parse_generation_payload(payload)
 
 
 def test_body_text_mismatch_is_rejected_before_rendering() -> None:
@@ -287,6 +401,72 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
         "재점검",
     ):
         assert synthetic_text not in rendered_text
+
+
+def test_all_templates_render_typed_approval_stamps(tmp_path: Path) -> None:
+    manifest = render_generation_payload(
+        _add_document_metadata(_payload()),
+        tmp_path,
+        per_template=1,
+        base_seed=20260728,
+    )
+
+    assert len(manifest) == 10
+    assert all(entry["status"] == "ok" for entry in manifest)
+    assert all(
+        entry["approval"][0]["stamp"]["parameters"]["profile"] == "damaged"
+        for entry in manifest
+    )
+    assert {
+        entry["approval"][0]["stamp"]["parameters"]["seed"]
+        for entry in manifest
+    } == {18273}
+    for entry in manifest:
+        html = Path(str(entry["html"])).read_text(encoding="utf-8")
+        assert "data:image/png;base64," in html
+        with fitz.open(str(entry["pdf"])) as pdf:
+            rendered_text = "\n".join(page.get_text() for page in pdf)
+        assert "김가온" in rendered_text
+        normalized_text = "".join(rendered_text.split())
+        assert "기관장" in normalized_text
+        assert "2025년1월15일까지심사할예정입니다." in normalized_text
+
+
+def test_four_signers_expand_grid_templates_to_four_columns(
+    tmp_path: Path,
+) -> None:
+    payload = _add_document_metadata(_payload())
+    slots = payload["result"]["generated_document"]["document_metadata"][
+        "approval_line"
+    ]["slots"]
+    slots.append(
+        {
+            "role": "승인",
+            "name": "박하람",
+            "status": "approved",
+            "approved_at": "2024-12-22",
+            "stamp": {
+                "mode": "synthetic",
+                "stamp_text": "박하람인",
+                "seed": 10006,
+                "profile": "normal",
+                "shape": "square",
+            },
+        }
+    )
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260728,
+        template_slugs={"04_personnel_notice"},
+    )
+
+    html = Path(str(manifest[0]["html"])).read_text(encoding="utf-8")
+    assert "signer-count-4" in html
+    assert manifest[0]["actual_pages"] == 1
+    assert manifest[0]["status"] == "ok"
 
 
 def test_input_agency_name_is_preserved_and_disables_synthetic_identity(

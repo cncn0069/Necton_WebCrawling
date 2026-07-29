@@ -180,6 +180,14 @@ def render_official_document_variations(
                 protected_keys=protected_context_keys,
             )
             state_classes = []
+            signer_count = len(identity_context.get("signers") or ())
+            if signer_count:
+                state_classes.append(f"signer-count-{signer_count}")
+            if not identity_context.get("details"):
+                state_classes.append("has-no-details")
+            table_context = identity_context.get("table") or {}
+            if not table_context.get("headers"):
+                state_classes.append("has-no-table")
             if not identity_context.get("attachments"):
                 state_classes.append("has-no-attachments")
             if not identity_context.get("summary_text"):
@@ -363,6 +371,10 @@ def render_official_document_variations(
                     "legacy_identity_absent": not legacy_identity_present,
                     "parameters": spec.to_dict(),
                     "identity": identity_manifest,
+                    "approval": identity_context.get(
+                        "approval_manifest",
+                        [],
+                    ),
                     "html": str(html_path),
                     "pdf": str(pdf_path),
                 }

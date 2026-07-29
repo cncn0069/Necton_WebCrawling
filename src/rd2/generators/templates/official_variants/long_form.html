@@ -1,4 +1,5 @@
 {% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
 {% block body_class %}theme-long-form{% endblock %}
 {% block document %}
 <main class="long-document">
@@ -75,7 +76,7 @@
 
     <section class="long-signers">
       {% for signer in signers %}
-      <div><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong><small>{{ signer.date or "서명" }}</small></div>
+      <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</div>
       {% endfor %}
     </section>
 

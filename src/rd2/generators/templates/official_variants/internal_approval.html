@@ -1,4 +1,5 @@
 {% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
 {% block body_class %}theme-approval{% endblock %}
 {% block document %}
 <main class="page approval-page">
@@ -10,7 +11,7 @@
     <table class="approval-matrix">
       <thead><tr>{% for signer in signers %}<th>{{ signer.role }}</th>{% endfor %}</tr></thead>
       <tbody>
-        <tr>{% for signer in signers %}<td class="approval-sign-space"></td>{% endfor %}</tr>
+        <tr>{% for signer in signers %}<td class="approval-sign-space">{{ approval_stamp(signer) }}</td>{% endfor %}</tr>
         <tr>{% for signer in signers %}<td><strong>{{ signer.name }}</strong><small>{{ signer.date }}</small></td>{% endfor %}</tr>
       </tbody>
     </table>

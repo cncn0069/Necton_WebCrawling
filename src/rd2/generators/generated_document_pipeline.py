@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -29,6 +30,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
+)
+from rd2.generators.synthetic_approval_stamps import (
+    StampProfile,
+    StampShape,
+    build_stamp_placement,
+    generate_synthetic_approval_stamp,
 )
 
 _CONTRACT_VERSION_RE = re.compile(r"^1\.\d+\.\d+$")
@@ -45,6 +52,9 @@ _CONTENT_CONTEXT_KEYS = frozenset(
         "summary_text",
         "source_agency_name",
         "source_agency_category",
+        "signers",
+        "approval_manifest",
+        "administrative_events",
     }
 )
 _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
@@ -170,10 +180,91 @@ GeneratedBlock = Annotated[
 ]
 
 
+class SyntheticStampContract(_ContractModel):
+    mode: Literal["synthetic"]
+    stamp_text: str
+    seed: int | None = None
+    profile: StampProfile | None = None
+    shape: StampShape | None = None
+
+    @field_validator("stamp_text")
+    @classmethod
+    def _validate_stamp_text(cls, value: str) -> str:
+        value = _non_empty(value, "stamp_text")
+        if len(re.sub(r"\s+", "", value)) > 16:
+            raise ValueError(
+                "stamp_text must contain at most 16 non-space characters"
+            )
+        return value
+
+
+class ApprovalSlotContract(_ContractModel):
+    role: str
+    name: str | None = None
+    status: Literal["pending", "approved", "rejected", "not_required"]
+    approved_at: date | None = None
+    stamp: SyntheticStampContract | None = None
+
+    @field_validator("role")
+    @classmethod
+    def _validate_role(cls, value: str) -> str:
+        return _non_empty(value, "role")
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str | None) -> str | None:
+        return None if value is None else _non_empty(value, "name")
+
+    @model_validator(mode="after")
+    def _validate_approval_state(self) -> "ApprovalSlotContract":
+        if self.stamp is not None and self.status != "approved":
+            raise ValueError("stamp is only allowed when status is approved")
+        if self.approved_at is not None and self.status != "approved":
+            raise ValueError(
+                "approved_at is only allowed when status is approved"
+            )
+        return self
+
+
+class ApprovalLineContract(_ContractModel):
+    slots: list[ApprovalSlotContract]
+
+    @field_validator("slots")
+    @classmethod
+    def _validate_slots(
+        cls,
+        value: list[ApprovalSlotContract],
+    ) -> list[ApprovalSlotContract]:
+        if not value:
+            raise ValueError("approval_line.slots must not be empty")
+        if len(value) > 5:
+            raise ValueError("approval_line.slots supports at most 5 entries")
+        return value
+
+
+class AdministrativeEventContract(_ContractModel):
+    type: str
+    date: date
+    text: str
+
+    @field_validator("type", "text")
+    @classmethod
+    def _validate_non_empty(cls, value: str, info: Any) -> str:
+        return _non_empty(value, info.field_name)
+
+
+class DocumentMetadataContract(_ContractModel):
+    approval_line: ApprovalLineContract | None = None
+    administrative_events: list[AdministrativeEventContract] = Field(
+        default_factory=list
+    )
+
+
 class GeneratedDocumentContract(_ContractModel):
     contract_version: str
     title: str
     agency_name: str | None = None
+    document_metadata: DocumentMetadataContract | None = None
     blocks: list[GeneratedBlock] = Field(default_factory=list)
     body_text: str | None = None
 
@@ -358,6 +449,16 @@ def source_text_atoms(document: GeneratedDocumentContract) -> tuple[str, ...]:
             atoms.extend(block.columns)
             for row in block.rows:
                 atoms.extend(row)
+    metadata = document.document_metadata
+    if metadata and metadata.approval_line:
+        for slot in metadata.approval_line.slots:
+            atoms.append(slot.role)
+            if slot.name:
+                atoms.append(slot.name)
+            if slot.approved_at:
+                atoms.append(slot.approved_at.isoformat())
+    if metadata:
+        atoms.extend(event.text for event in metadata.administrative_events)
     return tuple(dict.fromkeys(atom for atom in atoms if atom.strip()))
 
 
@@ -385,6 +486,15 @@ def _deterministic_seed(envelope: GenerationEnvelope) -> int:
     return int(sha256(stable_id.encode("utf-8")).hexdigest()[:8], 16)
 
 
+def _derived_stamp_seed(
+    document_seed: int,
+    slot_index: int,
+    stamp_text: str,
+) -> int:
+    material = f"{document_seed}:{slot_index}:{stamp_text}".encode("utf-8")
+    return int(sha256(material).hexdigest()[:8], 16)
+
+
 def build_template_context(
     envelope: GenerationEnvelope,
     *,
@@ -404,6 +514,7 @@ def build_template_context(
     tables: list[TableBlock] = []
     long_sections: list[dict[str, Any]] = []
     checklist_items: list[dict[str, str]] = []
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
 
     for block in document.blocks:
         if isinstance(block, ParagraphBlock):
@@ -481,6 +592,93 @@ def build_template_context(
                     }
                 )
 
+    metadata = document.document_metadata
+    administrative_events = (
+        metadata.administrative_events if metadata else []
+    )
+    for event in administrative_events:
+        sections.append({"text": event.text, "items": []})
+        long_sections.append({"title": "", "items": [event.text]})
+        checklist_items.append(
+            {
+                "group": "행정 처리",
+                "text": event.text,
+                "owner": "",
+                "status": "",
+            }
+        )
+
+    signers: list[dict[str, Any]] = []
+    approval_manifest: list[dict[str, Any]] = []
+    approval_line = metadata.approval_line if metadata else None
+    for slot_index, slot in enumerate(
+        approval_line.slots if approval_line else [],
+        start=1,
+    ):
+        stamp_data_uri = ""
+        stamp_parameters: dict[str, object] | None = None
+        if slot.stamp is not None:
+            stamp_seed = (
+                slot.stamp.seed
+                if slot.stamp.seed is not None
+                else _derived_stamp_seed(
+                    resolved_seed,
+                    slot_index,
+                    slot.stamp.stamp_text,
+                )
+            )
+            rendered_stamp = generate_synthetic_approval_stamp(
+                slot.stamp.stamp_text,
+                seed=stamp_seed,
+                profile=slot.stamp.profile,
+                shape=slot.stamp.shape,
+            )
+            stamp_placement = build_stamp_placement(stamp_seed)
+            stamp_data_uri = rendered_stamp.data_uri
+            stamp_parameters = rendered_stamp.parameters.to_dict()
+            stamp_placement_data = stamp_placement.to_dict()
+        else:
+            stamp_placement_data = None
+
+        approved_at = (
+            slot.approved_at.isoformat() if slot.approved_at else ""
+        )
+        signers.append(
+            {
+                "role": slot.role,
+                "name": slot.name or "",
+                "date": approved_at,
+                "status": slot.status,
+                "stamp_data_uri": stamp_data_uri,
+                "stamp_alt": (
+                    f"{slot.role} 합성 결재 도장" if stamp_data_uri else ""
+                ),
+                "stamp_shape": (
+                    stamp_parameters["shape"] if stamp_parameters else ""
+                ),
+                "stamp_placement": stamp_placement_data,
+            }
+        )
+        approval_manifest.append(
+            {
+                "slot_index": slot_index,
+                "role": slot.role,
+                "name": slot.name,
+                "status": slot.status,
+                "approved_at": approved_at or None,
+                "stamp": (
+                    {
+                        "mode": slot.stamp.mode,
+                        "stamp_text": slot.stamp.stamp_text,
+                        "parameters": stamp_parameters,
+                        "placement": stamp_placement_data,
+                    }
+                    if slot.stamp is not None
+                    else None
+                ),
+            }
+        )
+
     return {
         "emblem": "",
         "slogan": "",
@@ -502,7 +700,16 @@ def build_template_context(
         "checklist_items": checklist_items,
         "issuer_title": "",
         "copy_recipients": "",
-        "signers": [],
+        "signers": signers,
+        "approval_manifest": approval_manifest,
+        "administrative_events": [
+            {
+                "type": event.type,
+                "date": event.date.isoformat(),
+                "text": event.text,
+            }
+            for event in administrative_events
+        ],
         "document_number": "",
         "issue_date": "",
         "postal_code": "",

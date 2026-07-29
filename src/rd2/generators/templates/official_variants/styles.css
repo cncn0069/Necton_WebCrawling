@@ -30,6 +30,39 @@ body {
   position: relative;
   width: 210mm;
 }
+.approval-stamp {
+  display: block;
+  height: 14mm;
+  object-fit: contain;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 14mm;
+  z-index: 0;
+}
+.approval-stamp.stamp-shape-square {
+  height: 13mm;
+  width: 13mm;
+}
+.approval-stamp.stamp-shape-oval {
+  height: 14mm;
+  width: 18mm;
+}
+.signer-entry {
+  min-height: 18mm;
+  overflow: visible;
+  position: relative;
+}
+.signer-entry.has-stamp {
+  padding: 1.5mm !important;
+}
+.signer-entry > span,
+.signer-entry > strong,
+.signer-entry > small {
+  position: relative;
+  z-index: 1;
+}
 
 /* 1. 전통 공문: 중앙 기관명 + 단일 본문 + 하단 결재선 */
 .classic-page {
@@ -100,6 +133,14 @@ body {
 .classic-approval-rule { border-top: 2.3mm solid #d5d7d8; }
 .classic-signers { display: flex; justify-content: space-between; padding: 1.5mm 0; }
 .classic-signers div { align-items: baseline; display: flex; gap: 2mm; white-space: nowrap; }
+.classic-signers .signer-entry {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 38mm;
+  text-align: center;
+}
 .classic-signers strong { font-size: 9pt; }
 .classic-footer { font-size: 7.7pt; line-height: 1.55; }
 .classic-footer div { display: flex; justify-content: space-between; }
@@ -215,7 +256,19 @@ body {
 .approval-matrix { border-collapse: collapse; font-size: 7pt; text-align: center; width: 100%; }
 .approval-matrix th, .approval-matrix td { border: .2mm solid #6e7779; padding: 1mm; }
 .approval-matrix th { background: #e6eef0; }
-.approval-sign-space { height: 10mm; }
+.approval-sign-space { height: 19mm; overflow: visible; position: relative; }
+.approval-sign-space .approval-stamp {
+  height: 15mm;
+  width: 15mm;
+}
+.approval-sign-space .approval-stamp.stamp-shape-square {
+  height: 14mm;
+  width: 14mm;
+}
+.approval-sign-space .approval-stamp.stamp-shape-oval {
+  height: 15mm;
+  width: 19mm;
+}
 .approval-matrix td small { display: block; margin-top: .5mm; min-height: 3mm; }
 .approval-meta { margin-top: 3mm; }
 .approval-meta dl { border-left: .3mm solid #6a7375; border-top: .3mm solid #6a7375; display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
@@ -763,6 +816,31 @@ body {
 .checklist-ending > div:last-child strong { color: #194e4a; font-size: 12pt; }
 .checklist-footer { border-top: .8mm solid #1f6762; display: flex; font-size: 6pt; justify-content: space-between; margin-top: 2mm; padding-top: 1.5mm; }
 
+/* 4~5단계 결재선은 다음 줄로 밀리지 않도록 슬롯 수에 맞춰 열을 늘린다. */
+body.signer-count-4 .banner-signers,
+body.signer-count-4 .proclamation-signers,
+body.signer-count-4 .sidebar-signers,
+body.signer-count-4 .modular-signers,
+body.signer-count-4 .table-report-signers,
+body.signer-count-4 .long-signers {
+  grid-template-columns: repeat(4, 1fr);
+}
+body.signer-count-5 .banner-signers,
+body.signer-count-5 .proclamation-signers,
+body.signer-count-5 .sidebar-signers,
+body.signer-count-5 .modular-signers,
+body.signer-count-5 .table-report-signers,
+body.signer-count-5 .long-signers {
+  grid-template-columns: repeat(5, 1fr);
+}
+body.has-no-details .modular-grid {
+  grid-template-columns: 1fr;
+}
+body.has-no-details .modular-facts,
+body.has-no-table .modular-table-card {
+  display: none !important;
+}
+
 /* 실제 생성 계약에 첨부/요약이 없을 때 예제용 빈 레이블을 남기지 않는다. */
 body.has-no-attachments .classic-attachments,
 body.has-no-attachments .proclamation-attachments,
@@ -901,7 +979,7 @@ body.has-no-template-copy .long-section h3:empty {
 
 /* 원문에 워크플로 정보가 없으면 체크리스트의 판정·담당 열을 만들지 않는다. */
 body.has-no-workflow-metadata .checklist-guide,
-body.has-no-workflow-metadata .checklist-approval,
+body.has-no-workflow-metadata .checklist-decision,
 body.has-no-workflow-metadata .checklist-table thead,
 body.has-no-workflow-metadata .checklist-table td:first-child,
 body.has-no-workflow-metadata .checklist-table td:nth-child(n+3) {

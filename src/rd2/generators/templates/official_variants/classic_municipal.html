@@ -1,4 +1,5 @@
 {% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
 {% block body_class %}theme-classic{% endblock %}
 {% block document %}
 <main class="page classic-page">
@@ -56,7 +57,7 @@
     <div class="classic-approval-rule"></div>
     <div class="classic-signers">
       {% for signer in signers %}
-      <div><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}</div>
+      <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</div>
       {% endfor %}
     </div>
     <p>협조자</p>
