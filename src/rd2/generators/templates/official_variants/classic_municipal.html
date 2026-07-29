@@ -1,0 +1,72 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-classic{% endblock %}
+{% block document %}
+<main class="page classic-page">
+  <header class="classic-masthead">
+    <div class="classic-emblem">{{ emblem }}</div>
+    <div class="classic-identity">
+      <p>{{ slogan }}</p>
+      <h1>{{ agency_name }}</h1>
+    </div>
+    <strong>{{ brand_note }}</strong>
+  </header>
+
+  <section class="classic-routing">
+    <dl>
+      <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+      <div><dt>(경유)</dt><dd>{{ via }}</dd></div>
+      <div class="classic-title"><dt>제목</dt><dd>{{ title }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="classic-body">
+    <p class="classic-intro">{{ intro }}</p>
+    <ol class="classic-sections">
+      {% for section in sections %}
+      <li>
+        <p>{{ section.text }}</p>
+        {% if section["items"] %}
+        <ol>
+          {% for item in section["items"] %}<li><span>{{ item.label }}.</span> {{ item.text }}</li>{% endfor %}
+        </ol>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    <dl class="classic-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+
+    <table class="classic-table">
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+
+    <div class="classic-attachments">
+      <strong>붙임</strong>
+      <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    </div>
+  </section>
+
+  <div class="classic-issuer">{{ issuer_title }}</div>
+
+  <section class="classic-approval">
+    <p><strong>수신자</strong> {{ copy_recipients }}</p>
+    <div class="classic-approval-rule"></div>
+    <div class="classic-signers">
+      {% for signer in signers %}
+      <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</div>
+      {% endfor %}
+    </div>
+    <p>협조자</p>
+  </section>
+
+  <footer class="classic-footer">
+    <div><span>시행&nbsp; {{ document_number }}</span><span>({{ issue_date }})</span><span>접수&nbsp; (&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</span></div>
+    <div><span>우 {{ postal_code }}&nbsp; {{ address }}</span><span>/ {{ website }}</span></div>
+    <div><span>전화 {{ phone }}</span><span>/전송 {{ fax }}</span><span>/ {{ email }}</span><span>/ {{ disclosure }}</span></div>
+  </footer>
+</main>
+{% endblock %}

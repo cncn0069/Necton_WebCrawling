@@ -1,0 +1,83 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-sidebar{% endblock %}
+{% block document %}
+<main class="page sidebar-page">
+  <aside class="sidebar-rail">
+    <div class="sidebar-emblem">{{ emblem }}</div>
+    <p class="sidebar-slogan">{{ slogan }}</p>
+    <h1>{{ agency_name }}</h1>
+    <strong class="sidebar-note">{{ brand_note }}</strong>
+
+    <dl class="sidebar-routing">
+      <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+      <div><dt>경유</dt><dd>{{ via }}</dd></div>
+      <div><dt>문서번호</dt><dd>{{ document_number }}</dd></div>
+      <div><dt>시행일</dt><dd>{{ issue_date }}</dd></div>
+      <div><dt>공개</dt><dd>{{ disclosure }}</dd></div>
+    </dl>
+
+    <div class="sidebar-issuer">
+      <small>발신</small>
+      <strong>{{ issuer_title }}</strong>
+    </div>
+
+    <footer>
+      <p>우 {{ postal_code }}</p>
+      <p>{{ address }}</p>
+      <p>{{ phone }}</p>
+      <p>{{ fax }}</p>
+      <p>{{ email }}</p>
+      <p>{{ website }}</p>
+    </footer>
+  </aside>
+
+  <section class="sidebar-main">
+    <header>
+      <small>{{ document_kicker }}</small>
+      <h2>{{ title }}</h2>
+      <p>{{ intro }}</p>
+    </header>
+
+    <section class="sidebar-sections">
+      {% for section in sections %}
+      <article>
+        <b>{{ "%02d"|format(loop.index) }}</b>
+        <div>
+          <h3>{{ section.text }}</h3>
+          {% if section["items"] %}
+          <ul>{% for item in section["items"] %}<li><span>{{ item.label }}</span>{{ item.text }}</li>{% endfor %}</ul>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+
+    <dl class="sidebar-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+
+    <table class="sidebar-table">
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+
+    <section class="sidebar-bottom">
+      <div>
+        <h3>붙임</h3>
+        <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+      </div>
+      <div>
+        <h3>수신자</h3>
+        <p>{{ copy_recipients }}</p>
+      </div>
+    </section>
+
+    <section class="sidebar-signers">
+      {% for signer in signers %}
+      <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</div>
+      {% endfor %}
+    </section>
+  </section>
+</main>
+{% endblock %}

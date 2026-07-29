@@ -1,0 +1,84 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-checklist{% endblock %}
+{% block document %}
+<main class="page checklist-page">
+  <header class="checklist-header">
+    <div class="checklist-brand">
+      <span>{{ emblem }}</span>
+      <div><p>{{ slogan }}</p><h1>{{ agency_name }}</h1></div>
+    </div>
+    <strong>{{ form_label }}</strong>
+  </header>
+
+  <section class="checklist-title">
+    <small>{{ form_subtitle }}</small>
+    <h2>{{ title }}</h2>
+    <p>{{ intro }}</p>
+  </section>
+
+  <dl class="checklist-meta">
+    <div><dt>문서번호</dt><dd>{{ document_number }}</dd></div>
+    <div><dt>확인일</dt><dd>{{ issue_date }}</dd></div>
+    <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+    <div><dt>담당부서</dt><dd>{{ via }}</dd></div>
+    <div><dt>확인장소</dt><dd>{{ venue }}</dd></div>
+    <div><dt>공개구분</dt><dd>{{ disclosure }}</dd></div>
+  </dl>
+
+  <section class="checklist-guide">
+    <strong>확인 방법</strong>
+    <span>{{ guide_text }}</span>
+    <div><i></i> 완료 <i></i> 진행 <i></i> 예정</div>
+  </section>
+
+  <table class="checklist-table">
+    <thead>
+      <tr><th>구분</th><th>확인 항목</th><th>담당</th><th>완료</th><th>진행</th><th>예정</th></tr>
+    </thead>
+    <tbody>
+      {% for item in checklist_items %}
+      <tr>
+        <td>{{ item.group }}</td>
+        <td>{{ item.text }}</td>
+        <td>{{ item.owner }}</td>
+        <td><span class="check-box">{% if item.status == "완료" %}✓{% endif %}</span></td>
+        <td><span class="check-box">{% if item.status == "진행" %}✓{% endif %}</span></td>
+        <td><span class="check-box">{% if item.status == "예정" %}✓{% endif %}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <section class="checklist-summary">
+    {% if summary_text %}
+    <div>
+      <h3>종합 의견</h3>
+      <p>{{ summary_text }}</p>
+    </div>
+    {% endif %}
+    <dl>
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+  </section>
+
+  <section class="checklist-approval">
+    <div class="checklist-decision"><span>최종 판정</span><strong>□ 적합&nbsp;&nbsp;&nbsp; □ 조건부 적합&nbsp;&nbsp;&nbsp; □ 재점검</strong></div>
+    <table>
+      <thead><tr>{% for signer in signers %}<th>{{ signer.role }}</th>{% endfor %}</tr></thead>
+      <tbody><tr>{% for signer in signers %}<td class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</td>{% endfor %}</tr></tbody>
+    </table>
+  </section>
+
+  <section class="checklist-ending">
+    <div><strong>붙임</strong><span>{{ attachments|join(", ") }}</span></div>
+    <div><small>발신</small><strong>{{ issuer_title }}</strong></div>
+  </section>
+
+  <footer class="checklist-footer">
+    <span>우 {{ postal_code }} {{ address }}</span>
+    <span>{{ phone }} · {{ fax }} · {{ email }}</span>
+    <span>{{ website }}</span>
+  </footer>
+</main>
+{% endblock %}
