@@ -49,6 +49,78 @@ class TestBuildGenerationPlan:
         assert c_sum == 500
         assert s_sum == 650
 
+    def test_admin_status_rows_use_low_default_ratio(self):
+        plan = _build_small_plan(c_target=500, s_target=650)
+
+        c_admin = sum(
+            c.requested_target
+            for c in plan.cells
+            if c.classification == "C" and c.admin_status
+        )
+        s_admin = sum(
+            c.requested_target
+            for c in plan.cells
+            if c.classification == "S" and c.admin_status
+        )
+        assert c_admin == 50
+        assert s_admin == 65
+        assert plan.allocation["admin_status_ratio"] == 0.10
+
+    def test_admin_status_ratio_can_be_disabled(self):
+        plan = build_generation_plan(
+            c_target=500,
+            s_target=650,
+            candidate_profile_rows=[],
+            candidate_manifest={
+                "run_id": "cand-run-1",
+                "rule_version": "candidate-rules-v2-20260722",
+            },
+            candidate_profile_digest="sha256:" + "0" * 64,
+            created_at="2026-07-23T00:00:00+00:00",
+            admin_status_ratio=0.0,
+            **_MINIMAL_ALLOCATION,
+        )
+
+        assert sum(c.requested_target for c in plan.cells if c.admin_status) == 0
+        assert sum(c.requested_target for c in plan.cells) == 1150
+
+    def test_admin_status_ratio_accepts_full_boundary(self):
+        plan = build_generation_plan(
+            c_target=500,
+            s_target=650,
+            candidate_profile_rows=[],
+            candidate_manifest={
+                "run_id": "cand-run-1",
+                "rule_version": "candidate-rules-v2-20260722",
+            },
+            candidate_profile_digest="sha256:" + "0" * 64,
+            created_at="2026-07-23T00:00:00+00:00",
+            admin_status_ratio=1.0,
+            **_MINIMAL_ALLOCATION,
+        )
+
+        assert sum(
+            c.requested_target for c in plan.cells if not c.admin_status
+        ) == 0
+        assert sum(c.requested_target for c in plan.cells if c.admin_status) == 1150
+
+    @pytest.mark.parametrize("ratio", (-0.01, 1.01))
+    def test_invalid_admin_status_ratio_is_rejected(self, ratio):
+        with pytest.raises(ValueError, match="admin_status_ratio"):
+            build_generation_plan(
+                c_target=500,
+                s_target=650,
+                candidate_profile_rows=[],
+                candidate_manifest={
+                    "run_id": "cand-run-1",
+                    "rule_version": "candidate-rules-v2-20260722",
+                },
+                candidate_profile_digest="sha256:" + "0" * 64,
+                created_at="2026-07-23T00:00:00+00:00",
+                admin_status_ratio=ratio,
+                **_MINIMAL_ALLOCATION,
+            )
+
     def test_run_id_stable_across_created_at(self):
         plan_a = _build_small_plan(created_at="2026-07-23T00:00:00+00:00")
         plan_b = _build_small_plan(created_at="2026-07-24T12:00:00+00:00")

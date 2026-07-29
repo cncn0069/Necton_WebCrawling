@@ -107,10 +107,9 @@ class TemplateStatusTarget:
     문서유형에 모든 상태를 곱하는 완전 3중 격자가 아니라 그 문서유형에 실제
     등록된 상태 목록만 곱한 조건부 크로스다.
 
-    ``admin_status``가 ``None``이면 해당 (clause_no, subclause_key, doc_type)
-    조합의 문서유형이 ``ADMIN_STATUS_RULES_BY_DOC_TYPE``에 규칙 자체가 등록돼
-    있지 않다는 뜻이다 — 이 경우에도 (clause, subclause, doc_type) 자체는 조용히
-    누락시키지 않고 상태 없는 자리표시 행 하나를 남긴다.
+    ``admin_status``가 ``None``인 행은 행정상태를 부여하지 않는 기본 생성 셀이다.
+    모든 문서유형에 이 기본 셀을 하나씩 두고, 적용 가능한 행정상태 셀은 낮은
+    비율의 별도 표본으로 추가한다.
     """
 
     clause_no: str
@@ -141,21 +140,20 @@ def admin_statuses_for_doc_type(doc_type: str) -> tuple[str, ...] | None:
 def _build_status_aware_targets() -> tuple[TemplateStatusTarget, ...]:
     rows: list[TemplateStatusTarget] = []
     for target in TEMPLATE_TARGETS:
+        # 행정상태는 예외적인 보조 축이다. 규칙이 있는 문서유형도 대부분의
+        # 생성물이 상태 없는 일반 문서가 되도록 기본 셀을 항상 보존한다.
+        rows.append(
+            TemplateStatusTarget(
+                target.clause_no,
+                target.subclause_key,
+                target.subclause_label,
+                target.doc_type,
+                target.template_id,
+                admin_status=None,
+            )
+        )
         statuses = admin_statuses_for_doc_type(target.doc_type)
         if not statuses:
-            # 규칙이 아예 없거나(None) 등록됐지만 상태가 0개(())인 경우 — 두
-            # 경우 모두 크로스할 상태가 없으므로 자리표시 행 하나만 남긴다.
-            # (둘을 구분하는 정보는 TARGET_STATUSES_BY_KEY 쪽에 보존된다.)
-            rows.append(
-                TemplateStatusTarget(
-                    target.clause_no,
-                    target.subclause_key,
-                    target.subclause_label,
-                    target.doc_type,
-                    target.template_id,
-                    admin_status=None,
-                )
-            )
             continue
         for status in statuses:
             rows.append(

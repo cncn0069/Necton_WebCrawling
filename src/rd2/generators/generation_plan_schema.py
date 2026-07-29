@@ -152,12 +152,16 @@ def build_generation_plan(
     candidate_profile_digest: str,
     created_at: str,
     agency_categories: Sequence[str] = AGENCY_CATEGORIES,
+    admin_status_ratio: float = 0.10,
 ) -> GenerationPlan:
     """설계 문서 "Target User & Narrowest Wedge" 절의 plan-only 진입점.
 
     LLM 호출도, RDS 반영도 하지 않는다 — candidate profile row와 설정만으로
     결정적인 GenerationPlan을 만든다.
     """
+    if not 0.0 <= admin_status_ratio <= 1.0:
+        raise ValueError("admin_status_ratio는 0.0 이상 1.0 이하여야 합니다")
+
     counts = compute_candidate_profile_counts(candidate_profile_rows)
     records = enumerate_valid_cells(candidate_profile_counts=counts, agency_categories=agency_categories)
 
@@ -168,12 +172,36 @@ def build_generation_plan(
     grade_targets = {"C": c_target, "S": s_target}
     all_cells: list[CoverageCell] = []
     for grade in sorted(grade_targets):
+        grade_records = records_by_grade.get(grade, [])
+        plain_records = [record for record in grade_records if not record.key.admin_status]
+        status_records = [record for record in grade_records if record.key.admin_status]
+        status_target = (
+            round(grade_targets[grade] * admin_status_ratio)
+            if status_records
+            else 0
+        )
+        plain_target = grade_targets[grade] - status_target
+
         all_cells.extend(
             allocate_grade(
                 grade,
-                records_by_grade.get(grade, []),
-                grade_target=grade_targets[grade],
-                minimum_per_valid_cell=minimum_per_valid_cell,
+                plain_records,
+                grade_target=plain_target,
+                minimum_per_valid_cell=(
+                    minimum_per_valid_cell if plain_target > 0 else 0
+                ),
+                agency_weights=agency_weights,
+                max_rows_per_candidate=max_rows_per_candidate,
+            )
+        )
+        all_cells.extend(
+            allocate_grade(
+                grade,
+                status_records,
+                grade_target=status_target,
+                # 낮은 비율을 지키기 위해 행정상태 셀 전수에 최소 건수를
+                # 강제하지 않는다. 표본은 결정적 가중 배분으로 선택된다.
+                minimum_per_valid_cell=0,
                 agency_weights=agency_weights,
                 max_rows_per_candidate=max_rows_per_candidate,
             )
@@ -184,6 +212,7 @@ def build_generation_plan(
     config = {
         "targets": {"C": c_target, "S": s_target},
         "minimum_per_valid_cell": minimum_per_valid_cell,
+        "admin_status_ratio": admin_status_ratio,
         "agency_weights": sorted_agency_weights,
         "max_rows_per_candidate": max_rows_per_candidate,
     }
@@ -202,6 +231,7 @@ def build_generation_plan(
         "c_target": c_target,
         "s_target": s_target,
         "minimum_per_valid_cell": minimum_per_valid_cell,
+        "admin_status_ratio": admin_status_ratio,
         "agency_weights": sorted_agency_weights,
         "max_rows_per_candidate": max_rows_per_candidate,
     }

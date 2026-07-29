@@ -6,12 +6,23 @@ from rd2.audit.review_sampler import (
     RowSummary,
     pdf_status,
     select_anomaly_samples,
+    select_content_samples,
     select_representative_samples,
     select_review_samples,
 )
 
 
-def _summary(row_id, cell_key, *, body_length=100, seed_candidate_id="", normalized_hash="", fingerprint=""):
+def _summary(
+    row_id,
+    cell_key,
+    *,
+    body_length=100,
+    seed_candidate_id="",
+    normalized_hash="",
+    fingerprint="",
+    clause_no="",
+    document_status="",
+):
     return RowSummary(
         row_id=row_id,
         coverage_cell_key=cell_key,
@@ -20,6 +31,8 @@ def _summary(row_id, cell_key, *, body_length=100, seed_candidate_id="", normali
         body_length=body_length,
         normalized_hash=normalized_hash or f"hash-{row_id}",
         structure_fingerprint=fingerprint or "fp-default",
+        clause_no=clause_no,
+        document_status=document_status,
     )
 
 
@@ -196,6 +209,53 @@ class TestSelectReviewSamples:
             coverage_actual_rows=coverage_actual_rows, format_result={}, pdf_dir=None,
         )
         assert "pdf_unavailable" in selected[0].secondary_reasons
+
+
+class TestSelectContentSamples:
+    def test_selects_one_row_for_each_clause_and_admin_status(self):
+        row_summaries = {
+            "clause-1-short": _summary(
+                "clause-1-short", "cell-1", body_length=10, clause_no="1"
+            ),
+            "clause-1-median": _summary(
+                "clause-1-median", "cell-1", body_length=20, clause_no="1"
+            ),
+            "clause-1-long": _summary(
+                "clause-1-long", "cell-1", body_length=30, clause_no="1"
+            ),
+            "draft-row": _summary(
+                "draft-row",
+                "cell-draft",
+                body_length=15,
+                clause_no="5",
+                document_status="초안",
+            ),
+        }
+
+        selected = select_content_samples(row_summaries)
+
+        assert len(selected) == 20  # 제1~8호 + 행정상태 12종
+        clause_1 = next(
+            sample
+            for sample in selected
+            if sample.sample_axis == "clause" and sample.sample_value == "1"
+        )
+        assert clause_1.sample_status == "ok"
+        assert clause_1.row_id == "clause-1-median"
+        draft = next(
+            sample
+            for sample in selected
+            if sample.sample_axis == "admin_status"
+            and sample.sample_value == "초안"
+        )
+        assert draft.sample_status == "ok"
+        assert draft.row_id == "draft-row"
+
+    def test_missing_group_is_explicit(self):
+        selected = select_content_samples({})
+
+        assert all(sample.sample_status == "missing" for sample in selected)
+        assert all(sample.row_id == "" for sample in selected)
 
 
 class TestPdfStatus:

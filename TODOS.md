@@ -92,6 +92,54 @@
 
 ## RD-2 (학습 데이터 구축)
 
+### 새 block IR 기반 템플릿·PDF 체계 재제작
+
+**What:** 원본문서 기반 생성 파이프라인의 `GeneratedDocumentIR`(paragraph, bullet list, key-value, table, attachment reference)을 입력으로 받아, 26개 semantic doc type을 실제 문서 형태로 렌더링하는 새 템플릿·PDF 체계를 설계하고 구현한다. 기존 `template_matrix.py`/`content_points.py`와의 호환을 새 파이프라인의 전제로 삼지 않는다.
+
+**Why:** 이번 task는 LLM 생성·독립 채점·정식 audit까지의 의미적 품질을 먼저 검증한다. 생성 IR이 안정되기 전에 템플릿까지 함께 고정하면, 의미 구조 변경과 시각 구조 변경이 서로 발목을 잡고 기존 16종 템플릿 제약이 새 26종 taxonomy로 역류한다.
+
+**Pros:** 검증된 IR을 기준으로 템플릿을 다시 설계할 수 있고, semantic taxonomy와 렌더링 구현의 결합을 낮추며, HTML/PDF 양쪽의 회귀 테스트 기준을 새로 세울 수 있다.
+
+**Cons:** 이번 task가 통과해도 최종 PDF 산출물은 즉시 나오지 않으며, 26개 유형의 대표 형태 조사·디자인·접근성·폰트·페이지 분할 검증까지 포함하면 작업량이 크다.
+
+**Context:** 새 파이프라인은 `src/rd2/source_generation/contracts.py`의 ordered block IR을 canonical 산출물로 만들 계획이다. 현행 렌더링은 `src/rd2/generators/pdf_render.py`, 현행 16종 콘텐츠 구조는 `src/rd2/generators/content_points.py`에 묶여 있다. 새 템플릿은 IR 블록 순서·표 구조·첨부 참조를 손실 없이 표현하고, 26개 유형별 대표 fixture와 시각 회귀 검증을 포함해야 한다.
+
+**Effort:** XL
+**Priority:** P1 — 원본문서 기반 생성 파이프라인의 live eval/audit 통과 직후
+**Depends on:** 새 파이프라인의 56-case live eval 및 정식 audit 통과, `GeneratedDocumentIR` 계약 안정화
+
+### 신규 경로 안정화 후 기존 생성 코드 제거
+
+**What:** 원본문서 기반 2-pass 생성 경로가 cutover gate를 통과하고 새 템플릿/PDF 경로가 준비되면, `src/rd2/generators/generate.py`와 `scripts/generate_cs_pilot.py`의 중복 생성 책임을 제거하고 참조·문서·테스트를 새 CLI로 전환한다.
+
+**Why:** 이번 task에서 곧바로 기존 코드를 삭제하면 비교 기준과 rollback 경로를 잃는다. 반대로 새 경로가 안정된 뒤에도 두 구현을 계속 유지하면 프롬프트·계약·audit 동작이 갈라져 어느 쪽이 정식 경로인지 불명확해진다.
+
+**Pros:** 검증 기간에는 안전한 비교/rollback이 가능하고, cutover 뒤에는 중복 LLM 호출 경로와 유지보수 비용을 제거할 수 있다.
+
+**Cons:** 전환 기간에는 두 경로가 공존하므로 ownership과 사용 금지 시점을 문서화해야 하며, 삭제 전에 호출처·운영 스크립트·fixture를 전수 확인해야 한다.
+
+**Context:** 삭제 조건은 (1) 새 분류+생성 Pass 1과 독립 Pass 2가 live eval 기준을 통과하고, (2) 정식 audit 회귀가 통과하며, (3) 새 block IR 기반 템플릿/PDF가 운영 요구를 충족하고, (4) rollback 기간이 종료된 것이다. 조건 충족 전에는 기존 코드를 deprecated로 표시하되 삭제하지 않는다.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** 새 파이프라인 cutover gate 통과, 새 block IR 기반 템플릿·PDF 체계 준비, 운영 rollback 기간 종료
+
+### 86쪽 이상 문서의 후반 근거까지 보존하는 relevance 선택 고도화
+
+**What:** 이번 task의 “앞부분을 잘라 단일 relevance 호출” 정책을 대체할 수 있도록, 86쪽 이상 문서 전체를 저비용으로 훑고 후반부 조항 근거도 선택하는 chunk/계층형 relevance 방식을 설계한다.
+
+**Why:** 현재 선택은 비용과 구현 복잡도를 줄이지만, 86~723쪽 문서에서 조항 근거가 뒤쪽에만 있으면 Pass 1이 그 증거를 영구적으로 보지 못한다. 이는 생성·채점 모델의 품질과 무관한 입력 누락이다.
+
+**Pros:** 장문서의 first/middle/last evidence recall을 높이고, 문서 앞부분 편향을 줄이며, 향후 컨텍스트 창이나 모델 가격이 바뀌어도 선택 정책을 독립적으로 튜닝할 수 있다.
+
+**Cons:** 문서당 사전 처리와 호출 수가 늘고, chunk 중복 제거·순서 복원·토큰 예산·선택 재현성까지 별도 검증해야 한다.
+
+**Context:** 이번 task에서는 85쪽 이하를 전량 입력하고 86쪽 이상은 front-truncated input에 단 한 번의 relevance 호출을 수행한다. 선택된 page/block, 원본·선택 hash, 잘림 여부를 journal/audit에 기록해 누락 가능성을 관찰한다. 후속 작업은 이 실측 데이터에서 last-page miss 또는 선택 불안정이 확인되면 우선순위를 올린다.
+
+**Effort:** M~L
+**Priority:** P2
+**Depends on:** 이번 task의 장문서 live eval 및 selection telemetry 확보
+
 ### [완료] PRISM 크롤링 안정화: 경로 상대화, 목차/초록 컬럼, 체크포인트 재개, 페이지 전환 버그 2차 수정
 
 **What:** 네 가지를 한 번에 반영:

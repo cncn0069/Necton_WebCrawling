@@ -94,6 +94,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--minimum-per-valid-cell", type=int, default=5)
     parser.add_argument(
+        "--admin-status-ratio",
+        type=float,
+        default=0.10,
+        help=(
+            "전체 생성물 중 행정상태를 부여할 목표 비율. 기본 0.10(10%%), "
+            "0이면 행정상태 생성 안 함."
+        ),
+    )
+    parser.add_argument(
         "--agency-weights",
         type=str,
         default=None,
@@ -143,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         c_target=args.c_target,
         s_target=args.s_target,
         minimum_per_valid_cell=args.minimum_per_valid_cell,
+        admin_status_ratio=args.admin_status_ratio,
         agency_weights=agency_weights,
         allocation_seed=args.allocation_seed,
         max_rows_per_candidate=args.max_rows_per_candidate,
