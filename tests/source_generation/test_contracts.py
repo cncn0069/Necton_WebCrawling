@@ -13,7 +13,6 @@ from rd2.source_generation.classification_taxonomy import (
     SubclauseKey,
 )
 from rd2.source_generation.contracts import (
-    AdministrativeStatusFinding,
     AssessmentScope,
     AttachmentReferenceBlock,
     BulletListBlock,
@@ -567,7 +566,6 @@ def test_judgment_models_declare_evidence_and_rationale_before_the_verdict():
     # 교차 제약이 없는 모델에서는 근거를 판정보다 앞에 둔다.
     for model, verdicts in (
         (SourceSuitability, ("reason_code",)),
-        (AdministrativeStatusFinding, ("status",)),
     ):
         evidence_at = index_of(model, "evidence_spans")
         rationale_at = index_of(model, "rationale")

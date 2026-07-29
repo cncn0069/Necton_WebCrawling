@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v15"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v16"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -127,10 +127,9 @@ generated_document는 최종 generation target을 실제 본문 내용으로 구
 가상 데이터라는 사실은 provenance에서 관리하므로 generated_document 본문에는
 "합성", "가상", "예시"라는 표지를 반복하지 않는다. 최소 3개의 구체적 사실과,
 입력에 비교 가능한 복수 항목이 있으면 table 또는 key_value block을 포함한다.
-generation target의 administrative_statuses는 변경하거나 제거하지 않는다.
-행정상태가 지정되면 generation plan의 writing_instruction에 따라 상태를 본문의
-상황과 문맥으로 드러낸다. 상태명이나 정답용 고정 문구를 억지로 삽입하거나
-key_value·별도 메타데이터처럼 나열하지 않는다. 지정되지 않은 행정상태는 만들지 않는다.
+행정상태는 문서 서식(결재란 등)이 담당하므로 본문에 서술하지 않는다. 다만
+지정된 상태와 **모순되는 문장은 쓰지 않는다** — 결재 진행 중인 문서에
+"결재 완료", 초안 문서에 "최종 확정" 같은 표현을 넣지 않는다.
 """
 
 PASS1_USER_TEMPLATE = """\
@@ -165,17 +164,13 @@ evidence span은 실제 block ID와 그 block에 **글자 그대로 존재하는
 - classification=O이면 clause_no=null, subclause_key=null로 반환한다.
 - classification=C/S이면 해당 분류와 맞는 clause_no·subclause_key 조합 및
   최소 1개의 정확한 evidence span이 반드시 필요하다.
-- administrative_statuses의 상태는 중복하지 않고 각 finding마다 실제 본문에
-  존재하는 evidence span을 반환한다.
 
 반환하는 clause_no와 subclause_key는 아래 taxonomy의 같은 조항에 속하는
 조합이어야 한다. 각 세부조항의 판정 정의와 포함·제외 기준, 경계 규칙을
 그대로 적용하고, 라벨의 낱말이 겹친다는 이유로 세부조항을 고르지 않는다.
 
-행정상태는 법적 조항과 별개의 축이다. 결재 진행 중, 초안, 내부 검토 중 등의
-상태 표시를 법적 S 또는 제5호의 근거로 사용하지 않는다. 반대로 문서에 상태
-문구가 명시되어 있으면 법적 classification이 O여도 해당 administrative_status
-finding을 evidence와 함께 반환한다.
+결재 진행 중, 초안, 내부 검토 중 같은 행정상태 표시는 법적 판정의 근거가
+아니다. 그런 문구가 있어도 법적 근거가 따로 없으면 O로 판정한다.
 """
 
 PASS2_USER_TEMPLATE = """\
@@ -264,10 +259,9 @@ def build_prompt_bundle(
             ),
             PromptDefinition(
                 name="pass2",
-                system_prompt=(
-                    f"{PASS2_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}\n\n"
-                    f"{ADMINISTRATIVE_STATUS_GUIDANCE}"
-                ),
+                # 행정상태 taxonomy는 더 이상 P2에 주지 않는다 — 상태는 생성계획이
+                # 못 박고 문서 서식이 구성하는 선언 메타데이터이지 채점 대상이 아니다.
+                system_prompt=f"{PASS2_SYSTEM_PROMPT}\n\n{TAXONOMY_GUIDANCE}",
                 user_template=PASS2_USER_TEMPLATE,
                 response_model=Pass2Assessment,
             ),

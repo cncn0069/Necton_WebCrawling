@@ -17,7 +17,6 @@ from rd2.source_generation.classification_taxonomy import (
 )
 from rd2.source_generation.contracts import (
     AssessmentScope,
-    AdministrativeStatusFinding,
     EvidenceSpan,
     FailureCode,
     FailureStage,
@@ -641,15 +640,6 @@ def _admin_only_pass2(
     return Pass2Assessment(
         document_type=SemanticDocumentType.BID_NOTICE,
         classification=CsoClassification.O,
-        administrative_statuses=(
-            AdministrativeStatusFinding(
-                status=status,
-                evidence_spans=(
-                    EvidenceSpan(block_id="generated-admin", quote=phrase),
-                ),
-                rationale="기안 후 검토를 거쳐 최종 승인할 예정이므로 결재가 완료되지 않았다.",
-            ),
-        ),
         rationale="법적 비공개 조항 근거는 없고 행정상태만 확인된다.",
     )
 
@@ -680,20 +670,26 @@ def test_admin_only_status_is_written_naturally_by_p1_and_graded_as_effective_s(
     )
     assert result.pass2_assessment is not None
     assert result.pass2_assessment.classification == CsoClassification.O
-    assert (
-        result.pass2_assessment.effective_classification
-        == CsoClassification.S
-    )
+    from rd2.source_generation.contracts import effective_classification
+    assert effective_classification(
+        result.pass2_assessment.classification,
+        _admin_only_target().administrative_statuses,
+    ) == CsoClassification.S
     assert result.comparison is not None
     assert result.comparison.classification_match is True
     assert result.comparison.clause_match is True
-    assert result.comparison.administrative_status_match is True
     assert '"semantic_condition":"담당자 기안 완료' in gateway.calls[0]["user_prompt"]
     assert '"required_phrase"' not in gateway.calls[0]["user_prompt"]
-    assert "administrative_statuses" not in gateway.calls[1]["user_prompt"]
 
 
-def test_p1_without_fixed_status_phrase_reaches_p2_and_p2_mismatch_is_recorded():
+def test_admin_only_target_no_longer_depends_on_p2_detecting_the_status():
+    """행정상태는 선언값이라 P2가 못 찾아도 라벨이 흔들리지 않는다.
+
+    이전에는 P2가 본문에서 상태를 탐지해야 effective S가 됐고, 실측에서
+    9건 중 4건만 맞았다. 이제 PDF 렌더러가 결재란으로 상태를 구성해 넣고
+    라벨은 생성계획이 못 박으므로, 상태 탐지 실패라는 개념 자체가 없다.
+    """
+
     gateway = FakeGateway(
         [
             _admin_only_pass1(
@@ -702,7 +698,7 @@ def test_p1_without_fixed_status_phrase_reaches_p2_and_p2_mismatch_is_recorded()
             Pass2Assessment(
                 document_type=SemanticDocumentType.BID_NOTICE,
                 classification=CsoClassification.O,
-                rationale="행정상태를 판단할 근거가 충분하지 않다.",
+                rationale="법적 비공개 근거는 없다.",
             ),
         ]
     )
@@ -723,8 +719,10 @@ def test_p1_without_fixed_status_phrase_reaches_p2_and_p2_mismatch_is_recorded()
 
     assert result.succeeded is True
     assert result.comparison is not None
-    assert result.comparison.administrative_status_match is False
-    assert result.comparison.requires_review is True
+    # P2는 법적 O만 반환했는데도 목표 S와 일치로 집계된다 — 선언된 행정상태가
+    # effective_classification을 S로 만들기 때문이다.
+    assert result.comparison.classification_match is True
+    assert "administrative_status_match" not in type(result.comparison).model_fields
     assert len(gateway.calls) == 2
 
 

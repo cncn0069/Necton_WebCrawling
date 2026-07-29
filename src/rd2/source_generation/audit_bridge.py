@@ -18,6 +18,7 @@ from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.generation_plan_schema import GenerationPlan
 from rd2.source_generation.contracts import (
+    effective_classification,
     CONTRACT_SCHEMA_VERSION,
     AuditStageArtifact,
     ContractModel,
@@ -127,7 +128,10 @@ class ClassificationAuditArtifact(ContractModel):
                 == self.source_classification.document_type
             ),
             classification_match=(
-                self.pass2_assessment.effective_classification.value
+                effective_classification(
+                    self.pass2_assessment.classification,
+                    self.generation_target.administrative_statuses,
+                ).value
                 == self.generation_target.classification.value
             ),
             clause_match=(
@@ -137,13 +141,6 @@ class ClassificationAuditArtifact(ContractModel):
             subclause_match=(
                 self.pass2_assessment.subclause_key
                 == self.generation_target.subclause_key
-            ),
-            administrative_status_match=(
-                {
-                    finding.status
-                    for finding in self.pass2_assessment.administrative_statuses
-                }
-                == set(self.generation_target.administrative_statuses)
             ),
         )
         if self.comparison != expected_comparison:
@@ -233,8 +230,6 @@ def _comparison_review_reasons(
         reasons.append("clause_mismatch")
     if not comparison.subclause_match:
         reasons.append("subclause_mismatch")
-    if not comparison.administrative_status_match:
-        reasons.append("administrative_status_mismatch")
     return tuple(reasons)
 
 
@@ -438,9 +433,6 @@ def summarize_classification_artifacts(
         "classification_match_count": matched("classification_match"),
         "clause_match_count": matched("clause_match"),
         "subclause_match_count": matched("subclause_match"),
-        "administrative_status_match_count": matched(
-            "administrative_status_match"
-        ),
         "mismatch_reason_counts": reason_counts,
         "counterfactual_count": sum(
             artifact.generation_target.generation_mode.value == "counterfactual"

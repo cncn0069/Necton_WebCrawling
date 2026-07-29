@@ -17,7 +17,6 @@ from rd2.source_generation.classification_taxonomy import (
     SubclauseKey,
 )
 from rd2.source_generation.contracts import (
-    AdministrativeStatusFinding,
     EvidenceSpan,
     GeneratedDocumentIR,
     GenerationMode,
@@ -88,26 +87,36 @@ def test_legal_and_administrative_targets_can_overlap():
     assert target.administrative_statuses == (AdminStatus.APPROVAL_PENDING,)
 
 
-def test_pass2_legal_o_plus_admin_status_computes_effective_s():
-    phrase = "결재 진행 중"
-    assessment = Pass2Assessment(
+def test_declared_status_makes_effective_classification_s_without_p2_detection():
+    """행정상태는 P2가 찾아내는 대상이 아니라 생성계획이 못 박는 메타데이터다.
+
+    PDF 렌더러가 결재란을 강제로 그려 그 상태를 문서에 구성해 넣으므로,
+    라벨은 판정이 아니라 구성으로 보장된다.
+    """
+
+    from rd2.source_generation.contracts import effective_classification
+
+    legal_only = Pass2Assessment(
         document_type=SemanticDocumentType.REPORT,
         classification=CsoClassification.O,
-        administrative_statuses=(
-            AdministrativeStatusFinding(
-                status=AdminStatus.APPROVAL_PENDING,
-                evidence_spans=(
-                    EvidenceSpan(block_id="g1", quote=phrase),
-                ),
-                rationale="결재가 완료되지 않은 상태가 본문에 명시됐다.",
-            ),
-        ),
-        rationale="정보공개법 조항 근거는 없고 행정상태만 확인된다.",
+        rationale="정보공개법 조항 근거는 없다.",
     )
 
-    assert assessment.classification == CsoClassification.O
-    assert assessment.clause_no is None
-    assert assessment.effective_classification == CsoClassification.S
+    assert legal_only.classification == CsoClassification.O
+    assert legal_only.clause_no is None
+    # P2는 행정상태를 판정하지 않는다 — 계약에서 아예 사라졌다.
+    assert "administrative_statuses" not in Pass2Assessment.model_fields
+
+    # 선언된 상태가 있으면 최종 민감도는 S다.
+    assert effective_classification(
+        legal_only.classification, (AdminStatus.APPROVAL_PENDING,)
+    ) == CsoClassification.S
+    # 없으면 법적 판정 그대로다.
+    assert effective_classification(legal_only.classification, ()) == CsoClassification.O
+    # 법적 C는 행정상태와 무관하게 C를 유지한다.
+    assert effective_classification(
+        CsoClassification.C, (AdminStatus.DRAFT,)
+    ) == CsoClassification.C
 
 
 def test_reference_date_is_passed_to_the_model_for_not_yet_due_statuses():

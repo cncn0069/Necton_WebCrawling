@@ -96,7 +96,7 @@ def test_prompt_bundle_gives_p1_and_p2_the_same_taxonomy_without_route_leakage()
     assert "O source + contextual_anchor_only +" in pass1_system
     assert "generation_mode=counterfactual 조합이다" in pass1_system
     assert "C/S source + direct_legal_evidence +" in pass1_system
-    assert "administrative_statuses가" in pass1_system
+    assert "행정상태는 문서 서식" in pass1_system
     assert "legal clause를 새로 붙이거나 anchored로" in pass1_system
     assert "GeneratedDocumentIR만" in pass1_system
     assert "목표 classification·clause·subclause를 판단" in pass1_system
@@ -180,10 +180,6 @@ def test_prompts_require_semantic_p1_status_context_and_independent_p2_grading()
     pass1_system = bundle.definition("pass1").system_prompt
     pass2_system = bundle.definition("pass2").system_prompt
 
-    assert "상황과 문맥으로 드러낸다" in pass1_system
-    assert "상태명이나 정답용 고정 문구를 억지로 삽입" in pass1_system
-    assert "행정상태 taxonomy" in pass2_system
-    assert "결재진행중: 담당자 기안 완료" in pass2_system
-    assert "상태명이 직접 쓰이지 않았더라도" in pass2_system
-    assert "법적 classification이 O여도" in pass2_system
-    assert "effective_classification" in pass2_system
+    # 행정상태는 선언 메타데이터이므로 P2는 판정하지 않는다.
+    assert "administrative_status" not in pass2_system
+    assert "행정상태 taxonomy" not in pass2_system

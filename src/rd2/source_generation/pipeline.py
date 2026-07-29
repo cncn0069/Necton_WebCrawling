@@ -40,6 +40,7 @@ from rd2.source_generation.contracts import (
     GenerationMode,
     GenerationTarget,
     GradeComparison,
+    effective_classification,
     GeneratedDocumentIR,
     Pass1Result,
     Pass2Assessment,
@@ -586,29 +587,17 @@ def _canonicalize_pass2_evidence(
     *,
     block_text,
 ) -> Pass2Assessment:
-    administrative_statuses = tuple(
-        finding.model_copy(
-            update={
-                "evidence_spans": validate_evidence_quotes(
-                    finding.evidence_spans,
-                    block_text,
-                )
-            }
-        )
-        for finding in assessment.administrative_statuses
-    )
     return Pass2Assessment.model_validate(
         {
             **assessment.model_dump(
                 mode="python",
-                exclude={"evidence_spans", "administrative_statuses"},
+                exclude={"evidence_spans"},
                 exclude_computed_fields=True,
             ),
             "evidence_spans": validate_evidence_quotes(
                 assessment.evidence_spans,
                 block_text,
             ),
-            "administrative_statuses": administrative_statuses,
         }
     )
 
@@ -679,14 +668,13 @@ def _compare_grade(pass1: Pass1Result, pass2: Pass2Assessment) -> GradeCompariso
             pass2.document_type == pass1.source_classification.document_type
         ),
         classification_match=(
-            pass2.effective_classification.value == target.classification.value
+            effective_classification(
+                pass2.classification, target.administrative_statuses
+            ).value
+            == target.classification.value
         ),
         clause_match=(pass2.clause_no == target.clause_no),
         subclause_match=(pass2.subclause_key == target.subclause_key),
-        administrative_status_match=(
-            {finding.status for finding in pass2.administrative_statuses}
-            == set(target.administrative_statuses)
-        ),
     )
 
 

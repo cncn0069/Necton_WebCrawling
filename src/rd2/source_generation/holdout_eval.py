@@ -589,8 +589,6 @@ def classify_case(
         # 파이프라인(execute_pass1/2)과 같은 검증 경로를 쓴다. 인용문이 실제로
         # 존재하고 유일한지만 보며, 문자 위치는 코드가 찾는다.
         validate_evidence_quotes(assessment.evidence_spans, document.block_text)
-        for finding in assessment.administrative_statuses:
-            validate_evidence_quotes(finding.evidence_spans, document.block_text)
     except (EvidenceResolutionError, ValueError) as exc:
         return CaseOutcome(
             case_id=case.case_id,

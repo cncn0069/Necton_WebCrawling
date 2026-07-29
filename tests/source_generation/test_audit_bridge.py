@@ -42,7 +42,6 @@ from rd2.source_generation.classification_taxonomy import (
 )
 from rd2.source_generation.contracts import (
     AssessmentScope,
-    AdministrativeStatusFinding,
     CallReceipt,
     DocumentPipelineResult,
     DocumentSelection,
@@ -395,15 +394,6 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
     pass2 = Pass2Assessment(
         document_type=SemanticDocumentType.BID_NOTICE,
         classification=CsoClassification.O,
-        administrative_statuses=(
-            AdministrativeStatusFinding(
-                status=AdminStatus.APPROVAL_PENDING,
-                evidence_spans=(
-                    EvidenceSpan(block_id="generated-admin", quote=phrase),
-                ),
-                rationale="결재 진행 상태가 직접 명시됐다.",
-            ),
-        ),
         rationale="법적 조항은 없고 행정상태만 있다.",
     )
     pipeline_result = DocumentPipelineResult(
@@ -425,7 +415,6 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
             classification_match=True,
             clause_match=True,
             subclause_match=True,
-            administrative_status_match=True,
         ),
     )
 
@@ -440,10 +429,12 @@ def test_bridge_supports_admin_only_s_with_empty_legal_labels():
     assert row.cso_subclause_key == ""
     assert row.document_status == AdminStatus.APPROVAL_PENDING.value
     assert artifact.pass2_assessment.classification == CsoClassification.O
-    assert (
-        artifact.pass2_assessment.effective_classification
-        == CsoClassification.S
-    )
+    # 행정상태는 선언값이므로 최종 민감도는 코드가 합쳐 계산한다.
+    from rd2.source_generation.contracts import effective_classification
+    assert effective_classification(
+        artifact.pass2_assessment.classification,
+        artifact.generation_target.administrative_statuses,
+    ) == CsoClassification.S
     assert artifact.requires_review is False
 
 

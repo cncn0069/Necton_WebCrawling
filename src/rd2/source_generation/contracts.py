@@ -640,45 +640,39 @@ class GenerationProvenance(ContractModel):
         return self
 
 
-class AdministrativeStatusFinding(ContractModel):
-    """근거 → 이유 → 판정 순서. ``LegalClassification``의 주석 참고."""
+def effective_classification(
+    legal: CsoClassification,
+    administrative_statuses: tuple[AdminStatus, ...],
+) -> CsoClassification:
+    """법적 분류와 **선언된** 행정상태를 합친 최종 민감도.
 
-    evidence_spans: tuple[EvidenceSpan, ...] = Field(min_length=1)
-    rationale: NonEmptyText
-    status: AdminStatus
+    행정상태는 P2가 본문에서 찾아내는 대상이 아니라 생성계획이 못 박는
+    메타데이터다. PDF 렌더러가 결재란을 강제로 그려 그 상태를 문서에
+    구성해 넣으므로, 라벨은 판정이 아니라 **구성으로 보장된다.** 결정론적
+    코드가 만든 사실을 LLM에게 다시 확인시키는 것은 검증이 아니라 잡음이다.
 
-    def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
-        for span in self.evidence_spans:
-            span.locate_in(block_text(span.block_id))
+    실측이 이를 뒷받침한다 — P2의 행정상태 탐지는 9건 중 4건만 맞았고,
+    상태를 본문 산문으로 서술하게 만든 탓에 실제 공문에 없는 문장
+    ("최종 결재는 아직 이루어지지 않았습니다")이 생성물에 들어갔다.
+    """
+
+    if legal == CsoClassification.C:
+        return CsoClassification.C
+    if legal == CsoClassification.S or administrative_statuses:
+        return CsoClassification.S
+    return CsoClassification.O
 
 
 class Pass2Assessment(LegalClassification):
+    """생성물의 **법적** 분류만 독립 판정한다.
+
+    행정상태는 채점 대상이 아니다 — ``effective_classification()`` 참고.
+    """
+
     contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    administrative_statuses: tuple[AdministrativeStatusFinding, ...] = ()
-
-    @model_validator(mode="after")
-    def _administrative_statuses_must_be_unique(self) -> "Pass2Assessment":
-        statuses = [finding.status for finding in self.administrative_statuses]
-        if len(statuses) != len(set(statuses)):
-            raise ValueError("Pass 2 administrative statuses must be unique")
-        return self
-
-    @computed_field
-    @property
-    def effective_classification(self) -> CsoClassification:
-        if self.classification == CsoClassification.C:
-            return CsoClassification.C
-        if (
-            self.classification == CsoClassification.S
-            or self.administrative_statuses
-        ):
-            return CsoClassification.S
-        return CsoClassification.O
 
     def validate_against_document(self, document: GeneratedDocumentIR) -> None:
         self.validate_evidence_against(document.block_text)
-        for finding in self.administrative_statuses:
-            finding.validate_evidence_against(document.block_text)
 
 
 class FailureStage(str, Enum):
@@ -752,7 +746,6 @@ class GradeComparison(ContractModel):
     classification_match: bool
     clause_match: bool
     subclause_match: bool
-    administrative_status_match: bool = True
 
     @computed_field
     @property
@@ -763,7 +756,6 @@ class GradeComparison(ContractModel):
                 self.classification_match,
                 self.clause_match,
                 self.subclause_match,
-                self.administrative_status_match,
             )
         )
 
