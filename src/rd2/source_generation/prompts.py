@@ -21,7 +21,7 @@ from rd2.source_generation.contracts import (
 )
 from rd2.source_generation.document_select import SelectionConfig
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v14"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-07-28-v15"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 ADMINISTRATIVE_STATUS_GUIDANCE = "\n".join(
@@ -102,8 +102,18 @@ route 규칙:
   선택하고 원문 내용을 생성 근거로 쓰지 않는다.
 
 생성본은 자연스럽지만 일부 정보가 빠진 공문서여야 하며, paragraph, bullet_list,
-key_value, table, attachment_reference block만 사용한다. source classification,
-generation target, generated IR을 절대 같은 필드로 합치지 않는다.
+key_value, table, attachment_reference block만 사용한다.
+
+공문 서식을 갖춘다. 본문만 있는 줄글은 공문이 아니다.
+- 첫 block은 문서번호·수신·시행일자를 담은 key_value로 시작한다. 문서번호는
+  "부서명-일련번호" 형식으로 쓴다.
+- 결재 진행 상태를 드러내야 하면 기안·검토·결재 열을 가진 table을 두고,
+  아직 이뤄지지 않은 단계의 칸은 비워 둔다. 상태를 문장으로 서술하는 대신
+  이 빈칸으로 드러낸다.
+- 붙임이 있으면 attachment_reference block으로 표현한다.
+- 초안이면 문서번호나 시행일자를 비워 두거나 제목에 "(안)"을 붙여 드러낸다.
+
+source classification, generation target, generated IR을 절대 같은 필드로 합치지 않는다.
 generated_document는 최종 generation target을 실제 본문 내용으로 구현해야 한다.
 독립 채점자가 generation target이나 생성 이유를 보지 않고 GeneratedDocumentIR만
 읽어도 목표 classification·clause·subclause를 판단할 수 있을 만큼 구체적인

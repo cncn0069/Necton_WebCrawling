@@ -53,6 +53,7 @@ from rd2.source_generation.contracts import (  # noqa: E402
     SourceDocumentSnapshot,
     TargetClassification,
 )
+from rd2.source_generation.document_form import check_document_form  # noqa: E402
 from rd2.source_generation.document_select import (  # noqa: E402
     SelectionConfig,
     prepare_document_selection,
@@ -269,6 +270,11 @@ def _record(row, target, result, snapshot) -> dict:
                 "generated_body": pass1.generated_document.body_text,
             }
         )
+        form = check_document_form(pass1.generated_document, pass1.generation_target)
+        record["form_has_header"] = form.has_header
+        record["form_has_approval"] = form.has_approval_block
+        record["form_has_attachment"] = form.has_attachment_block
+        record["form_missing"] = list(form.missing)
     if pass2 is not None:
         record.update(
             {
