@@ -1,0 +1,10 @@
+{% macro approval_stamp(signer) -%}
+  {% if signer.stamp_data_uri %}
+  <img
+    class="approval-stamp stamp-shape-{{ signer.stamp_shape }} placement-{{ signer.stamp_placement.mode }}"
+    src="{{ signer.stamp_data_uri }}"
+    alt="{{ signer.stamp_alt }}"
+    style="left: {{ signer.stamp_placement.left_percent }}%; top: {{ signer.stamp_placement.top_percent }}%;"
+  >
+  {% endif %}
+{%- endmacro %}

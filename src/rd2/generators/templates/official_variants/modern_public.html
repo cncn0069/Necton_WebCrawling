@@ -1,0 +1,80 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-modular{% endblock %}
+{% block document %}
+<main class="page modular-page">
+  <header class="modular-header">
+    <div class="modular-mark"><span></span><span></span><span></span></div>
+    <div class="modular-brand">
+      <p>{{ slogan }}</p>
+      <h1>{{ agency_name }}</h1>
+    </div>
+    <div class="modular-code"><strong>{{ emblem }}</strong><span>{{ brand_note }}</span></div>
+  </header>
+
+  <section class="modular-title">
+    <span>06</span>
+    <div><small>PUBLIC DOCUMENT · {{ issue_date }}</small><h2>{{ title }}</h2></div>
+  </section>
+
+  <section class="modular-routing">
+    <div><span>수신</span><strong>{{ recipient }}</strong></div>
+    <div><span>경유</span><strong>{{ via }}</strong></div>
+    <div><span>문서</span><strong>{{ document_number }}</strong></div>
+    <div><span>공개</span><strong>{{ disclosure }}</strong></div>
+  </section>
+
+  <p class="modular-lead">{{ intro }}</p>
+
+  <section class="modular-grid">
+    <div class="modular-sections">
+      {% for section in sections %}
+      <article>
+        <b>{{ loop.index }}</b>
+        <div>
+          <h3>{{ section.text }}</h3>
+          {% if section["items"] %}
+          <ul>{% for item in section["items"] %}<li><span>{{ item.label }}.</span>{{ item.text }}</li>{% endfor %}</ul>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    <aside class="modular-facts">
+      <h3>{{ details_heading }}</h3>
+      <dl>{% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}</dl>
+    </aside>
+  </section>
+
+  <section class="modular-table-card">
+    <h3>{{ table_heading }}</h3>
+    <table>
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+  </section>
+
+  <section class="modular-ending">
+    <div class="modular-attachments">
+      <span>붙임</span>
+      <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    </div>
+    <div class="modular-issuer">
+      <small>발신</small><strong>{{ issuer_title }}</strong><p>{{ copy_recipients }}</p>
+    </div>
+  </section>
+
+  <section class="modular-signers">
+    {% for signer in signers %}
+    <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><small>{{ signer.role }}</small><strong>{{ signer.name }}</strong>{% if signer.date %}<span>{{ signer.date }}</span>{% endif %}{{ approval_stamp(signer) }}</div>
+    {% endfor %}
+  </section>
+
+  <footer class="modular-footer">
+    <div><strong>{{ postal_code }}</strong><span>{{ address }}</span></div>
+    <div><strong>CONTACT</strong><span>{{ phone }} / {{ fax }}</span></div>
+    <div><strong>ONLINE</strong><span>{{ email }} / {{ website }}</span></div>
+  </footer>
+</main>
+{% endblock %}

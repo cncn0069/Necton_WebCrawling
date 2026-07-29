@@ -1,0 +1,77 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-table-report{% endblock %}
+{% block document %}
+<main class="page table-report-page">
+  <header class="table-report-header">
+    <div class="table-report-brand">
+      <span>{{ emblem }}</span>
+      <div><p>{{ slogan }}</p><h1>{{ agency_name }}</h1></div>
+    </div>
+    <div class="table-report-doc">
+      <small>{{ document_kind_label }}</small>
+      <strong>{{ document_number }}</strong>
+      <span>{{ issue_date }}</span>
+    </div>
+  </header>
+
+  <section class="table-report-title">
+    <p>{{ document_kicker }}</p>
+    <h2>{{ title }}</h2>
+    <dl>
+      <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+      <div><dt>경유</dt><dd>{{ via }}</dd></div>
+      <div><dt>공개</dt><dd>{{ disclosure }}</dd></div>
+    </dl>
+  </section>
+
+  <p class="table-report-intro">{{ intro }}</p>
+
+  <section class="table-report-primary">
+    <div class="table-report-caption"><strong>01</strong><span>{{ table_heading }}</span></div>
+    <table>
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+  </section>
+
+  <dl class="table-report-summary">
+    {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+  </dl>
+
+  <section class="table-report-notes">
+    <div class="table-report-caption"><strong>02</strong><span>{{ secondary_heading }}</span></div>
+    {% for section in sections %}
+    <article>
+      <b>{{ "%02d"|format(loop.index) }}</b>
+      <div>
+        <h3>{{ section.text }}</h3>
+        {% if section["items"] %}
+        <ul>{% for item in section["items"] %}<li><span>{{ item.label }}</span>{{ item.text }}</li>{% endfor %}</ul>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="table-report-ending">
+    <div>
+      <strong>붙임</strong>
+      <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    </div>
+    <div><small>발신</small><strong>{{ issuer_title }}</strong><p>{{ copy_recipients }}</p></div>
+  </section>
+
+  <section class="table-report-signers">
+    {% for signer in signers %}
+    <div class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}"><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong>{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</div>
+    {% endfor %}
+  </section>
+
+  <footer class="table-report-footer">
+    <span>{{ address }} · 우 {{ postal_code }}</span>
+    <span>{{ phone }} · {{ email }}</span>
+    <span>{{ website }}</span>
+  </footer>
+</main>
+{% endblock %}

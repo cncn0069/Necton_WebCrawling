@@ -1,0 +1,77 @@
+{% extends "official_variants/base.html" %}
+{% from "official_variants/_approval.html" import approval_stamp %}
+{% block body_class %}theme-monochrome{% endblock %}
+{% block document %}
+<main class="page monochrome-page">
+  <header class="monochrome-header">
+    <div>
+      <p>{{ slogan }}</p>
+      <h1>{{ agency_name }}</h1>
+    </div>
+    <dl>
+      <div><dt>문서번호</dt><dd>{{ document_number }}</dd></div>
+      <div><dt>시행일자</dt><dd>{{ issue_date }}</dd></div>
+      <div><dt>공개구분</dt><dd>{{ disclosure }}</dd></div>
+    </dl>
+  </header>
+
+  <section class="monochrome-routing">
+    <dl>
+      <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+      <div><dt>경유</dt><dd>{{ via }}</dd></div>
+    </dl>
+  </section>
+
+  <h2 class="monochrome-title">{{ title }}</h2>
+
+  <section class="monochrome-body">
+    <p class="monochrome-intro">{{ intro }}</p>
+    <ol class="monochrome-sections">
+      {% for section in sections %}
+      <li>
+        <p>{{ section.text }}</p>
+        {% if section["items"] %}
+        <ol>
+          {% for item in section["items"] %}<li><b>{{ item.label }}.</b><span>{{ item.text }}</span></li>{% endfor %}
+        </ol>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    <dl class="monochrome-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+
+    <table class="monochrome-table">
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+
+    <div class="monochrome-attachments">
+      <strong>붙임</strong>
+      <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    </div>
+  </section>
+
+  <section class="monochrome-issuer">
+    <strong>{{ issuer_title }}</strong>
+    <span>직인생략</span>
+  </section>
+
+  <section class="monochrome-approval">
+    <p><strong>수신자</strong>{{ copy_recipients }}</p>
+    <table>
+      <tbody>
+        <tr>{% for signer in signers %}<th>{{ signer.role }}</th>{% endfor %}</tr>
+        <tr>{% for signer in signers %}<td class="signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}">{{ signer.name }}{% if signer.date %}<small>{{ signer.date }}</small>{% endif %}{{ approval_stamp(signer) }}</td>{% endfor %}</tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="monochrome-footer">
+    <div><span>우 {{ postal_code }} {{ address }}</span><span>{{ website }}</span></div>
+    <div><span>전화 {{ phone }}</span><span>팩스 {{ fax }}</span><span>{{ email }}</span></div>
+  </footer>
+</main>
+{% endblock %}
