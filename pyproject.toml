@@ -36,7 +36,11 @@ testpaths = ["tests"]
     "templates/*.css",
     "templates/bodies/*.html",
     "templates/layouts/*.html",
+    "templates/official_variants/*.css",
+    "templates/official_variants/*.html",
     "templates/partials/*.html",
     "assets/fonts/*.ttf",
     "assets/fonts/LICENSE",
+    "assets/fonts/handwriting/*.ttf",
+    "assets/fonts/handwriting/LICENSE",
 ]

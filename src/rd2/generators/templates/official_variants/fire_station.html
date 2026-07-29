@@ -1,0 +1,75 @@
+{% extends "official_variants/base.html" %}
+{% block body_class %}theme-banner{% endblock %}
+{% block document %}
+<main class="page banner-page">
+  <header class="banner-hero">
+    <div class="banner-kicker">
+      <span class="banner-emblem">{{ emblem }}</span>
+      <p>{{ slogan }}</p>
+    </div>
+    <div class="banner-heading">
+      <small>OFFICIAL BRIEF · {{ issue_date }}</small>
+      <h1>{{ title }}</h1>
+    </div>
+    <div class="banner-agency">
+      <strong>{{ agency_name }}</strong>
+      <span>{{ brand_note }}</span>
+    </div>
+  </header>
+
+  <section class="banner-routing">
+    <div><span>TO</span><strong>{{ recipient }}</strong></div>
+    <div><span>VIA</span><strong>{{ via }}</strong></div>
+    <div><span>NO.</span><strong>{{ document_number }}</strong></div>
+  </section>
+
+  <p class="banner-lead">{{ intro }}</p>
+
+  <section class="banner-content">
+    <div class="banner-main">
+      {% for section in sections %}
+      <article class="banner-section">
+        <span class="banner-number">0{{ loop.index }}</span>
+        <div>
+          <h2>{{ section.text }}</h2>
+          {% if section["items"] %}
+          <ul>{% for item in section["items"] %}<li><b>{{ item.label }}</b>{{ item.text }}</li>{% endfor %}</ul>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    <aside class="banner-aside">
+      <h2>{{ details_heading }}</h2>
+      <dl>{% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}</dl>
+      <h2>붙임 문서</h2>
+      <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    </aside>
+  </section>
+
+  <table class="banner-table">
+    <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table>
+
+  <section class="banner-signoff">
+    <div>
+      <small>발신</small>
+      <strong>{{ issuer_title }}</strong>
+      <p>{{ copy_recipients }}</p>
+    </div>
+    <div class="banner-signers">
+      {% for signer in signers %}
+      <div><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong><small>{{ signer.date or " " }}</small></div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <footer class="banner-footer">
+    <span>{{ address }} · {{ postal_code }}</span>
+    <span>{{ phone }} · {{ fax }}</span>
+    <span>{{ email }} · {{ website }} · {{ disclosure }}</span>
+  </footer>
+</main>
+{% endblock %}

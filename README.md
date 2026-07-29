@@ -41,6 +41,38 @@ python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 실행해도 된다. HWPX 표 셀 문단 보존 로직이 파서 내부 API에 의존하므로
 `hwp-hwpx-parser`는 두 설치 방식 모두 `1.0.0`으로 고정한다.
 
+### 구조화 생성 문서 렌더링
+
+`result.generated_document`에 `paragraph`, `key_value`, `bullet_list`,
+`table` blocks가 들어 있는 계약 JSON은 공문 템플릿 10종으로 바로 렌더링할 수 있다.
+JSON 배열과 JSONL 배치 입력도 지원한다.
+
+```bash
+python scripts/render_generated_documents.py input.json \
+  --output-dir output/pdf/generated_documents \
+  --per-template 3
+```
+
+기본값은 10종 전체이며 `--template 01_classic_municipal`처럼 일부 템플릿만
+반복 지정할 수 있다. 입력의 `failure`가 `null`이 아니면 렌더링하지 않는다.
+실패 결과를 조사 목적으로 출력할 때만 `--allow-failed-input`을 명시한다.
+
+파이프라인은 `blocks`를 내용의 기준으로 사용하고, `body_text`가 함께 있으면
+blocks를 평탄화한 결과와 같은지 먼저 검사한다. 두 값이 다르거나 PDF에서 원문
+문장·키·값·표 셀이 하나라도 누락되면 해당 출력을 거부한다. 각 문서 폴더의
+`manifest.json`에는 입력 해시, 요청/응답 ID, 변주 seed와 PDF 경로가 기록된다.
+
+`generated_document.agency_name`이 있으면 입력 기관명을 그대로 보존하고 실제
+로고를 추측하지 않는다. 기관명이 없으면 경찰서·소방서처럼 본문과 의미 충돌이
+생길 수 있는 기관을 전체 300개 풀에서 무작위로 고르지 않고, 범용 공공기관
+25개 하위 풀에서만 seed 기반으로 선택한다. 한 문서의 여러 레이아웃은 같은
+기관명을 유지하며 템플릿은 기관 선택에 영향을 주지 않는다.
+`manifest.json`의 `identity.agency_pool_index`, `organization_category`,
+`selection_category`, `agency_seed`로 분포를 감사할 수 있다.
+
+10종 템플릿은 실제 공문 예시처럼 흑백·회색 중심의 인쇄 톤을 공유한다. 색상
+테마 대신 여백, 구획선, 제목 정렬, 표와 본문 배치로 레이아웃을 변주한다.
+
 ### gstack browse 바이너리 (별도 설치 — pip으로 설치되지 않음)
 
 `src/rd2/adapters/browse_client.py`가 서브프로세스로 호출하는 헤드리스 브라우저 CLI.

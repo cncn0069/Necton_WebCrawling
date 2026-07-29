@@ -1,0 +1,78 @@
+{% extends "official_variants/base.html" %}
+{% block body_class %}theme-proclamation{% endblock %}
+{% block document %}
+<main class="page proclamation-page">
+  <div class="proclamation-frame">
+    <header class="proclamation-header">
+      <p>{{ slogan }}</p>
+      <div class="proclamation-brand">
+        <span></span>
+        <strong>{{ emblem }}</strong>
+        <span></span>
+      </div>
+      <h1>{{ agency_name }}</h1>
+      <small>{{ brand_note }}</small>
+    </header>
+
+    <section class="proclamation-routing">
+      <span>{{ recipient }}</span>
+      <span>{{ via }}</span>
+      <span>{{ document_number }} · {{ issue_date }}</span>
+    </section>
+
+    <section class="proclamation-title">
+      <small>공 문</small>
+      <h2>{{ title }}</h2>
+      <div></div>
+    </section>
+
+    <p class="proclamation-intro">{{ intro }}</p>
+
+    <section class="proclamation-body">
+      {% for section in sections %}
+      <article>
+        <span>{{ "%02d"|format(loop.index) }}</span>
+        <div>
+          <h3>{{ section.text }}</h3>
+          {% if section["items"] %}
+          <ul>{% for item in section["items"] %}<li><b>{{ item.label }}.</b> {{ item.text }}</li>{% endfor %}</ul>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+
+    <dl class="proclamation-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+
+    <table class="proclamation-table">
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+
+    <section class="proclamation-ending">
+      <div class="proclamation-attachments">
+        <strong>붙임</strong>
+        <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+      </div>
+      <div class="proclamation-issuer">
+        <h2>{{ issuer_title }}</h2>
+        <p>{{ copy_recipients }}</p>
+      </div>
+    </section>
+
+    <section class="proclamation-signers">
+      {% for signer in signers %}
+      <div><small>{{ signer.role }}</small><strong>{{ signer.name }}</strong><span>{{ signer.date or "서명" }}</span></div>
+      {% endfor %}
+    </section>
+
+    <footer class="proclamation-footer">
+      <span>우 {{ postal_code }} {{ address }}</span>
+      <span>{{ phone }} · {{ fax }} · {{ email }}</span>
+      <span>{{ website }} · {{ disclosure }}</span>
+    </footer>
+  </div>
+</main>
+{% endblock %}

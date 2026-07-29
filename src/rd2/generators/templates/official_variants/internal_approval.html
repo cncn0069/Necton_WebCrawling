@@ -1,0 +1,76 @@
+{% extends "official_variants/base.html" %}
+{% block body_class %}theme-approval{% endblock %}
+{% block document %}
+<main class="page approval-page">
+  <header class="approval-header">
+    <div class="approval-brand">
+      <span>{{ emblem }}</span>
+      <div><p>{{ slogan }}</p><h1>{{ agency_name }}</h1></div>
+    </div>
+    <table class="approval-matrix">
+      <thead><tr>{% for signer in signers %}<th>{{ signer.role }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        <tr>{% for signer in signers %}<td class="approval-sign-space"></td>{% endfor %}</tr>
+        <tr>{% for signer in signers %}<td><strong>{{ signer.name }}</strong><small>{{ signer.date }}</small></td>{% endfor %}</tr>
+      </tbody>
+    </table>
+  </header>
+
+  <section class="approval-meta">
+    <dl>
+      <div><dt>문서번호</dt><dd>{{ document_number }}</dd></div>
+      <div><dt>시행일자</dt><dd>{{ issue_date }}</dd></div>
+      <div><dt>공개구분</dt><dd>{{ disclosure }}</dd></div>
+      <div><dt>수신</dt><dd>{{ recipient }}</dd></div>
+      <div><dt>경유</dt><dd>{{ via }}</dd></div>
+      <div><dt>브랜드</dt><dd>{{ brand_note }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="approval-title">
+    <small>{{ document_kind_label }}</small>
+    <h2>{{ title }}</h2>
+    <p>{{ intro }}</p>
+  </section>
+
+  <section class="approval-body">
+    {% for section in sections %}
+    <article>
+      <span>{{ loop.index }}</span>
+      <div>
+        <h3>{{ section.text }}</h3>
+        {% if section["items"] %}
+        <dl>{% for item in section["items"] %}<div><dt>{{ item.label }}.</dt><dd>{{ item.text }}</dd></div>{% endfor %}</dl>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="approval-data">
+    <dl class="approval-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+    <table class="approval-table">
+      <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+  </section>
+
+  <section class="approval-attachments">
+    <h3>첨부 문서</h3>
+    <ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol>
+    <div><small>발신 명의</small><strong>{{ issuer_title }}</strong></div>
+  </section>
+
+  <section class="approval-recipients">
+    <strong>수신자</strong><span>{{ copy_recipients }}</span>
+  </section>
+
+  <footer class="approval-footer">
+    <div><strong>{{ agency_name }}</strong><span>{{ address }}</span></div>
+    <div><span>{{ phone }}</span><span>{{ fax }}</span><span>{{ email }}</span></div>
+    <div><span>{{ website }}</span><span>우 {{ postal_code }}</span></div>
+  </footer>
+</main>
+{% endblock %}

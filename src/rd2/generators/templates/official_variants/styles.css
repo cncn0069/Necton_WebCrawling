@@ -1,0 +1,1100 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "Nanum Hand";
+  src: url("../../assets/fonts/handwriting/NanumDaJinCe.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Nanum Bareun";
+  src: url("../../assets/fonts/handwriting/NanumBaReunJeongSin.ttf") format("truetype");
+}
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  color: #171717;
+  font-family: "Noto Sans KR", sans-serif;
+  print-color-adjust: exact;
+}
+.page {
+  height: 297mm;
+  overflow: hidden;
+  position: relative;
+  width: 210mm;
+}
+
+/* 1. 전통 공문: 중앙 기관명 + 단일 본문 + 하단 결재선 */
+.classic-page {
+  display: flex;
+  flex-direction: column;
+  padding: 17mm 17mm 10mm;
+}
+.classic-masthead {
+  align-items: center;
+  display: grid;
+  grid-template-columns: 32mm 1fr 32mm;
+  min-height: 38mm;
+}
+.classic-emblem {
+  align-items: center;
+  border: .7mm solid #159ca7;
+  border-radius: 50%;
+  color: #087f89;
+  display: flex;
+  font-size: 12pt;
+  font-weight: 700;
+  height: 20mm;
+  justify-content: center;
+  width: 20mm;
+}
+.classic-identity { text-align: center; }
+.classic-identity p { font-size: 8pt; letter-spacing: .8mm; margin: 0 0 3mm; }
+.classic-identity h1 { font-size: 25pt; letter-spacing: 7mm; line-height: 1; margin: 0; }
+.classic-masthead > strong { color: #16808a; font-size: 8pt; text-align: center; }
+.classic-routing dl, .classic-routing dd { margin: 0; }
+.classic-routing dl > div {
+  display: grid;
+  font-size: 11pt;
+  grid-template-columns: 25mm 1fr;
+  min-height: 7mm;
+}
+.classic-routing dt { letter-spacing: 1.2mm; }
+.classic-title { border-bottom: .3mm solid #222; padding-bottom: 2mm; }
+.classic-title dd { font-size: 12pt; font-weight: 700; }
+.classic-body { flex: 1; font-size: 10.3pt; line-height: 1.55; padding-top: 4mm; }
+.classic-intro { margin: 0 0 4mm; }
+.classic-sections { list-style-position: outside; margin: 0 0 3mm; padding-left: 9mm; }
+.classic-sections > li { margin: 0 0 2.2mm; padding-left: 1mm; }
+.classic-sections p { margin: 0; }
+.classic-sections ol { list-style: none; margin: 1mm 0 0; padding: 0 0 0 2mm; }
+.classic-sections ol li { margin: .6mm 0; }
+.classic-sections ol span { display: inline-block; width: 9mm; }
+.classic-facts {
+  border: .25mm solid #666;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 2.5mm 0 3mm;
+}
+.classic-facts div { display: grid; grid-template-columns: 24mm 1fr; }
+.classic-facts div:nth-child(odd) { border-right: .2mm solid #aaa; }
+.classic-facts div:nth-child(n+3) { border-top: .2mm solid #aaa; }
+.classic-facts dt, .classic-facts dd { margin: 0; padding: 1.2mm 2mm; }
+.classic-facts dt { background: #f0f2f3; font-weight: 700; }
+.classic-table { border-collapse: collapse; font-size: 8.8pt; width: 100%; }
+.classic-table th, .classic-table td { border: .2mm solid #777; padding: 1.4mm; text-align: center; }
+.classic-table th { background: #eef1f3; }
+.classic-attachments { display: grid; grid-template-columns: 18mm 1fr; margin-top: 3.5mm; }
+.classic-attachments ol { margin: 0; padding-left: 7mm; }
+.classic-issuer { font-size: 18pt; font-weight: 700; letter-spacing: 4mm; margin: 3mm 0; text-align: center; }
+.classic-approval { font-size: 8pt; }
+.classic-approval p { margin: 0 0 2mm; }
+.classic-approval p strong { display: inline-block; margin-right: 8mm; }
+.classic-approval-rule { border-top: 2.3mm solid #d5d7d8; }
+.classic-signers { display: flex; justify-content: space-between; padding: 1.5mm 0; }
+.classic-signers div { align-items: baseline; display: flex; gap: 2mm; white-space: nowrap; }
+.classic-signers strong { font-size: 9pt; }
+.classic-footer { font-size: 7.7pt; line-height: 1.55; }
+.classic-footer div { display: flex; justify-content: space-between; }
+
+/* 2. 상단 배너: 제목을 헤더 안에 넣고 본문/정보를 2열로 분리 */
+.banner-page {
+  background: #fffdfb;
+  display: flex;
+  flex-direction: column;
+  padding: 0 14mm 9mm;
+}
+.banner-hero {
+  background: #9f2627;
+  color: #fff;
+  display: grid;
+  grid-template-columns: 40mm 1fr 34mm;
+  margin: 0 -14mm;
+  min-height: 53mm;
+  padding: 12mm 14mm 9mm;
+}
+.banner-kicker { border-right: .3mm solid rgba(255,255,255,.55); padding-right: 7mm; }
+.banner-emblem {
+  align-items: center;
+  background: #fff;
+  border-radius: 50%;
+  color: #9f2627;
+  display: flex;
+  font-size: 11pt;
+  font-weight: 700;
+  height: 17mm;
+  justify-content: center;
+  width: 17mm;
+}
+.banner-kicker p { font-size: 7.4pt; line-height: 1.5; margin: 3mm 0 0; }
+.banner-heading { padding: 0 7mm; }
+.banner-heading small { font-size: 7pt; letter-spacing: .6mm; }
+.banner-heading h1 { font-size: 19pt; line-height: 1.3; margin: 3mm 0 0; }
+.banner-agency { align-self: end; text-align: right; }
+.banner-agency strong { display: block; font-size: 13pt; letter-spacing: 1mm; }
+.banner-agency span { display: block; font-size: 7pt; margin-top: 2mm; }
+.banner-routing {
+  background: #f4e7e3;
+  display: grid;
+  grid-template-columns: 1.3fr 1.3fr 1fr;
+  margin: 0 -14mm 5mm;
+  padding: 3mm 14mm;
+}
+.banner-routing div { border-right: .2mm solid #d0aaa3; padding-right: 4mm; }
+.banner-routing div + div { padding-left: 4mm; }
+.banner-routing div:last-child { border: 0; }
+.banner-routing span { color: #8e3432; display: block; font-size: 6.8pt; font-weight: 700; }
+.banner-routing strong { display: block; font-size: 8.6pt; margin-top: .7mm; }
+.banner-lead {
+  border-left: 1.5mm solid #b63331;
+  font-size: 10.3pt;
+  line-height: 1.65;
+  margin: 0 0 5mm;
+  padding: 1.5mm 0 1.5mm 4mm;
+}
+.banner-content { display: grid; gap: 7mm; grid-template-columns: 1fr 53mm; }
+.banner-section { display: grid; grid-template-columns: 13mm 1fr; margin-bottom: 3mm; }
+.banner-number { color: #b63331; font-size: 17pt; font-weight: 700; line-height: 1; }
+.banner-section h2 { font-size: 10pt; margin: 0 0 1.5mm; }
+.banner-section ul { list-style: none; margin: 0; padding: 0; }
+.banner-section li { display: grid; font-size: 8.9pt; grid-template-columns: 8mm 1fr; margin: .7mm 0; }
+.banner-section li b { color: #9f2627; }
+.banner-aside { background: #f2ede8; padding: 4mm; }
+.banner-aside h2 { color: #8e2929; font-size: 8.7pt; margin: 0 0 2mm; }
+.banner-aside dl { margin: 0 0 4mm; }
+.banner-aside dl div { border-bottom: .2mm solid #d2c4bc; padding: 1.3mm 0; }
+.banner-aside dt { font-size: 6.8pt; }
+.banner-aside dd { font-size: 8.3pt; font-weight: 700; margin: .5mm 0 0; }
+.banner-aside ol { font-size: 7.5pt; margin: 0; padding-left: 5mm; }
+.banner-table { border-collapse: collapse; font-size: 8.1pt; margin-top: 3mm; width: 100%; }
+.banner-table th { background: #9f2627; color: #fff; }
+.banner-table th, .banner-table td { border: .2mm solid #b98c84; padding: 1.5mm; text-align: center; }
+.banner-signoff {
+  align-items: stretch;
+  border: .4mm solid #9f2627;
+  display: grid;
+  grid-template-columns: 48mm 1fr;
+  margin-top: auto;
+}
+.banner-signoff > div:first-child { background: #9f2627; color: #fff; padding: 4mm; }
+.banner-signoff > div:first-child small { display: block; font-size: 7pt; }
+.banner-signoff > div:first-child strong { display: block; font-size: 13pt; margin-top: 1mm; }
+.banner-signoff > div:first-child p { font-size: 6.5pt; margin: 2mm 0 0; }
+.banner-signers { display: grid; grid-template-columns: repeat(3, 1fr); }
+.banner-signers div { border-left: .2mm solid #d7b6af; padding: 4mm 2mm; text-align: center; }
+.banner-signers span, .banner-signers small { display: block; font-size: 6.8pt; }
+.banner-signers strong { display: block; font-size: 9.3pt; margin: 1.5mm 0; }
+.banner-footer { display: flex; font-size: 6.6pt; justify-content: space-between; padding-top: 2.5mm; }
+
+/* 3. 결재판: 결재칸을 상단에 두고 문서 정보를 표 형식으로 구성 */
+.approval-page { padding: 8mm 12mm 7mm; }
+.approval-header { align-items: start; display: grid; gap: 8mm; grid-template-columns: 1fr 78mm; }
+.approval-brand { align-items: center; display: flex; gap: 4mm; padding-top: 3mm; }
+.approval-brand > span {
+  align-items: center;
+  background: #126f85;
+  border-radius: 2mm 8mm 2mm 8mm;
+  color: #fff;
+  display: flex;
+  font-size: 9pt;
+  font-weight: 700;
+  height: 18mm;
+  justify-content: center;
+  transform: rotate(-4deg);
+  width: 18mm;
+}
+.approval-brand p { color: #4b6269; font-size: 7pt; margin: 0 0 1.5mm; }
+.approval-brand h1 { font-size: 18pt; letter-spacing: 1mm; margin: 0; }
+.approval-matrix { border-collapse: collapse; font-size: 7pt; text-align: center; width: 100%; }
+.approval-matrix th, .approval-matrix td { border: .2mm solid #6e7779; padding: 1mm; }
+.approval-matrix th { background: #e6eef0; }
+.approval-sign-space { height: 10mm; }
+.approval-matrix td small { display: block; margin-top: .5mm; min-height: 3mm; }
+.approval-meta { margin-top: 3mm; }
+.approval-meta dl { border-left: .3mm solid #6a7375; border-top: .3mm solid #6a7375; display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
+.approval-meta dl div { border-bottom: .3mm solid #6a7375; border-right: .3mm solid #6a7375; display: grid; grid-template-columns: 22mm 1fr; }
+.approval-meta dt { background: #eef2f3; font-size: 7.2pt; font-weight: 700; padding: 1.5mm; }
+.approval-meta dd { font-size: 7.5pt; margin: 0; padding: 1.5mm; }
+.approval-title { border-bottom: .7mm solid #126f85; padding: 3mm 0 2.5mm; text-align: center; }
+.approval-title small { color: #126f85; font-size: 7pt; font-weight: 700; letter-spacing: 2mm; }
+.approval-title h2 { font-size: 16pt; margin: 1mm 0; }
+.approval-title p { color: #454f52; font-size: 9pt; line-height: 1.55; margin: 0 auto; max-width: 150mm; }
+.approval-body { padding: 2.5mm 2mm 1mm; }
+.approval-body article { display: grid; grid-template-columns: 11mm 1fr; margin: 0 0 1.5mm; }
+.approval-body article > span {
+  align-self: start;
+  background: #126f85;
+  border-radius: 50%;
+  color: #fff;
+  display: block;
+  font-size: 7pt;
+  font-weight: 700;
+  height: 5.5mm;
+  justify-self: start;
+  line-height: 5.5mm;
+  max-height: 5.5mm;
+  max-width: 5.5mm;
+  min-height: 5.5mm;
+  min-width: 5.5mm;
+  overflow: hidden;
+  text-align: center;
+  width: 5.5mm;
+}
+.approval-body h3 { font-size: 9.4pt; margin: .5mm 0 1mm; }
+.approval-body dl { margin: 0; }
+.approval-body dl div { display: grid; font-size: 8.6pt; grid-template-columns: 8mm 1fr; margin: .5mm 0; }
+.approval-body dd { margin: 0; }
+.approval-data { display: grid; gap: 4mm; grid-template-columns: 55mm 1fr; }
+.approval-facts { border: .25mm solid #778083; margin: 0; }
+.approval-facts div { display: grid; grid-template-columns: 23mm 1fr; }
+.approval-facts div + div { border-top: .2mm solid #adb3b5; }
+.approval-facts dt { background: #edf2f3; font-size: 7.3pt; font-weight: 700; padding: 1.3mm; }
+.approval-facts dd { font-size: 7.5pt; margin: 0; padding: 1.3mm; }
+.approval-table { border-collapse: collapse; font-size: 7.5pt; width: 100%; }
+.approval-table th, .approval-table td { border: .2mm solid #778083; padding: 1.5mm; text-align: center; }
+.approval-table th { background: #dce8eb; }
+.approval-attachments { align-items: center; border-bottom: .2mm solid #b1b7b9; border-top: .2mm solid #b1b7b9; display: grid; grid-template-columns: 22mm 1fr 48mm; margin-top: 2.5mm; padding: 1.5mm 0; }
+.approval-attachments h3 { font-size: 8pt; margin: 0; }
+.approval-attachments ol { display: flex; font-size: 7.8pt; gap: 8mm; margin: 0; padding-left: 5mm; }
+.approval-attachments div { text-align: right; }
+.approval-attachments div small { display: block; font-size: 6.5pt; }
+.approval-attachments div strong { display: block; font-size: 10pt; }
+.approval-recipients { display: grid; font-size: 7.5pt; grid-template-columns: 22mm 1fr; padding: 1.5mm 0; }
+.approval-footer { border-top: 2mm solid #cbd4d6; display: grid; font-size: 6.8pt; grid-template-columns: 1.3fr 1fr 1fr; margin-top: 1mm; padding-top: 1.5mm; }
+.approval-footer div { display: flex; flex-direction: column; gap: .7mm; }
+.approval-footer div:nth-child(n+2) { text-align: right; }
+
+/* 4. 포고문: 이중 테두리 + 큰 중앙 제목 + 세로 리듬 */
+.proclamation-page { background: #f6f2e8; padding: 9mm; }
+.proclamation-frame {
+  background: #fffdf7;
+  border: 1.1mm double #675941;
+  display: flex;
+  flex-direction: column;
+  height: 279mm;
+  padding: 10mm 16mm 8mm;
+}
+.proclamation-header { text-align: center; }
+.proclamation-header > p { font-family: "Nanum Hand"; font-size: 11pt; margin: 0; }
+.proclamation-brand { align-items: center; display: flex; gap: 4mm; justify-content: center; margin: 1mm 0; }
+.proclamation-brand span { background: #8e7651; height: .3mm; width: 20mm; }
+.proclamation-brand strong { border: .35mm solid #8e7651; border-radius: 50%; color: #6d5738; font-size: 8pt; padding: 1.5mm 3mm; }
+.proclamation-header h1 { font-family: "Nanum Hand"; font-size: 24pt; letter-spacing: 5mm; margin: 0; }
+.proclamation-header small { color: #76674f; font-size: 7pt; }
+.proclamation-routing { display: flex; font-size: 7pt; justify-content: space-between; margin-top: 4mm; }
+.proclamation-title { padding: 5mm 0 3mm; text-align: center; }
+.proclamation-title small { color: #7d6848; font-size: 7pt; letter-spacing: 4mm; }
+.proclamation-title h2 { font-size: 18pt; letter-spacing: .8mm; margin: 1.5mm 0 2mm; }
+.proclamation-title div { background: #8e7651; height: .35mm; margin: 0 auto; width: 28mm; }
+.proclamation-intro { font-size: 9.2pt; line-height: 1.6; margin: 1mm auto 4mm; max-width: 145mm; text-align: center; }
+.proclamation-body { margin: 0 auto; width: 150mm; }
+.proclamation-body article { display: grid; grid-template-columns: 12mm 1fr; margin-bottom: 2mm; }
+.proclamation-body article > span { color: #8e7651; font-family: "Nanum Hand"; font-size: 17pt; }
+.proclamation-body h3 { font-size: 9.2pt; margin: 1mm 0; }
+.proclamation-body ul { list-style: none; margin: 0; padding: 0; }
+.proclamation-body li { font-size: 8.4pt; margin: .5mm 0; }
+.proclamation-body li b { display: inline-block; width: 8mm; }
+.proclamation-facts { display: flex; margin: 2mm 0 3mm; }
+.proclamation-facts div { border-bottom: .25mm solid #9c8b70; border-top: .25mm solid #9c8b70; flex: 1; padding: 1.5mm 2mm; text-align: center; }
+.proclamation-facts div + div { border-left: .2mm solid #c6baa6; }
+.proclamation-facts dt { color: #745f41; font-size: 6.6pt; }
+.proclamation-facts dd { font-size: 8pt; font-weight: 700; margin: .6mm 0 0; }
+.proclamation-table { border-collapse: collapse; font-size: 7.7pt; width: 100%; }
+.proclamation-table th { border-bottom: .4mm solid #665a47; border-top: .4mm solid #665a47; }
+.proclamation-table td { border-bottom: .2mm solid #c2b7a5; }
+.proclamation-table th, .proclamation-table td { padding: 1.4mm; text-align: center; }
+.proclamation-ending { align-items: flex-start; display: flex; justify-content: space-between; margin-top: 3mm; }
+.proclamation-attachments { display: flex; flex: 1; font-size: 7.5pt; }
+.proclamation-attachments > strong { flex: 0 0 14mm; }
+.proclamation-attachments ol { margin: 0; padding-left: 5mm; white-space: nowrap; }
+.proclamation-issuer { min-width: 68mm; text-align: right; }
+.proclamation-issuer h2 { font-family: "Nanum Hand"; font-size: 17pt; letter-spacing: 2mm; margin: 0; white-space: nowrap; }
+.proclamation-issuer p { font-size: 6.8pt; margin: 1.5mm 0 0; white-space: nowrap; }
+.proclamation-signers { border-bottom: .25mm solid #88785f; border-top: .25mm solid #88785f; display: grid; grid-template-columns: repeat(3, 1fr); margin-top: auto; }
+.proclamation-signers div { padding: 2mm; text-align: center; }
+.proclamation-signers div + div { border-left: .2mm solid #c9beac; }
+.proclamation-signers small, .proclamation-signers span { display: block; font-size: 6.4pt; }
+.proclamation-signers strong { display: block; font-size: 9pt; margin: .8mm 0; }
+.proclamation-footer { display: flex; font-size: 6.2pt; justify-content: space-between; padding-top: 2mm; }
+
+/* 5. 사이드바: 기관 정보/문서 메타를 고정 레일로 분리 */
+.sidebar-page { display: grid; grid-template-columns: 50mm 1fr; }
+.sidebar-rail {
+  background: #263f53;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: 15mm 8mm 10mm;
+}
+.sidebar-emblem {
+  align-items: center;
+  border: .5mm solid #fff;
+  display: flex;
+  font-size: 10pt;
+  font-weight: 700;
+  height: 18mm;
+  justify-content: center;
+  width: 18mm;
+}
+.sidebar-slogan { color: #c3d1dc; font-size: 7pt; line-height: 1.5; margin: 5mm 0 2mm; }
+.sidebar-rail h1 {
+  font-size: 15pt;
+  letter-spacing: 1.4mm;
+  line-height: 1.25;
+  margin: 0;
+  white-space: nowrap;
+  word-spacing: 0;
+}
+.sidebar-note { color: #91b9cc; font-size: 8pt; margin-top: 2mm; }
+.sidebar-routing { margin: 14mm 0 0; }
+.sidebar-routing div { border-top: .2mm solid rgba(255,255,255,.35); padding: 2.5mm 0; }
+.sidebar-routing dt { color: #92b0c1; font-size: 6.5pt; }
+.sidebar-routing dd { font-size: 8pt; line-height: 1.35; margin: .7mm 0 0; }
+.sidebar-issuer { margin-top: auto; }
+.sidebar-issuer small { color: #98b4c4; display: block; font-size: 6.5pt; }
+.sidebar-issuer strong { display: block; font-size: 13pt; margin-top: 1mm; }
+.sidebar-rail footer { border-top: .2mm solid rgba(255,255,255,.4); font-size: 6pt; line-height: 1.35; margin-top: 7mm; padding-top: 3mm; }
+.sidebar-rail footer p { margin: 0 0 1mm; overflow-wrap: anywhere; }
+.sidebar-main { display: flex; flex-direction: column; padding: 15mm 13mm 10mm; }
+.sidebar-main > header { border-bottom: 1.2mm solid #263f53; padding-bottom: 5mm; }
+.sidebar-main > header small { color: #678295; font-size: 7pt; letter-spacing: .8mm; }
+.sidebar-main > header h2 { color: #263f53; font-size: 20pt; line-height: 1.25; margin: 3mm 0; }
+.sidebar-main > header p { font-size: 9pt; line-height: 1.55; margin: 0; }
+.sidebar-sections { padding: 5mm 0 2mm; }
+.sidebar-sections article { display: grid; grid-template-columns: 11mm 1fr; margin-bottom: 2.5mm; }
+.sidebar-sections article > b { color: #54798f; font-size: 14pt; }
+.sidebar-sections h3 { font-size: 9.2pt; margin: .5mm 0 1mm; }
+.sidebar-sections ul { list-style: none; margin: 0; padding: 0; }
+.sidebar-sections li { display: grid; font-size: 8.1pt; grid-template-columns: 7mm 1fr; margin: .5mm 0; }
+.sidebar-sections li span { color: #54798f; font-weight: 700; }
+.sidebar-facts { display: grid; gap: 1.7mm; grid-template-columns: 1fr 1fr; margin: 1mm 0 4mm; }
+.sidebar-facts div { background: #e8eef2; padding: 2mm 2.5mm; }
+.sidebar-facts dt { color: #526b7c; font-size: 6.5pt; }
+.sidebar-facts dd { font-size: 8.3pt; font-weight: 700; margin: .7mm 0 0; }
+.sidebar-table { border-collapse: collapse; font-size: 7.6pt; width: 100%; }
+.sidebar-table th { background: #263f53; color: #fff; }
+.sidebar-table th, .sidebar-table td { border: .2mm solid #8093a0; padding: 1.5mm; text-align: center; }
+.sidebar-bottom { display: grid; gap: 5mm; grid-template-columns: 1fr 1fr; margin-top: 4mm; }
+.sidebar-bottom > div { border-top: .6mm solid #54798f; padding-top: 2mm; }
+.sidebar-bottom h3 { font-size: 7pt; margin: 0 0 1mm; text-transform: uppercase; }
+.sidebar-bottom ol, .sidebar-bottom p { font-size: 7.3pt; margin: 0; padding-left: 5mm; }
+.sidebar-bottom p { padding: 0; }
+.sidebar-signers { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: auto; }
+.sidebar-signers div { border-top: .25mm solid #8194a1; padding: 2mm 1mm; }
+.sidebar-signers div + div { margin-left: 2mm; }
+.sidebar-signers span, .sidebar-signers small { display: block; font-size: 6.4pt; }
+.sidebar-signers strong { display: block; font-size: 9pt; margin: .8mm 0; }
+
+/* 6. 모듈형: 제목/라우팅/본문/표를 독립 카드로 구성 */
+.modular-page { background: #f0f5f4; padding: 12mm 14mm 9mm; }
+.modular-header { align-items: center; display: grid; grid-template-columns: 28mm 1fr 34mm; }
+.modular-mark { display: flex; gap: 1.5mm; transform: rotate(-12deg); }
+.modular-mark span { background: #0a927f; border-radius: 4mm; display: block; height: 16mm; width: 4mm; }
+.modular-mark span:nth-child(2) { background: #55b8aa; height: 12mm; margin-top: 3mm; }
+.modular-mark span:nth-child(3) { background: #173f58; height: 8mm; margin-top: 6mm; }
+.modular-brand p { color: #55716f; font-size: 7pt; margin: 0 0 1mm; }
+.modular-brand h1 { color: #173f58; font-size: 17pt; letter-spacing: 1mm; margin: 0; }
+.modular-code { text-align: right; }
+.modular-code strong { color: #0a927f; display: block; font-size: 10pt; }
+.modular-code span { color: #57706d; display: block; font-size: 7pt; margin-top: .8mm; }
+.modular-title { align-items: end; display: grid; grid-template-columns: 28mm 1fr; margin-top: 6mm; }
+.modular-title > span { color: #0a927f; font-size: 34pt; font-weight: 700; line-height: 1; }
+.modular-title small { color: #607876; font-size: 6.5pt; letter-spacing: .8mm; }
+.modular-title h2 { color: #173f58; font-size: 18pt; margin: 1.5mm 0 0; }
+.modular-routing { display: grid; gap: 2mm; grid-template-columns: repeat(4, 1fr); margin-top: 5mm; }
+.modular-routing div { background: #fff; border-radius: 1.5mm; padding: 2mm 2.5mm; }
+.modular-routing span { color: #0a806f; display: block; font-size: 6.5pt; }
+.modular-routing strong { display: block; font-size: 7.8pt; margin-top: .5mm; }
+.modular-lead { background: #173f58; border-radius: 2mm; color: #fff; font-size: 9.2pt; line-height: 1.6; margin: 3mm 0; padding: 3mm 4mm; }
+.modular-grid { display: grid; gap: 3mm; grid-template-columns: 1fr 51mm; }
+.modular-sections { background: #fff; border-radius: 2mm; padding: 3.5mm; }
+.modular-sections article { display: grid; grid-template-columns: 9mm 1fr; margin-bottom: 2mm; }
+.modular-sections article:last-child { margin-bottom: 0; }
+.modular-sections article > b { color: #0a927f; font-size: 15pt; }
+.modular-sections h3 { font-size: 8.8pt; margin: .8mm 0 1mm; }
+.modular-sections ul { list-style: none; margin: 0; padding: 0; }
+.modular-sections li { display: grid; font-size: 7.7pt; grid-template-columns: 7mm 1fr; margin: .5mm 0; }
+.modular-sections li span { color: #0a927f; font-weight: 700; }
+.modular-facts { background: #dcebe8; border-radius: 2mm; padding: 3.5mm; }
+.modular-facts h3 { color: #173f58; font-size: 8.5pt; margin: 0 0 2mm; }
+.modular-facts dl { margin: 0; }
+.modular-facts dl div { border-top: .2mm solid #9fc5be; padding: 1.5mm 0; }
+.modular-facts dt { color: #4d6e69; font-size: 6.3pt; }
+.modular-facts dd { font-size: 8pt; font-weight: 700; margin: .5mm 0 0; }
+.modular-table-card { background: #fff; border-radius: 2mm; margin-top: 3mm; padding: 3mm 4mm; }
+.modular-table-card h3 { color: #173f58; font-size: 8.5pt; margin: 0 0 1.5mm; }
+.modular-table-card table { border-collapse: collapse; font-size: 7.4pt; width: 100%; }
+.modular-table-card th, .modular-table-card td { border-bottom: .2mm solid #bdcecb; padding: 1.3mm; text-align: left; }
+.modular-table-card th { color: #0a806f; }
+.modular-ending { display: grid; gap: 3mm; grid-template-columns: 1fr 70mm; margin-top: 3mm; }
+.modular-attachments, .modular-issuer { background: #fff; border-radius: 2mm; padding: 3mm; }
+.modular-attachments { display: grid; font-size: 7.5pt; grid-template-columns: 15mm 1fr; }
+.modular-attachments > span { color: #0a927f; font-weight: 700; }
+.modular-attachments ol { margin: 0; padding-left: 5mm; }
+.modular-issuer small { color: #0a806f; display: block; font-size: 6.5pt; }
+.modular-issuer strong { color: #173f58; display: block; font-size: 12pt; margin: .8mm 0; }
+.modular-issuer p { font-size: 6.5pt; margin: 0; }
+.modular-signers { display: grid; gap: 2mm; grid-template-columns: repeat(3, 1fr); margin-top: 3mm; }
+.modular-signers div { background: #dbeae7; border-radius: 1.5mm; padding: 2mm 2.5mm; }
+.modular-signers small, .modular-signers span { display: block; font-size: 6.3pt; }
+.modular-signers strong { display: block; font-size: 9pt; margin: .7mm 0; }
+.modular-footer { display: grid; gap: 3mm; grid-template-columns: 1.3fr 1fr 1.3fr; padding-top: 3mm; }
+.modular-footer div { display: flex; flex-direction: column; font-size: 6.2pt; }
+.modular-footer strong { color: #0a806f; margin-bottom: .5mm; }
+
+/* 7. 흑백 실무형: 한글 워드프로세서 공문처럼 밀도 높은 단색 구조 */
+.monochrome-page {
+  display: block;
+  padding: 14mm 16mm 9mm;
+}
+.monochrome-header {
+  align-items: start;
+  border-bottom: .8mm double #111;
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 4mm;
+}
+.monochrome-header p { font-size: 7pt; letter-spacing: .5mm; margin: 0 0 1.5mm; }
+.monochrome-header h1 { font-size: 21pt; letter-spacing: 5mm; margin: 0; }
+.monochrome-header dl {
+  border-left: .25mm solid #222;
+  border-top: .25mm solid #222;
+  margin: 0;
+  width: 67mm;
+}
+.monochrome-header dl div { display: grid; grid-template-columns: 22mm 1fr; }
+.monochrome-header dt, .monochrome-header dd {
+  border-bottom: .25mm solid #222;
+  border-right: .25mm solid #222;
+  font-size: 7.3pt;
+  margin: 0;
+  padding: 1.2mm 1.7mm;
+}
+.monochrome-header dt { background: #eee; font-weight: 700; text-align: center; }
+.monochrome-routing { border-bottom: .25mm solid #333; padding: 3mm 0 2mm; }
+.monochrome-routing dl { margin: 0; }
+.monochrome-routing dl div { display: grid; font-size: 9pt; grid-template-columns: 20mm 1fr; min-height: 6mm; }
+.monochrome-routing dt { font-weight: 700; letter-spacing: 1.8mm; }
+.monochrome-routing dd { margin: 0; }
+.monochrome-title {
+  border-bottom: .6mm solid #111;
+  font-size: 16pt;
+  letter-spacing: .3mm;
+  margin: 0;
+  padding: 5mm 0 3.5mm;
+  text-align: center;
+}
+.monochrome-body { font-size: 9.2pt; line-height: 1.55; padding-top: 4mm; }
+.monochrome-intro { margin: 0 0 3mm; text-indent: 8mm; }
+.monochrome-sections { margin: 0 0 3mm; padding-left: 8mm; }
+.monochrome-sections > li { margin-bottom: 2mm; padding-left: 1mm; }
+.monochrome-sections p { margin: 0; }
+.monochrome-sections ol { list-style: none; margin: 1mm 0 0; padding: 0 0 0 1mm; }
+.monochrome-sections ol li { display: grid; grid-template-columns: 8mm 1fr; margin: .5mm 0; }
+.monochrome-facts {
+  border-bottom: .25mm solid #111;
+  border-top: .5mm solid #111;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 3mm 0;
+}
+.monochrome-facts div { display: grid; grid-template-columns: 24mm 1fr; }
+.monochrome-facts div:nth-child(odd) { border-right: .25mm solid #555; }
+.monochrome-facts div:nth-child(n+3) { border-top: .2mm solid #999; }
+.monochrome-facts dt, .monochrome-facts dd { font-size: 7.8pt; margin: 0; padding: 1.3mm 2mm; }
+.monochrome-facts dt { background: #eee; font-weight: 700; }
+.monochrome-table { border-collapse: collapse; font-size: 8pt; width: 100%; }
+.monochrome-table th, .monochrome-table td { border: .25mm solid #222; padding: 1.4mm; text-align: center; }
+.monochrome-table th { background: #e7e7e7; }
+.monochrome-attachments { display: grid; font-size: 8pt; grid-template-columns: 18mm 1fr; margin-top: 3mm; }
+.monochrome-attachments ol { margin: 0; padding-left: 5mm; }
+.monochrome-issuer { align-items: center; display: flex; justify-content: center; margin: 2mm 0 3mm; }
+.monochrome-issuer strong { font-size: 18pt; letter-spacing: 4mm; }
+.monochrome-issuer span { border: .25mm solid #444; border-radius: 50%; font-size: 5.8pt; margin-left: 4mm; padding: 2mm .8mm; }
+.monochrome-approval > p { font-size: 7.4pt; margin: 0 0 1.5mm; }
+.monochrome-approval > p strong { display: inline-block; margin-right: 8mm; }
+.monochrome-approval table { border-collapse: collapse; font-size: 7pt; margin-left: auto; text-align: center; width: 78mm; }
+.monochrome-approval th, .monochrome-approval td { border: .2mm solid #333; padding: 1.2mm; }
+.monochrome-approval th { background: #eee; font-weight: 400; }
+.monochrome-approval td { font-size: 8pt; font-weight: 700; }
+.monochrome-approval td small { display: inline-block; font-size: 6pt; font-weight: 400; margin-left: 2mm; }
+.monochrome-footer { border-top: .8mm double #111; font-size: 6.6pt; line-height: 1.5; margin-top: 2mm; padding-top: 1.5mm; }
+.monochrome-footer div { display: flex; justify-content: space-between; }
+
+/* 8. 표 중심 보고형: 핵심 운영표와 요약 지표를 본문보다 먼저 배치 */
+.table-report-page {
+  background: #f7f7f5;
+  display: block;
+  padding: 12mm 14mm 9mm;
+}
+.table-report-header { align-items: center; display: flex; justify-content: space-between; }
+.table-report-brand { align-items: center; display: flex; gap: 4mm; }
+.table-report-brand > span {
+  align-items: center;
+  background: #323a42;
+  color: #fff;
+  display: flex;
+  font-size: 8pt;
+  font-weight: 700;
+  height: 15mm;
+  justify-content: center;
+  width: 15mm;
+}
+.table-report-brand p { color: #667078; font-size: 6.5pt; margin: 0 0 .7mm; }
+.table-report-brand h1 { font-size: 15pt; letter-spacing: 1.5mm; margin: 0; }
+.table-report-doc { border-left: .4mm solid #323a42; display: flex; flex-direction: column; padding-left: 4mm; text-align: right; }
+.table-report-doc small { color: #727980; font-size: 6.5pt; }
+.table-report-doc strong { font-size: 8.5pt; margin: .8mm 0; }
+.table-report-doc span { font-size: 7pt; }
+.table-report-title { border-bottom: 1.1mm solid #323a42; margin-top: 6mm; padding-bottom: 4mm; }
+.table-report-title > p { color: #6c757c; font-size: 6.5pt; letter-spacing: 1.4mm; margin: 0 0 1mm; }
+.table-report-title h2 { font-size: 19pt; line-height: 1.3; margin: 0 0 3mm; }
+.table-report-title dl { display: flex; gap: 6mm; margin: 0; }
+.table-report-title dl div { display: flex; font-size: 7.2pt; gap: 2mm; }
+.table-report-title dt { color: #687078; font-weight: 700; }
+.table-report-title dt { white-space: nowrap; }
+.table-report-title dd { margin: 0; }
+.table-report-intro { font-size: 9pt; line-height: 1.55; margin: 4mm 0; }
+.table-report-caption { align-items: baseline; display: flex; gap: 3mm; margin-bottom: 2mm; }
+.table-report-caption strong { color: #6c757c; font-size: 15pt; }
+.table-report-caption span { font-size: 8.5pt; font-weight: 700; letter-spacing: .4mm; }
+.table-report-primary table { border-collapse: collapse; font-size: 8.3pt; width: 100%; }
+.table-report-primary th { background: #323a42; color: #fff; font-weight: 700; }
+.table-report-primary th, .table-report-primary td { border: .2mm solid #7e858a; padding: 2.2mm; text-align: center; }
+.table-report-primary td:nth-child(2) { text-align: left; }
+.table-report-summary { display: grid; gap: 2mm; grid-template-columns: repeat(4, 1fr); margin: 3mm 0 4mm; }
+.table-report-summary div { background: #e3e5e5; border-top: .7mm solid #59636a; padding: 2.2mm 2.5mm; }
+.table-report-summary dt { color: #646c72; font-size: 6.3pt; }
+.table-report-summary dd { font-size: 8pt; font-weight: 700; margin: .8mm 0 0; }
+.table-report-notes { border-top: .25mm solid #858b8f; padding-top: 3mm; }
+.table-report-notes article { display: grid; grid-template-columns: 10mm 1fr; margin-bottom: 2mm; }
+.table-report-notes article > b { color: #727a80; font-size: 11pt; }
+.table-report-notes h3 { font-size: 8.7pt; margin: .4mm 0 .8mm; }
+.table-report-notes ul { list-style: none; margin: 0; padding: 0; }
+.table-report-notes li { display: grid; font-size: 7.7pt; grid-template-columns: 7mm 1fr; margin: .4mm 0; }
+.table-report-notes li span { color: #687178; font-weight: 700; }
+.table-report-ending { display: grid; gap: 4mm; grid-template-columns: 1fr 64mm; margin-top: 2mm; }
+.table-report-ending > div { border-top: .5mm solid #323a42; padding-top: 2mm; }
+.table-report-ending > div:first-child { display: grid; font-size: 7.2pt; grid-template-columns: 14mm 1fr; }
+.table-report-ending ol { margin: 0; padding-left: 5mm; }
+.table-report-ending > div:last-child { text-align: right; }
+.table-report-ending small { color: #687178; display: block; font-size: 6pt; }
+.table-report-ending > div:last-child strong { display: block; font-size: 12pt; margin: .7mm 0; }
+.table-report-ending p { font-size: 6.2pt; margin: 0; }
+.table-report-signers { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 7mm; }
+.table-report-signers div { background: #e5e6e5; border-right: 1.5mm solid #f7f7f5; padding: 1.6mm 2mm; }
+.table-report-signers span, .table-report-signers small { display: block; font-size: 6pt; }
+.table-report-signers strong { display: block; font-size: 8.3pt; margin: .5mm 0; }
+.table-report-footer { border-top: .25mm solid #626a6f; display: flex; font-size: 6.2pt; justify-content: space-between; margin-top: 2mm; padding-top: 1.5mm; }
+
+/* 9. 장문 2페이지형: 반복 헤더와 명시적인 페이지 구분을 가진 시행계획 */
+.long-document { margin: 0; padding: 0; }
+.long-page {
+  display: block;
+  height: 297mm;
+  overflow: hidden;
+  padding: 14mm 18mm 12mm;
+  position: relative;
+  width: 210mm;
+}
+.long-page-first { break-after: page; page-break-after: always; }
+.long-header { align-items: center; border-bottom: .8mm solid #234c64; display: flex; justify-content: space-between; padding-bottom: 4mm; }
+.long-brand { align-items: center; display: flex; gap: 4mm; }
+.long-brand > span {
+  align-items: center;
+  border: .6mm solid #234c64;
+  color: #234c64;
+  display: flex;
+  font-size: 8pt;
+  font-weight: 700;
+  height: 15mm;
+  justify-content: center;
+  min-width: 15mm;
+  width: 15mm;
+}
+.long-brand p { color: #567081; font-size: 6.5pt; margin: 0 0 1mm; }
+.long-brand h1 { color: #183d54; font-size: 15pt; margin: 0; }
+.long-header > div:last-child { display: flex; flex-direction: column; text-align: right; }
+.long-header > div:last-child strong { font-size: 8pt; }
+.long-header > div:last-child span { color: #647782; font-size: 7pt; margin-top: 1mm; }
+.long-header-compact .long-brand p { color: #183d54; font-size: 9pt; font-weight: 700; }
+.long-header-compact .long-brand { min-width: 0; }
+.long-header-compact .long-brand > div { min-width: 0; width: 118mm; }
+.long-header-compact .long-brand h1 { font-size: 11pt; line-height: 1.3; margin: 0; overflow-wrap: anywhere; width: 118mm; }
+.long-routing { background: #e9eff2; display: grid; grid-template-columns: 1fr 1fr 1fr; margin: 4mm 0 0; }
+.long-routing div { display: grid; font-size: 7.2pt; grid-template-columns: 14mm 1fr; padding: 2mm 2.5mm; }
+.long-routing div + div { border-left: .2mm solid #aebec7; }
+.long-routing span { color: #466273; }
+.long-title { padding: 7mm 0 5mm; }
+.long-title small { color: #3f687f; font-size: 6.5pt; font-weight: 700; letter-spacing: 1.5mm; }
+.long-title h2 { color: #173f57; font-size: 20pt; margin: 1.5mm 0 3mm; }
+.long-title p { border-left: 1.2mm solid #4b7186; font-size: 9pt; line-height: 1.65; margin: 0; padding: 1.5mm 0 1.5mm 4mm; }
+.long-body { padding-top: 1mm; }
+.long-body-second { padding-top: 7mm; }
+.long-section { display: grid; grid-template-columns: 15mm 1fr; margin-bottom: 5mm; }
+.long-section > div:first-child span {
+  align-items: center;
+  background: #234c64;
+  color: #fff;
+  display: flex;
+  font-size: 8pt;
+  font-weight: 700;
+  height: 8mm;
+  justify-content: center;
+  width: 8mm;
+}
+.long-section h3 { color: #183f55; font-size: 11pt; margin: .5mm 0 1.8mm; }
+.long-section ol { font-size: 8.7pt; line-height: 1.6; margin: 0; padding-left: 6mm; }
+.long-section li { margin-bottom: .8mm; padding-left: 1mm; }
+.long-facts { border-bottom: .25mm solid #557183; border-top: .25mm solid #557183; display: grid; grid-template-columns: repeat(4, 1fr); margin: 2mm 0 0; }
+.long-facts div { padding: 2mm 2.5mm; text-align: center; }
+.long-facts div + div { border-left: .2mm solid #bdc8ce; }
+.long-facts dt { color: #617682; font-size: 6.3pt; }
+.long-facts dd { font-size: 7.8pt; font-weight: 700; margin: .7mm 0 0; }
+.long-program { margin-top: 2mm; }
+.long-program h3 { color: #183f55; font-size: 10pt; margin: 0 0 2mm; }
+.long-program table { border-collapse: collapse; font-size: 8pt; width: 100%; }
+.long-program th { background: #234c64; color: #fff; }
+.long-program th, .long-program td { border: .2mm solid #8197a3; padding: 1.8mm; text-align: center; }
+.long-ending { display: grid; gap: 5mm; grid-template-columns: 1fr 65mm; margin-top: 5mm; }
+.long-attachments { display: grid; font-size: 7.5pt; grid-template-columns: 15mm 1fr; }
+.long-attachments ol { margin: 0; padding-left: 5mm; }
+.long-issuer { text-align: right; }
+.long-issuer small { color: #607582; display: block; font-size: 6.5pt; }
+.long-issuer strong { color: #173f57; display: block; font-size: 14pt; margin: .7mm 0; }
+.long-issuer p { font-size: 6.4pt; margin: 0; }
+.long-signers { border-bottom: .25mm solid #82949e; border-top: .25mm solid #82949e; display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 6mm; }
+.long-signers div { padding: 2mm 3mm; }
+.long-signers div + div { border-left: .2mm solid #c1cbd0; }
+.long-signers span, .long-signers small { display: block; font-size: 6.3pt; }
+.long-signers strong { display: block; font-size: 8.8pt; margin: .7mm 0; }
+.long-contact { font-size: 6.5pt; line-height: 1.5; margin-top: 5mm; }
+.long-contact div { display: flex; justify-content: space-between; }
+.long-page-footer {
+  border-top: .25mm solid #8b9da7;
+  bottom: 10mm;
+  display: flex;
+  font-size: 6.2pt;
+  justify-content: space-between;
+  left: 18mm;
+  padding-top: 2mm;
+  position: absolute;
+  right: 18mm;
+}
+.long-page-footer strong { color: #234c64; }
+
+/* 10. 체크리스트 서식형: 확인란과 판정/결재 영역을 중심으로 구성 */
+.checklist-page {
+  background: #f5f7f7;
+  display: block;
+  padding: 10mm 13mm 8mm;
+}
+.checklist-header { align-items: center; display: flex; justify-content: space-between; }
+.checklist-brand { align-items: center; display: flex; gap: 4mm; }
+.checklist-brand > span {
+  align-items: center;
+  background: #1f6762;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  font-size: 8pt;
+  font-weight: 700;
+  height: 15mm;
+  justify-content: center;
+  min-width: 15mm;
+  width: 15mm;
+}
+.checklist-brand p { color: #62827f; font-size: 6.2pt; margin: 0 0 .7mm; }
+.checklist-brand h1 { color: #174844; font-size: 15pt; letter-spacing: 1.5mm; margin: 0; }
+.checklist-header > strong { border: .35mm solid #1f6762; color: #1f6762; font-size: 7.5pt; padding: 2mm 3mm; }
+.checklist-title { border-bottom: 1mm solid #1f6762; padding: 5mm 0 4mm; }
+.checklist-title small { color: #4f7774; font-size: 6.3pt; letter-spacing: 1.2mm; }
+.checklist-title h2 { color: #164b47; font-size: 18pt; margin: 1mm 0 2mm; }
+.checklist-title p { font-size: 8.5pt; line-height: 1.5; margin: 0; }
+.checklist-meta { border-left: .25mm solid #5b7775; border-top: .25mm solid #5b7775; display: grid; grid-template-columns: repeat(3, 1fr); margin: 4mm 0 3mm; }
+.checklist-meta div { border-bottom: .25mm solid #5b7775; border-right: .25mm solid #5b7775; display: grid; grid-template-columns: 20mm 1fr; }
+.checklist-meta dt { background: #dce8e6; color: #305f5b; font-size: 6.8pt; font-weight: 700; padding: 1.5mm; }
+.checklist-meta dd { background: #fff; font-size: 7.1pt; margin: 0; padding: 1.5mm; }
+.checklist-guide { align-items: center; background: #dce8e6; display: grid; font-size: 6.8pt; gap: 3mm; grid-template-columns: 18mm 1fr auto; padding: 2mm 3mm; }
+.checklist-guide strong { color: #245752; }
+.checklist-guide div { white-space: nowrap; }
+.checklist-guide i { background: #fff; border: .25mm solid #456965; display: inline-block; height: 3mm; margin-left: 2mm; vertical-align: middle; width: 3mm; }
+.checklist-table { border-collapse: collapse; font-size: 7.3pt; margin-top: 3mm; width: 100%; }
+.checklist-table th { background: #23645f; color: #fff; }
+.checklist-table th, .checklist-table td { border: .2mm solid #65827f; padding: 1.7mm 1.3mm; text-align: center; }
+.checklist-table th:nth-child(1) { width: 22mm; }
+.checklist-table th:nth-child(2) { width: auto; }
+.checklist-table th:nth-child(3) { width: 25mm; }
+.checklist-table th:nth-child(n+4) { width: 12mm; }
+.checklist-table td:nth-child(2) { text-align: left; }
+.checklist-table tbody tr:nth-child(even) { background: #edf2f1; }
+.check-box { align-items: center; border: .25mm solid #3c625e; display: inline-flex; font-size: 8pt; font-weight: 700; height: 4mm; justify-content: center; line-height: 3.3mm; width: 4mm; }
+.checklist-summary { display: grid; gap: 3mm; grid-template-columns: 1fr 58mm; margin-top: 3mm; }
+.checklist-summary > div { background: #fff; border: .25mm solid #718986; padding: 2.5mm 3mm; }
+.checklist-summary h3 { color: #225a55; font-size: 7.5pt; margin: 0 0 1.5mm; }
+.checklist-summary p { font-size: 7.2pt; line-height: 1.5; margin: 0; }
+.checklist-summary dl { border: .25mm solid #718986; margin: 0; }
+.checklist-summary dl div { display: grid; grid-template-columns: 20mm 1fr; }
+.checklist-summary dl div + div { border-top: .2mm solid #a3b4b2; }
+.checklist-summary dt { background: #dce8e6; color: #315d59; font-size: 6.2pt; padding: 1.2mm; }
+.checklist-summary dd { background: #fff; font-size: 6.8pt; margin: 0; padding: 1.2mm; }
+.checklist-approval { display: grid; gap: 3mm; grid-template-columns: 1fr 85mm; margin-top: 3mm; }
+.checklist-decision { background: #fff; border: .3mm solid #3d6864; display: flex; flex-direction: column; justify-content: center; padding: 3mm; }
+.checklist-decision span { color: #315f5b; font-size: 6.5pt; font-weight: 700; }
+.checklist-decision strong { font-size: 7.5pt; margin-top: 1.5mm; }
+.checklist-approval table { border-collapse: collapse; font-size: 6.5pt; text-align: center; width: 100%; }
+.checklist-approval th, .checklist-approval td { border: .2mm solid #587873; padding: 1.3mm; }
+.checklist-approval th { background: #dce8e6; color: #2f5d59; }
+.checklist-approval td strong { display: block; font-size: 7.8pt; }
+.checklist-approval td small { display: block; font-size: 5.8pt; margin-top: .5mm; }
+.checklist-ending { display: flex; font-size: 6.8pt; justify-content: space-between; margin-top: 4mm; }
+.checklist-ending > div:first-child { display: flex; gap: 4mm; }
+.checklist-ending > div:last-child { align-items: baseline; display: flex; gap: 3mm; }
+.checklist-ending > div:first-child strong,
+.checklist-ending > div:last-child small,
+.checklist-ending > div:last-child strong { flex: 0 0 auto; white-space: nowrap; }
+.checklist-ending > div:last-child strong { color: #194e4a; font-size: 12pt; }
+.checklist-footer { border-top: .8mm solid #1f6762; display: flex; font-size: 6pt; justify-content: space-between; margin-top: 2mm; padding-top: 1.5mm; }
+
+/* 실제 생성 계약에 첨부/요약이 없을 때 예제용 빈 레이블을 남기지 않는다. */
+body.has-no-attachments .classic-attachments,
+body.has-no-attachments .proclamation-attachments,
+body.has-no-attachments .sidebar-bottom > div:first-child,
+body.has-no-attachments .modular-attachments,
+body.has-no-attachments .monochrome-attachments,
+body.has-no-attachments .table-report-ending > div:first-child,
+body.has-no-attachments .long-attachments,
+body.has-no-attachments .checklist-ending > div:first-child {
+  display: none !important;
+}
+body.has-no-attachments .banner-aside > h2:last-of-type,
+body.has-no-attachments .banner-aside > ol,
+body.has-no-attachments .approval-attachments > h3,
+body.has-no-attachments .approval-attachments > ol {
+  display: none !important;
+}
+body.has-no-attachments .approval-attachments,
+body.has-no-attachments .modular-ending,
+body.has-no-attachments .table-report-ending,
+body.has-no-attachments .long-ending {
+  grid-template-columns: 1fr;
+}
+body.has-no-attachments .proclamation-ending,
+body.has-no-attachments .checklist-ending {
+  justify-content: flex-end;
+}
+body.has-no-summary .checklist-summary {
+  grid-template-columns: 1fr;
+}
+
+/* 생성 계약에 없는 결재/수신/시행/연락처 값은 임의로 채우지 않는다. */
+body.has-no-signers .classic-approval-rule,
+body.has-no-signers .classic-signers,
+body.has-no-signers .classic-approval > p:last-child,
+body.has-no-signers .approval-matrix,
+body.has-no-signers .banner-signers,
+body.has-no-signers .proclamation-signers,
+body.has-no-signers .sidebar-signers,
+body.has-no-signers .modular-signers,
+body.has-no-signers .monochrome-approval table,
+body.has-no-signers .table-report-signers,
+body.has-no-signers .long-signers,
+body.has-no-signers .checklist-approval {
+  display: none !important;
+}
+body.has-no-issuer-metadata .classic-issuer,
+body.has-no-issuer-metadata .classic-approval > p:first-child,
+body.has-no-issuer-metadata .banner-signoff > div:first-child,
+body.has-no-issuer-metadata .approval-attachments > div,
+body.has-no-issuer-metadata .approval-recipients,
+body.has-no-issuer-metadata .proclamation-issuer,
+body.has-no-issuer-metadata .sidebar-issuer,
+body.has-no-issuer-metadata .sidebar-bottom > div:last-child,
+body.has-no-issuer-metadata .modular-issuer,
+body.has-no-issuer-metadata .monochrome-issuer,
+body.has-no-issuer-metadata .monochrome-approval > p,
+body.has-no-issuer-metadata .table-report-ending > div:last-child,
+body.has-no-issuer-metadata .long-issuer,
+body.has-no-issuer-metadata .checklist-ending > div:last-child {
+  display: none !important;
+}
+body.has-no-issuer-metadata.has-no-signers .classic-approval,
+body.has-no-issuer-metadata.has-no-signers .banner-signoff,
+body.has-no-issuer-metadata.has-no-signers .monochrome-approval,
+body.has-no-issuer-metadata.has-no-attachments .approval-attachments,
+body.has-no-issuer-metadata.has-no-attachments .proclamation-ending,
+body.has-no-issuer-metadata.has-no-attachments .sidebar-bottom,
+body.has-no-issuer-metadata.has-no-attachments .modular-ending,
+body.has-no-issuer-metadata.has-no-attachments .table-report-ending,
+body.has-no-issuer-metadata.has-no-attachments .long-ending,
+body.has-no-issuer-metadata.has-no-attachments .checklist-ending {
+  display: none !important;
+}
+
+body.has-no-routing-metadata .classic-routing dl > div:not(.classic-title),
+body.has-no-routing-metadata .banner-routing,
+body.has-no-routing-metadata .approval-meta,
+body.has-no-routing-metadata .proclamation-routing,
+body.has-no-routing-metadata .sidebar-routing,
+body.has-no-routing-metadata .modular-routing,
+body.has-no-routing-metadata .monochrome-header > dl,
+body.has-no-routing-metadata .monochrome-routing,
+body.has-no-routing-metadata .table-report-doc,
+body.has-no-routing-metadata .table-report-title dl,
+body.has-no-routing-metadata .long-header > div:last-child,
+body.has-no-routing-metadata .long-routing,
+body.has-no-routing-metadata .checklist-meta {
+  display: none !important;
+}
+body.has-no-contact-metadata .classic-footer,
+body.has-no-contact-metadata .banner-footer,
+body.has-no-contact-metadata .approval-footer,
+body.has-no-contact-metadata .proclamation-footer,
+body.has-no-contact-metadata .sidebar-rail > footer,
+body.has-no-contact-metadata .modular-footer,
+body.has-no-contact-metadata .monochrome-footer,
+body.has-no-contact-metadata .table-report-footer,
+body.has-no-contact-metadata .long-contact,
+body.has-no-contact-metadata .checklist-footer {
+  display: none !important;
+}
+
+body.has-no-template-copy .classic-identity > p,
+body.has-no-template-copy .classic-masthead > strong,
+body.has-no-template-copy .banner-kicker > p,
+body.has-no-template-copy .banner-heading > small,
+body.has-no-template-copy .banner-agency > span,
+body.has-no-template-copy .banner-aside > h2:first-of-type,
+body.has-no-template-copy .approval-brand p,
+body.has-no-template-copy .approval-title > small,
+body.has-no-template-copy .proclamation-header > p,
+body.has-no-template-copy .proclamation-header > small,
+body.has-no-template-copy .proclamation-title > small,
+body.has-no-template-copy .sidebar-slogan,
+body.has-no-template-copy .sidebar-note,
+body.has-no-template-copy .sidebar-main > header > small,
+body.has-no-template-copy .modular-brand > p,
+body.has-no-template-copy .modular-code > span,
+body.has-no-template-copy .modular-title small,
+body.has-no-template-copy .modular-facts > h3,
+body.has-no-template-copy .modular-table-card > h3,
+body.has-no-template-copy .monochrome-header p,
+body.has-no-template-copy .table-report-title > p,
+body.has-no-template-copy .table-report-caption > span,
+body.has-no-template-copy .long-header:not(.long-header-compact) .long-brand p,
+body.has-no-template-copy .long-title > small,
+body.has-no-template-copy .long-program > h3,
+body.has-no-template-copy .checklist-brand p,
+body.has-no-template-copy .checklist-header > strong,
+body.has-no-template-copy .checklist-title > small,
+body.has-no-template-copy .checklist-guide,
+body.has-no-template-copy .long-section h3:empty {
+  display: none !important;
+}
+
+/* 원문에 워크플로 정보가 없으면 체크리스트의 판정·담당 열을 만들지 않는다. */
+body.has-no-workflow-metadata .checklist-guide,
+body.has-no-workflow-metadata .checklist-approval,
+body.has-no-workflow-metadata .checklist-table thead,
+body.has-no-workflow-metadata .checklist-table td:first-child,
+body.has-no-workflow-metadata .checklist-table td:nth-child(n+3) {
+  display: none !important;
+}
+
+/* 실제 공문 예시 기준의 공통 저채도 인쇄 스타일.
+ * 템플릿 차이는 색상 테마가 아니라 여백, 구획선, 표와 본문 배치로 만든다.
+ */
+body * {
+  border-color: #777 !important;
+  color: #202020 !important;
+}
+body,
+.classic-page,
+.banner-page,
+.approval-page,
+.proclamation-page,
+.proclamation-frame,
+.sidebar-page,
+.sidebar-main,
+.modular-page,
+.monochrome-page,
+.table-report-page,
+.long-page,
+.checklist-page {
+  background: #fff !important;
+  color: #171717 !important;
+}
+
+.banner-hero,
+.sidebar-rail,
+.modular-lead {
+  background: #f2f2f2 !important;
+  border-color: #555 !important;
+  color: #171717 !important;
+}
+.banner-hero {
+  border-bottom: .65mm solid #444 !important;
+}
+.sidebar-rail {
+  border-right: .45mm solid #555 !important;
+}
+.modular-lead {
+  border-left: 1.2mm solid #555 !important;
+  border-radius: 0 !important;
+}
+.banner-hero *,
+.sidebar-rail *,
+.modular-lead * {
+  color: #171717 !important;
+}
+
+.classic-emblem,
+.classic-masthead > strong,
+.banner-emblem,
+.approval-brand > span,
+.proclamation-brand strong,
+.sidebar-emblem,
+.modular-mark,
+.table-report-brand > span,
+.long-brand > span,
+.checklist-brand > span {
+  background: transparent !important;
+  border-color: #555 !important;
+  color: #333 !important;
+}
+.modular-mark span,
+.proclamation-brand span,
+.proclamation-title div {
+  background: #555 !important;
+  border-color: #555 !important;
+  color: #555 !important;
+}
+.approval-body article > span,
+.long-section > div:first-child span {
+  background: #555 !important;
+  border-color: #555 !important;
+  color: #fff !important;
+}
+
+.classic-emblem,
+.classic-masthead > strong,
+.banner-routing span,
+.banner-number,
+.banner-section li b,
+.banner-aside h2,
+.approval-title small,
+.proclamation-brand strong,
+.proclamation-title small,
+.proclamation-body article > span,
+.sidebar-main > header h2,
+.sidebar-sections article > b,
+.sidebar-sections li span,
+.modular-brand h1,
+.modular-code strong,
+.modular-code span,
+.modular-title > span,
+.modular-title h2,
+.modular-sections article > b,
+.modular-sections li span,
+.modular-facts h3,
+.modular-facts dt,
+.modular-table-card h3,
+.modular-table-card th,
+.table-report-caption strong,
+.table-report-notes article > b,
+.table-report-notes li span,
+.long-brand h1,
+.long-header-compact .long-brand p,
+.long-routing span,
+.long-title small,
+.long-title h2,
+.long-section h3,
+.long-program h3,
+.long-issuer strong,
+.long-page-footer strong,
+.checklist-brand h1,
+.checklist-header > strong,
+.checklist-title,
+.checklist-title small,
+.checklist-title h2,
+.checklist-guide strong,
+.checklist-summary h3,
+.checklist-decision span,
+.checklist-ending > div:last-child strong,
+.checklist-footer {
+  border-color: #555 !important;
+  color: #262626 !important;
+}
+
+.classic-facts dt,
+.classic-table th,
+.banner-aside,
+.banner-table th,
+.banner-signoff > div:first-child,
+.approval-matrix th,
+.approval-meta dt,
+.approval-facts dt,
+.approval-table th,
+.proclamation-facts dt,
+.proclamation-table th,
+.sidebar-facts div,
+.sidebar-table th,
+.modular-routing div,
+.modular-facts,
+.modular-table-card,
+.modular-attachments,
+.modular-issuer,
+.modular-signers div,
+.monochrome-header dt,
+.monochrome-facts dt,
+.monochrome-table th,
+.monochrome-approval th,
+.table-report-primary th,
+.table-report-summary div,
+.table-report-signers div,
+.long-routing,
+.long-program th,
+.checklist-meta dt,
+.checklist-guide,
+.checklist-table th,
+.checklist-table tbody tr:nth-child(even),
+.checklist-summary dt,
+.checklist-approval th {
+  background: #eee !important;
+  border-color: #777 !important;
+  color: #171717 !important;
+}
+
+.classic-title,
+.approval-title,
+.sidebar-main > header,
+.table-report-title,
+.long-header,
+.checklist-title,
+.checklist-footer {
+  border-color: #4d4d4d !important;
+}
+
+.modular-page,
+.table-report-page,
+.checklist-page {
+  background: #fafafa !important;
+}
+.modular-sections,
+.modular-facts,
+.modular-table-card,
+.modular-attachments,
+.modular-issuer,
+.checklist-summary > div,
+.checklist-decision {
+  border: .25mm solid #8a8a8a !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}

@@ -1,0 +1,92 @@
+{% extends "official_variants/base.html" %}
+{% block body_class %}theme-long-form{% endblock %}
+{% block document %}
+<main class="long-document">
+  <article class="long-page long-page-first">
+    <header class="long-header">
+      <div class="long-brand"><span>{{ emblem }}</span><div><p>{{ slogan }}</p><h1>{{ agency_name }}</h1></div></div>
+      <div><strong>{{ document_number }}</strong><span>{{ issue_date }}</span></div>
+    </header>
+
+    <section class="long-routing">
+      <div><span>수신</span><strong>{{ recipient }}</strong></div>
+      <div><span>경유</span><strong>{{ via }}</strong></div>
+      <div><span>공개</span><strong>{{ disclosure }}</strong></div>
+    </section>
+
+    <section class="long-title">
+      <small>{{ document_kind_label }}</small>
+      <h2>{{ title }}</h2>
+      <p>{{ intro }}</p>
+    </section>
+
+    <section class="long-body">
+      {% for section in long_sections[:4] %}
+      <article class="long-section">
+        <div><span>{{ "%02d"|format(loop.index) }}</span></div>
+        <div>
+          <h3>{{ section.title }}</h3>
+          <ol>{% for item in section["items"] %}<li>{{ item }}</li>{% endfor %}</ol>
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+
+    <dl class="long-facts">
+      {% for detail in details %}<div><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></div>{% endfor %}
+    </dl>
+
+    <footer class="long-page-footer">
+      <span>{{ agency_name }} · {{ document_number }}</span>
+      <strong>1 / 2</strong>
+    </footer>
+  </article>
+
+  <article class="long-page long-page-second">
+    <header class="long-header long-header-compact">
+      <div class="long-brand"><span>{{ emblem }}</span><div><p>{{ agency_name }}</p><h1>{{ title }}</h1></div></div>
+      <div><strong>계속</strong><span>{{ issue_date }}</span></div>
+    </header>
+
+    <section class="long-body long-body-second">
+      {% for section in long_sections[4:] %}
+      <article class="long-section">
+        <div><span>{{ "%02d"|format(loop.index + 4) }}</span></div>
+        <div>
+          <h3>{{ section.title }}</h3>
+          <ol>{% for item in section["items"] %}<li>{{ item }}</li>{% endfor %}</ol>
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+
+    <section class="long-program">
+      <h3>{{ table_heading }}</h3>
+      <table>
+        <thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+        <tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+      </table>
+    </section>
+
+    <section class="long-ending">
+      <div class="long-attachments"><strong>붙임</strong><ol>{% for attachment in attachments %}<li>{{ attachment }}</li>{% endfor %}</ol></div>
+      <div class="long-issuer"><small>발신 명의</small><strong>{{ issuer_title }}</strong><p>{{ copy_recipients }}</p></div>
+    </section>
+
+    <section class="long-signers">
+      {% for signer in signers %}
+      <div><span>{{ signer.role }}</span><strong>{{ signer.name }}</strong><small>{{ signer.date or "서명" }}</small></div>
+      {% endfor %}
+    </section>
+
+    <footer class="long-contact">
+      <div><span>우 {{ postal_code }} {{ address }}</span><span>{{ website }}</span></div>
+      <div><span>{{ phone }} / {{ fax }}</span><span>{{ email }}</span></div>
+    </footer>
+    <footer class="long-page-footer">
+      <span>{{ agency_name }} · {{ document_number }}</span>
+      <strong>2 / 2</strong>
+    </footer>
+  </article>
+</main>
+{% endblock %}
