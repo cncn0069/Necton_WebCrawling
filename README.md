@@ -47,6 +47,10 @@ python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 `table` blocks가 들어 있는 계약 JSON은 공문 템플릿 10종으로 바로 렌더링할 수 있다.
 JSON 배열과 JSONL 배치 입력도 지원한다.
 
+단일 파일과 디렉터리 일괄 실행, 입력 규칙, 템플릿 선택 방법은
+[`docs/generated-document-pdf-pipeline.md`](./docs/generated-document-pdf-pipeline.md)에
+정리했다.
+
 ```bash
 python scripts/render_generated_documents.py input.json \
   --output-dir output/pdf/generated_documents \
@@ -69,6 +73,56 @@ blocks를 평탄화한 결과와 같은지 먼저 검사한다. 두 값이 다�
 기관명을 유지하며 템플릿은 기관 선택에 영향을 주지 않는다.
 `manifest.json`의 `identity.agency_pool_index`, `organization_category`,
 `selection_category`, `agency_seed`로 분포를 감사할 수 있다.
+
+결재선과 행정 처리 문구는 입력에 있을 때만 렌더링한다. 다음처럼
+`generated_document.document_metadata`에 명시하며, `pending` 슬롯에는
+`stamp`나 `approved_at`을 넣을 수 없다.
+
+```json
+{
+  "document_metadata": {
+    "approval_line": {
+      "slots": [
+        {
+          "role": "담당",
+          "name": "김가온",
+          "status": "approved",
+          "approved_at": "2025-01-07",
+          "stamp": {
+            "mode": "synthetic",
+            "stamp_text": "김가온인",
+            "seed": 10000,
+            "profile": "dry_ink",
+            "shape": "square"
+          }
+        },
+        {
+          "role": "기관장",
+          "name": null,
+          "status": "pending",
+          "approved_at": null,
+          "stamp": null
+        }
+      ]
+    },
+    "administrative_events": [
+      {
+        "type": "review_deadline",
+        "date": "2025-01-15",
+        "text": "2025년 1월 15일까지 심사할 예정입니다."
+      }
+    ]
+  }
+}
+```
+
+합성 도장은 실제 기관 이미지를 사용하지 않고 `stamp_text`만으로 새로 그린다.
+`profile`은 `normal`, `light_ink`, `uneven_pressure`, `damaged`,
+`dry_ink`, `wet_blur`, `shape`은 `round`, `square`, `oval` 중 하나다.
+`profile`, `shape`, `seed`를 생략하면 문서 seed로 재현 가능한 값을 고른다.
+짧은 결재자명은 원형·사각형, 긴 기관명은 원형·타원형을 우선한다. 날인 위치는
+일반 55%, 경계선 걸침 25%, 이름/일자 부분 겹침 20%로 선택되며 실제 선택값은
+`manifest.json`의 `approval[].stamp.parameters`와 `placement`에 기록된다.
 
 10종 템플릿은 실제 공문 예시처럼 흑백·회색 중심의 인쇄 톤을 공유한다. 색상
 테마 대신 여백, 구획선, 제목 정렬, 표와 본문 배치로 레이아웃을 변주한다.
