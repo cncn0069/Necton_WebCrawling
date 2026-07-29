@@ -55,6 +55,7 @@ from rd2.source_generation.legacy_synthetic import (  # noqa: E402
 )
 from rd2.source_generation.pipeline import (  # noqa: E402
     OpenAIResponsesGateway,
+    RetryingGateway,
     PipelineConfig,
     StructuredCallError,
     StructuredOutputGateway,
@@ -560,11 +561,19 @@ def main(argv: list[str] | None = None) -> int:
         help="P1 본문 구체성 검사 실패 시 수행할 최대 보정 호출 수",
     )
     parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=2,
+        help="확률적 계약 위반 시 같은 요청을 최대 몇 번 보낼지. 1이면 재시도 없음.",
+    )
+    parser.add_argument(
         "--summary-only",
         action="store_true",
         help="기존 케이스 파일만 읽어 통합 CSV/JSONL을 다시 만든다.",
     )
     args = parser.parse_args(argv)
+    if args.max_attempts < 1:
+        raise ValueError("max-attempts must be at least 1")
     if args.max_quality_repairs < 0:
         raise ValueError("max-quality-repairs must be non-negative")
 
@@ -593,10 +602,16 @@ def main(argv: list[str] | None = None) -> int:
     prompt_bundle = build_prompt_bundle(selection_config)
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    gateway = OpenAIResponsesGateway(client)
+    # 계약 위반은 확률적이라(20건 x 3회에서 3회 모두 실패한 케이스 0건)
+    # 같은 요청을 한 번 더 보내는 것만으로 상당수가 해소된다.
+    gateway = RetryingGateway(
+        OpenAIResponsesGateway(client),
+        max_attempts=args.max_attempts,
+    )
     config = PipelineConfig(
         generator_model=generator_model,
         grader_model=grader_model,
+        reference_date=date.today(),
     )
     synthetic_generator = PreviewSyntheticGenerator(gateway, generator_model)
     all_cases = preview_cases()
