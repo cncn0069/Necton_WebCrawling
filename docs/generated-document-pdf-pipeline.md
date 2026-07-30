@@ -2,7 +2,12 @@
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 `research_report`는 전용
-연구보고서 3종을 사용하고, 그 밖의 입력은 기존 공문 10종을 사용한다.
+연구보고서 3종을 사용한다.
+
+`source_classification.document_type`이 `directive`(훈령),
+`regulation`(예규), `notification`(고시)이면 행정규칙 전용 서식 4종으로
+라우팅한다. 세 유형은 같은 렌더러를 공유하고 입력 분류값에 따라 유형명만
+달라진다. 그 밖의 유형은 기존 공문 서식을 사용한다.
 
 ## 준비
 
@@ -85,6 +90,10 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 research_01_classic_flow
 research_02_modular_policy
 research_03_academic_flow
+rule_01_promulgation
+rule_02_article_rail
+rule_03_gazette_columns
+rule_04_notice_frame
 ```
 
 `result.source_classification.document_type`이 `research_report`이면 위
@@ -125,6 +134,8 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/generated_document_pipeline.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
+- `src/rd2/generators/administrative_rule_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
+- `src/rd2/generators/templates/administrative_rule/`
 - `src/rd2/generators/templates/research_report/`

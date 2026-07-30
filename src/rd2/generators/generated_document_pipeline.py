@@ -28,6 +28,10 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from rd2.generators.administrative_rule_rendering import (
+    ADMINISTRATIVE_RULE_MAX_PAGES,
+    render_administrative_rule_variations,
+)
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
@@ -62,6 +66,16 @@ _CONTENT_CONTEXT_KEYS = frozenset(
     }
 )
 _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
+_ADMINISTRATIVE_RULE_LABELS = {
+    SemanticDocumentType.DIRECTIVE: "훈령",
+    SemanticDocumentType.REGULATION: "예규",
+    SemanticDocumentType.NOTIFICATION: "고시",
+}
+_ARTICLE_RE = re.compile(
+    r"^(제\s*\d+\s*조(?:\([^)]*\))?)\s*(.*)$",
+    re.DOTALL,
+)
+_CHAPTER_RE = re.compile(r"^제\s*\d+\s*장(?:\s|$)")
 
 
 class GeneratedDocumentPipelineError(ValueError):
@@ -355,7 +369,6 @@ class SourceClassificationContract(BaseModel):
         if isinstance(value, str):
             return _non_empty(value, "document_type")
         return value
-
 
 class GenerationResult(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -866,6 +879,98 @@ def build_research_report_context(
     }
 
 
+def build_administrative_rule_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """행정규칙 block 순서를 유지한 렌더링 context를 만든다."""
+
+    document = envelope.result.generated_document
+    source_classification = envelope.result.source_classification
+    if source_classification is None:
+        raise ValueError("Administrative rule rendering requires document_type")
+    document_type = source_classification.document_type
+    if document_type not in _ADMINISTRATIVE_RULE_LABELS:
+        raise ValueError(f"Unsupported administrative rule type: {document_type}")
+
+    blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        if isinstance(block, ParagraphBlock):
+            style_class = ""
+            label = ""
+            content = block.text
+            article_match = _ARTICLE_RE.match(block.text)
+            if _CHAPTER_RE.match(block.text):
+                style_class = "is-chapter"
+            elif block.text.strip().startswith("부칙"):
+                style_class = "is-supplement"
+            elif article_match:
+                style_class = "is-article"
+                label = article_match.group(1)
+                content = article_match.group(2)
+            blocks.append(
+                {
+                    "kind": block.kind,
+                    "block_id": block.block_id,
+                    "style_class": style_class,
+                    "label": label,
+                    "content": content,
+                }
+            )
+        elif isinstance(block, KeyValueBlock):
+            blocks.append(
+                {
+                    "kind": block.kind,
+                    "block_id": block.block_id,
+                    "entries": [
+                        {"key": entry.key, "value": entry.value}
+                        for entry in block.entries
+                    ],
+                }
+            )
+        elif isinstance(block, BulletListBlock):
+            blocks.append(
+                {
+                    "kind": block.kind,
+                    "block_id": block.block_id,
+                    "items": list(block.items),
+                }
+            )
+        elif isinstance(block, TableBlock):
+            blocks.append(
+                {
+                    "kind": block.kind,
+                    "block_id": block.block_id,
+                    "columns": list(block.columns),
+                    "rows": [list(row) for row in block.rows],
+                    "is_wide": len(block.columns) >= 7,
+                }
+            )
+        elif isinstance(block, AttachmentReferenceBlock):
+            blocks.append(
+                {
+                    "kind": block.kind,
+                    "block_id": block.block_id,
+                    "attachment_id": block.attachment_id,
+                    "label": block.label,
+                    "description": block.description or "",
+                }
+            )
+        else:
+            raise TypeError(f"Unsupported generated block: {type(block)!r}")
+
+    metadata_context = build_template_context(envelope, seed=seed)
+    return {
+        "document_type_label": _ADMINISTRATIVE_RULE_LABELS[document_type],
+        "title": document.title,
+        "agency_name": document.agency_name or "",
+        "blocks": blocks,
+        "signers": metadata_context["signers"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -880,16 +985,22 @@ def render_generation_payload(
     envelope = parse_generation_payload(payload, allow_failed=allow_failed)
     seed = base_seed if base_seed is not None else _deterministic_seed(envelope)
     document = envelope.result.generated_document
-    document_type = (
-        envelope.result.source_classification.document_type.value
+    document_type_enum = (
+        envelope.result.source_classification.document_type
         if envelope.result.source_classification
         else None
     )
-    renderer_family = (
-        "research_report"
-        if document_type == "research_report"
-        else "official_document"
+    document_type = (
+        document_type_enum.value
+        if document_type_enum is not None
+        else None
     )
+    if document_type == "research_report":
+        renderer_family = "research_report"
+    elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
+        renderer_family = "administrative_rule"
+    else:
+        renderer_family = "official_document"
     input_metadata = {
         "contract_version": envelope.result.contract_version,
         "document_type": document_type,
@@ -918,6 +1029,17 @@ def render_generation_payload(
             ),
             max_pages=10,
             input_metadata=input_metadata,
+        )
+    elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
+        context = build_administrative_rule_context(envelope, seed=seed)
+        manifest = render_administrative_rule_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(document),
+            max_pages=ADMINISTRATIVE_RULE_MAX_PAGES,
         )
     else:
         context = build_template_context(envelope, seed=seed)

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="administrative_rule/styles.css">
+  <style>{{ variation_css|safe }}</style>
+</head>
+<body
+  class="rule-document {{ variant_class }} {{ density_class }}"
+  data-rule-label="{{ document_type_label }}"
+>
+  <article class="rule-shell">
+    <header class="rule-header">
+      <div class="rule-type">{{ document_type_label }}</div>
+      {% if agency_name %}
+      <div class="rule-agency">{{ agency_name }}</div>
+      {% endif %}
+      <h1>{{ title }}</h1>
+    </header>
+
+    <main class="rule-body">
+      {% for block in blocks %}
+        {% if block["kind"] == "paragraph" %}
+        <p class="rule-block paragraph {{ block["style_class"] }}" data-block-id="{{ block["block_id"] }}">{% if block["label"] %}<strong class="article-label">{{ block["label"] }}</strong> {% endif %}<span>{{ block["content"] }}</span></p>
+        {% elif block["kind"] == "key_value" %}
+        <dl class="rule-block key-values" data-block-id="{{ block["block_id"] }}">
+          {% for entry in block["entries"] %}
+          <div><dt>{{ entry.key }}</dt><dd>{{ entry.value }}</dd></div>
+          {% endfor %}
+        </dl>
+        {% elif block["kind"] == "bullet_list" %}
+        <ol class="rule-block bullet-list" data-block-id="{{ block["block_id"] }}">
+          {% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}
+        </ol>
+        {% elif block["kind"] == "table" %}
+        <section class="rule-block table-block{% if block["is_wide"] %} is-wide{% endif %}" data-block-id="{{ block["block_id"] }}">
+          <table>
+            <thead><tr>{% for column in block["columns"] %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+            <tbody>
+              {% for row in block["rows"] %}
+              <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        {% elif block["kind"] == "attachment_reference" %}
+        <p class="rule-block attachment" data-block-id="{{ block["block_id"] }}">
+          <strong>붙임</strong> {{ block["label"] }} ({{ block["attachment_id"] }}){% if block["description"] %}: {{ block["description"] }}{% endif %}
+        </p>
+        {% endif %}
+      {% endfor %}
+    </main>
+
+    {% if administrative_events %}
+    <section class="administrative-events">
+      {% for event in administrative_events %}
+      <p><time>{{ event.date }}</time> {{ event.text }}</p>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if signers %}
+    <section class="rule-approval">
+      {% for signer in signers %}
+      <div class="approval-slot">
+        <strong>{{ signer.role }}</strong>
+        {% if signer.name %}<span>{{ signer.name }}</span>{% endif %}
+        {% if signer.date %}<time>{{ signer.date }}</time>{% endif %}
+        {% if signer.stamp_data_uri %}
+        <img src="{{ signer.stamp_data_uri }}" alt="{{ signer.stamp_alt }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </article>
+</body>
+</html>
