@@ -1,0 +1,476 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+@page research-cover {
+  size: A4;
+  margin: 0;
+}
+@page research-content {
+  size: A4;
+  margin: 23mm 21mm 19mm;
+  @bottom-center {
+    color: #687078;
+    content: counter(page);
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+@page research-wide {
+  size: A4 landscape;
+  margin: 18mm 17mm 16mm;
+  @bottom-center {
+    color: #687078;
+    content: counter(page);
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  color: #202225;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: calc(10pt * var(--report-font-scale, 1));
+  line-height: var(--report-line-height, 1.72);
+}
+.report-cover {
+  height: 297mm;
+  page: research-cover;
+  page-break-after: always;
+  position: relative;
+}
+.cover-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  justify-content: center;
+}
+.report-cover h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.report-cover h1.title-long { font-size: 23pt; }
+.report-cover h1.title-extra-long { font-size: 19pt; }
+.report-content { page: research-content; }
+.running-header {
+  align-items: center;
+  display: flex;
+  font-size: 8pt;
+  justify-content: space-between;
+  margin-bottom: 13mm;
+}
+.running-title {
+  max-width: 132mm;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.content-block {
+  break-inside: auto;
+  margin: 0 0 var(--report-block-gap, 7mm);
+}
+.content-block p {
+  margin: 0;
+  orphans: 3;
+  text-align: justify;
+  white-space: pre-line;
+  widows: 3;
+}
+.key-value-grid {
+  display: grid;
+  margin: 0;
+}
+.key-value-entry { break-inside: avoid; }
+.key-value-entry dt {
+  font-size: .82em;
+  font-weight: 700;
+  margin-bottom: 1mm;
+}
+.key-value-entry dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.kv-columns-1 .key-value-grid { grid-template-columns: 1fr; }
+.kv-columns-2 .key-value-grid { grid-template-columns: repeat(2, 1fr); }
+.kv-columns-3 .key-value-grid { grid-template-columns: repeat(3, 1fr); }
+.document-list {
+  margin: 0;
+  padding-left: 7mm;
+}
+.document-list li {
+  break-inside: avoid;
+  margin: 0 0 2mm;
+  padding-left: 1mm;
+}
+.list-columns-2 .document-list {
+  column-count: 2;
+  column-gap: 10mm;
+}
+.table-wrap {
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+thead { display: table-header-group; }
+th, td {
+  line-height: 1.5;
+  padding: var(--report-table-padding, 2.5mm) 2mm;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  font-size: .83em;
+  font-weight: 700;
+}
+td { font-size: .85em; }
+tr { break-inside: avoid; }
+.columns-6 th, .columns-6 td,
+.columns-7 th, .columns-7 td {
+  font-size: .76em;
+  padding-left: 1.5mm;
+  padding-right: 1.5mm;
+}
+.content-block.is-wide {
+  break-after: page;
+  break-before: page;
+  page: research-wide;
+}
+.content-block.is-wide th,
+.content-block.is-wide td {
+  font-size: .76em;
+  padding: 1.6mm 1.3mm;
+}
+.attachment-reference {
+  break-inside: avoid;
+  display: block;
+}
+.attachment-label { display: block; }
+.attachment-id,
+.attachment-description {
+  display: block;
+  font-size: .84em;
+  margin-top: 1mm;
+}
+.attachment-id { overflow-wrap: anywhere; }
+.administrative-events {
+  break-inside: avoid;
+  margin: 8mm 0;
+  padding: 4mm 5mm;
+}
+.administrative-events p { margin: 0; }
+.administrative-events p + p { margin-top: 2mm; }
+.administrative-events time {
+  font-size: .88em;
+  font-weight: 700;
+  margin-right: 3mm;
+  white-space: nowrap;
+}
+.research-approval {
+  break-inside: avoid;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-left: auto;
+  margin-top: 9mm;
+  max-width: 120mm;
+}
+.research-approval.signer-count-1 {
+  grid-template-columns: 1fr;
+  max-width: 30mm;
+}
+.research-approval.signer-count-2 {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 58mm;
+}
+.research-approval.signer-count-3 {
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 84mm;
+}
+.research-approval.signer-count-4 {
+  grid-template-columns: repeat(4, 1fr);
+  max-width: 106mm;
+}
+.research-signer {
+  align-items: center;
+  border: .2mm solid #888;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 24mm;
+  overflow: visible;
+  padding: 2mm 1mm;
+  position: relative;
+  text-align: center;
+}
+.research-signer + .research-signer { border-left: 0; }
+.research-signer strong,
+.research-signer span,
+.research-signer small {
+  position: relative;
+  z-index: 1;
+}
+.research-signer strong { font-size: .72em; }
+.research-signer span { font-size: .82em; }
+.research-signer small { font-size: .65em; }
+.approval-stamp {
+  display: block;
+  height: 14mm;
+  object-fit: contain;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 14mm;
+  z-index: 0;
+}
+.approval-stamp.stamp-shape-square {
+  height: 13mm;
+  width: 13mm;
+}
+.approval-stamp.stamp-shape-oval {
+  height: 14mm;
+  width: 18mm;
+}
+
+/* 1. 전통적인 공공 연구보고서 */
+.research-classic { background: #fff; }
+.research-classic .report-cover {
+  background: #fff;
+  border-top: 7mm solid #163c60;
+  padding: 28mm 27mm 24mm;
+}
+.research-classic .report-cover::after {
+  border: .35mm solid #aebdca;
+  bottom: 17mm;
+  content: "";
+  left: 17mm;
+  position: absolute;
+  right: 17mm;
+  top: 18mm;
+}
+.research-classic .cover-inner {
+  position: relative;
+  z-index: 1;
+}
+.research-classic .document-type-label {
+  color: #163c60;
+  font-size: 9pt;
+  font-weight: 700;
+  letter-spacing: .14em;
+  margin-bottom: 12mm;
+}
+.research-classic .report-cover h1 {
+  border-left: 2mm solid #163c60;
+  font-size: 27pt;
+  line-height: 1.45;
+  padding-left: 9mm;
+}
+.research-classic .report-cover h1.title-long { font-size: 23pt; }
+.research-classic .report-cover h1.title-extra-long { font-size: 19pt; }
+.research-classic .cover-agency {
+  bottom: 30mm;
+  color: #163c60;
+  font-size: 14pt;
+  font-weight: 700;
+  left: 36mm;
+  position: absolute;
+}
+.research-classic .running-header {
+  border-bottom: .35mm solid #163c60;
+  color: #163c60;
+  padding-bottom: 3mm;
+}
+.research-classic .content-block.is-first {
+  border-left: 1.4mm solid #163c60;
+  font-size: 1.12em;
+  line-height: 1.85;
+  padding: 1mm 0 1mm 6mm;
+}
+.research-classic .key-value-grid { border: .3mm solid #768b9d; }
+.research-classic .key-value-entry {
+  border-bottom: .2mm solid #c9d1d7;
+  padding: 3.5mm 4mm;
+}
+.research-classic.kv-columns-2 .key-value-entry:nth-child(odd),
+.research-classic.kv-columns-3 .key-value-entry:not(:nth-child(3n)) {
+  border-right: .2mm solid #c9d1d7;
+}
+.research-classic .key-value-entry dt { color: #526d83; }
+.research-classic .document-list {
+  background: #edf3f7;
+  border-left: 1.4mm solid #163c60;
+  padding: 5mm 6mm 5mm 12mm;
+}
+.research-classic th {
+  background: #163c60;
+  color: #fff;
+}
+.research-classic td { border-bottom: .2mm solid #b7c1c9; }
+.research-classic .attachment-reference,
+.research-classic .administrative-events {
+  background: #f0f3f5;
+  border-top: .6mm solid #163c60;
+  padding: 4mm 5mm;
+}
+
+/* 2. 모듈형 정책 연구보고서 */
+.research-modular {
+  background: #fbfaf4;
+  color: #22241f;
+}
+.research-modular .report-cover {
+  background: #f8f4e9;
+  border-left: 43mm solid #405d46;
+  padding: 28mm 24mm 24mm 20mm;
+}
+.research-modular .document-type-label {
+  color: #405d46;
+  font-size: 9pt;
+  font-weight: 700;
+  letter-spacing: .18em;
+  margin-bottom: 8mm;
+}
+.research-modular .report-cover h1 {
+  border-top: .5mm solid #405d46;
+  font-size: 28pt;
+  line-height: 1.3;
+  padding-top: 8mm;
+}
+.research-modular .report-cover h1.title-long { font-size: 23pt; }
+.research-modular .report-cover h1.title-extra-long { font-size: 19pt; }
+.research-modular .cover-agency {
+  bottom: 27mm;
+  color: #405d46;
+  font-size: 14pt;
+  font-weight: 700;
+  position: absolute;
+}
+.research-modular .running-header { color: #405d46; }
+.research-modular .running-header::before {
+  background: #405d46;
+  content: "";
+  height: 2.4mm;
+  margin-right: 4mm;
+  width: 8mm;
+}
+.research-modular .running-title { margin-right: auto; }
+.research-modular .content-block.is-first {
+  background: #405d46;
+  border-radius: 2mm;
+  color: #fff;
+  font-size: 1.1em;
+  line-height: 1.85;
+  padding: 6mm;
+}
+.research-modular .key-value-grid { gap: 3mm; }
+.research-modular .key-value-entry {
+  background: #e9e5d9;
+  border-radius: 2mm;
+  min-height: 28mm;
+  padding: 4mm;
+}
+.research-modular .key-value-entry dt { color: #526d58; }
+.research-modular .document-list { padding: 0; }
+.research-modular .document-list li {
+  background: #e4eade;
+  border-radius: 2mm;
+  list-style-position: inside;
+  margin-bottom: 3mm;
+  padding: 3.5mm;
+}
+.research-modular th {
+  border-bottom: 1mm solid #405d46;
+  color: #405d46;
+}
+.research-modular td { border-bottom: .2mm solid #aaa99f; }
+.research-modular .attachment-reference,
+.research-modular .administrative-events {
+  background: #e9e5d9;
+  border-radius: 2mm;
+  padding: 5mm;
+}
+
+/* 3. 절제된 학술형 연구보고서 */
+.research-academic {
+  background: #fff;
+  color: #111;
+}
+.research-academic .report-cover {
+  background: #fff;
+  border-left: 12mm solid #151515;
+  padding: 28mm 28mm 25mm 31mm;
+}
+.research-academic .document-type-label {
+  border-bottom: .3mm solid #111;
+  font-size: 9pt;
+  letter-spacing: .2em;
+  margin-bottom: 28mm;
+  padding-bottom: 3mm;
+  width: 55mm;
+}
+.research-academic .report-cover h1 {
+  font-size: 25pt;
+  font-weight: 400;
+  line-height: 1.65;
+}
+.research-academic .report-cover h1.title-long { font-size: 22pt; }
+.research-academic .report-cover h1.title-extra-long { font-size: 18pt; }
+.research-academic .cover-agency {
+  border-top: .3mm solid #111;
+  bottom: 28mm;
+  font-size: 13pt;
+  left: 31mm;
+  padding-top: 4mm;
+  position: absolute;
+  right: 28mm;
+}
+.research-academic .running-header {
+  border-bottom: .3mm solid #111;
+  border-top: .3mm solid #111;
+  padding: 2mm 0;
+}
+.research-academic .content-block p { text-indent: 1em; }
+.research-academic .content-block.is-first {
+  border-bottom: .8mm double #111;
+  font-size: 1.08em;
+  line-height: 1.95;
+  padding-bottom: 6mm;
+}
+.research-academic .key-value-grid {
+  border-bottom: .5mm solid #111;
+  border-top: .5mm solid #111;
+}
+.research-academic .key-value-entry {
+  padding: 2.5mm 2mm;
+}
+.research-academic.kv-columns-1 .key-value-entry {
+  display: grid;
+  grid-template-columns: 40mm 1fr;
+}
+.research-academic .key-value-entry + .key-value-entry {
+  border-top: .2mm solid #aaa;
+}
+.research-academic .key-value-entry dt { font-size: .9em; }
+.research-academic .document-list { padding-left: 8mm; }
+.research-academic .document-list li {
+  border-bottom: .2mm solid #bbb;
+  padding: 1.5mm 0 2.5mm;
+}
+.research-academic th {
+  border-bottom: .5mm solid #111;
+  border-top: .5mm solid #111;
+}
+.research-academic td { border-bottom: .2mm solid #777; }
+.research-academic .attachment-reference,
+.research-academic .administrative-events {
+  border: .3mm solid #111;
+  padding: 4mm 5mm;
+}

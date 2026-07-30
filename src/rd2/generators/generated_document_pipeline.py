@@ -1,20 +1,20 @@
-"""구조화 생성 계약을 공문 템플릿 PDF로 변환한다.
+"""구조화 생성 계약을 문서 유형별 Jinja2 템플릿 PDF로 변환한다.
 
 데이터 흐름::
 
     pass1 JSON
         -> 계약/실패 검증
         -> blocks와 body_text 무결성 검증
-        -> 기존 10종 템플릿 context
+        -> document_type별 템플릿 context
         -> Jinja2 + WeasyPrint
         -> PDF 텍스트 누락 검증 + manifest
 
 ``generated_document.blocks``가 내용의 기준이다. ``body_text``는 blocks를
 평탄화한 값과 같은지 검증하는 폴백이며, 두 값이 다르면 렌더링하지 않는다.
 ``generated_document.agency_name``이 있으면 기관명을 그대로 보존한다.
-기관명이 없으면 특정 직역과 본문이 잘못 결합되지 않도록 범용 공공기관
-가상 풀만 사용한다. 그 밖의 문서 메타데이터는 입력 계약에 없으면 생성하지
-않는다.
+공문 경로는 기관명이 없을 때 범용 공공기관 가상 풀을 사용하고,
+연구보고서 경로는 빈 기관명을 그대로 보존한다. 그 밖의 문서
+메타데이터는 입력 계약에 없으면 생성하지 않는다.
 """
 
 from __future__ import annotations
@@ -31,12 +31,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.research_report_rendering import (
+    render_research_report_variations,
+)
 from rd2.generators.synthetic_approval_stamps import (
     StampProfile,
     StampShape,
     build_stamp_placement,
     generate_synthetic_approval_stamp,
 )
+from rd2.source_generation.classification_taxonomy import SemanticDocumentType
 
 _CONTRACT_VERSION_RE = re.compile(r"^1\.\d+\.\d+$")
 _CONTENT_CONTEXT_KEYS = frozenset(
@@ -340,10 +344,24 @@ class GenerationFailure(BaseModel):
     message: str | None = None
 
 
+class SourceClassificationContract(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    document_type: SemanticDocumentType
+
+    @field_validator("document_type", mode="before")
+    @classmethod
+    def _validate_document_type(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _non_empty(value, "document_type")
+        return value
+
+
 class GenerationResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     contract_version: str
+    source_classification: SourceClassificationContract | None = None
     generation_route: str | None = None
     generation_target: dict[str, Any] | None = None
     generated_document: GeneratedDocumentContract
@@ -471,7 +489,11 @@ def parse_generation_payload(
     return envelope
 
 
-def source_text_atoms(document: GeneratedDocumentContract) -> tuple[str, ...]:
+def source_text_atoms(
+    document: GeneratedDocumentContract,
+    *,
+    include_administrative_event_dates: bool = False,
+) -> tuple[str, ...]:
     """PDF에 빠짐없이 있어야 하는 원문 단위를 반환한다."""
 
     atoms: list[str] = [document.agency_name] if document.agency_name else []
@@ -502,8 +524,11 @@ def source_text_atoms(document: GeneratedDocumentContract) -> tuple[str, ...]:
             if slot.approved_at:
                 atoms.append(slot.approved_at.isoformat())
     if metadata:
-        atoms.extend(event.text for event in metadata.administrative_events)
-    return tuple(dict.fromkeys(atom for atom in atoms if atom.strip()))
+        for event in metadata.administrative_events:
+            if include_administrative_event_dates:
+                atoms.append(event.date.isoformat())
+            atoms.append(event.text)
+    return tuple(atom for atom in atoms if atom.strip())
 
 
 def _list_items(items: list[str]) -> list[dict[str, str]]:
@@ -539,6 +564,100 @@ def _derived_stamp_seed(
     return int(sha256(material).hexdigest()[:8], 16)
 
 
+def _build_document_metadata_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int,
+) -> dict[str, Any]:
+    """명시된 결재선과 행정 이벤트만 공통 렌더링 context로 변환한다."""
+
+    metadata = envelope.result.generated_document.document_metadata
+    administrative_events = [
+        {
+            "type": event.type,
+            "date": event.date.isoformat(),
+            "text": event.text,
+        }
+        for event in (metadata.administrative_events if metadata else [])
+    ]
+    signers: list[dict[str, Any]] = []
+    approval_manifest: list[dict[str, Any]] = []
+    approval_line = metadata.approval_line if metadata else None
+    for slot_index, slot in enumerate(
+        approval_line.slots if approval_line else [],
+        start=1,
+    ):
+        stamp_data_uri = ""
+        stamp_parameters: dict[str, object] | None = None
+        if slot.stamp is not None:
+            stamp_seed = (
+                slot.stamp.seed
+                if slot.stamp.seed is not None
+                else _derived_stamp_seed(
+                    seed,
+                    slot_index,
+                    slot.stamp.stamp_text,
+                )
+            )
+            rendered_stamp = generate_synthetic_approval_stamp(
+                slot.stamp.stamp_text,
+                seed=stamp_seed,
+                profile=slot.stamp.profile,
+                shape=slot.stamp.shape,
+            )
+            stamp_placement = build_stamp_placement(stamp_seed)
+            stamp_data_uri = rendered_stamp.data_uri
+            stamp_parameters = rendered_stamp.parameters.to_dict()
+            stamp_placement_data = stamp_placement.to_dict()
+        else:
+            stamp_placement_data = None
+
+        approved_at = (
+            slot.approved_at.isoformat() if slot.approved_at else ""
+        )
+        signers.append(
+            {
+                "role": slot.role,
+                "name": slot.name or "",
+                "date": approved_at,
+                "status": slot.status,
+                "stamp_data_uri": stamp_data_uri,
+                "stamp_alt": (
+                    f"{slot.role} 합성 결재 도장" if stamp_data_uri else ""
+                ),
+                "stamp_shape": (
+                    stamp_parameters["shape"] if stamp_parameters else ""
+                ),
+                "stamp_placement": stamp_placement_data,
+            }
+        )
+        approval_manifest.append(
+            {
+                "slot_index": slot_index,
+                "role": slot.role,
+                "name": slot.name,
+                "status": slot.status,
+                "approved_at": approved_at or None,
+                "stamp": (
+                    {
+                        "mode": slot.stamp.mode,
+                        "stamp_text": slot.stamp.stamp_text,
+                        "parameters": stamp_parameters,
+                        "placement": stamp_placement_data,
+                    }
+                    if slot.stamp is not None
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "signers": signers,
+        "approval_manifest": approval_manifest,
+        "administrative_events": administrative_events,
+    }
+
+
 def build_template_context(
     envelope: GenerationEnvelope,
     *,
@@ -560,6 +679,10 @@ def build_template_context(
     long_sections: list[dict[str, Any]] = []
     checklist_items: list[dict[str, str]] = []
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
 
     for block in document.blocks:
         if isinstance(block, ParagraphBlock):
@@ -641,90 +764,15 @@ def build_template_context(
                     }
                 )
 
-    metadata = document.document_metadata
-    administrative_events = (
-        metadata.administrative_events if metadata else []
-    )
-    for event in administrative_events:
-        sections.append({"text": event.text, "items": []})
-        long_sections.append({"title": "", "items": [event.text]})
+    for event in metadata_context["administrative_events"]:
+        sections.append({"text": event["text"], "items": []})
+        long_sections.append({"title": "", "items": [event["text"]]})
         checklist_items.append(
             {
                 "group": "행정 처리",
-                "text": event.text,
+                "text": event["text"],
                 "owner": "",
                 "status": "",
-            }
-        )
-
-    signers: list[dict[str, Any]] = []
-    approval_manifest: list[dict[str, Any]] = []
-    approval_line = metadata.approval_line if metadata else None
-    for slot_index, slot in enumerate(
-        approval_line.slots if approval_line else [],
-        start=1,
-    ):
-        stamp_data_uri = ""
-        stamp_parameters: dict[str, object] | None = None
-        if slot.stamp is not None:
-            stamp_seed = (
-                slot.stamp.seed
-                if slot.stamp.seed is not None
-                else _derived_stamp_seed(
-                    resolved_seed,
-                    slot_index,
-                    slot.stamp.stamp_text,
-                )
-            )
-            rendered_stamp = generate_synthetic_approval_stamp(
-                slot.stamp.stamp_text,
-                seed=stamp_seed,
-                profile=slot.stamp.profile,
-                shape=slot.stamp.shape,
-            )
-            stamp_placement = build_stamp_placement(stamp_seed)
-            stamp_data_uri = rendered_stamp.data_uri
-            stamp_parameters = rendered_stamp.parameters.to_dict()
-            stamp_placement_data = stamp_placement.to_dict()
-        else:
-            stamp_placement_data = None
-
-        approved_at = (
-            slot.approved_at.isoformat() if slot.approved_at else ""
-        )
-        signers.append(
-            {
-                "role": slot.role,
-                "name": slot.name or "",
-                "date": approved_at,
-                "status": slot.status,
-                "stamp_data_uri": stamp_data_uri,
-                "stamp_alt": (
-                    f"{slot.role} 합성 결재 도장" if stamp_data_uri else ""
-                ),
-                "stamp_shape": (
-                    stamp_parameters["shape"] if stamp_parameters else ""
-                ),
-                "stamp_placement": stamp_placement_data,
-            }
-        )
-        approval_manifest.append(
-            {
-                "slot_index": slot_index,
-                "role": slot.role,
-                "name": slot.name,
-                "status": slot.status,
-                "approved_at": approved_at or None,
-                "stamp": (
-                    {
-                        "mode": slot.stamp.mode,
-                        "stamp_text": slot.stamp.stamp_text,
-                        "parameters": stamp_parameters,
-                        "placement": stamp_placement_data,
-                    }
-                    if slot.stamp is not None
-                    else None
-                ),
             }
         )
 
@@ -749,16 +797,9 @@ def build_template_context(
         "checklist_items": checklist_items,
         "issuer_title": "",
         "copy_recipients": "",
-        "signers": signers,
-        "approval_manifest": approval_manifest,
-        "administrative_events": [
-            {
-                "type": event.type,
-                "date": event.date.isoformat(),
-                "text": event.text,
-            }
-            for event in administrative_events
-        ],
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
         "document_number": "",
         "issue_date": "",
         "postal_code": "",
@@ -782,6 +823,49 @@ def build_template_context(
     }
 
 
+def build_research_report_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """입력 block 순서를 보존한 연구보고서 전용 context를 만든다."""
+
+    document = envelope.result.generated_document
+    ordered_blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        rendered = block.model_dump(mode="json")
+        if isinstance(block, TableBlock):
+            rendered["column_count"] = len(block.columns)
+            rendered["is_wide"] = len(block.columns) >= 8
+        else:
+            rendered["is_wide"] = False
+        ordered_blocks.append(rendered)
+
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": "연구보고서",
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "blocks": ordered_blocks,
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -791,27 +875,25 @@ def render_generation_payload(
     base_seed: int | None = None,
     template_slugs: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """생성 계약 하나를 공문 템플릿 변주 PDF로 렌더링한다."""
+    """생성 계약 하나를 document_type 전용 템플릿 PDF로 렌더링한다."""
 
     envelope = parse_generation_payload(payload, allow_failed=allow_failed)
     seed = base_seed if base_seed is not None else _deterministic_seed(envelope)
-    context = build_template_context(envelope, seed=seed)
     document = envelope.result.generated_document
-    manifest = render_official_document_variations(
-        context,
-        output_dir,
-        per_template=per_template,
-        base_seed=seed,
-        identity_seed=seed,
-        template_slugs=template_slugs,
-        protected_context_keys=_CONTENT_CONTEXT_KEYS,
-        required_source_texts=source_text_atoms(document),
-        enforce_expected_pages=False,
-        reject_legacy_identity=False,
+    document_type = (
+        envelope.result.source_classification.document_type.value
+        if envelope.result.source_classification
+        else None
     )
-
+    renderer_family = (
+        "research_report"
+        if document_type == "research_report"
+        else "official_document"
+    )
     input_metadata = {
         "contract_version": envelope.result.contract_version,
+        "document_type": document_type,
+        "renderer_family": renderer_family,
         "generation_route": envelope.result.generation_route,
         "generation_target": envelope.result.generation_target,
         "request_id": envelope.receipt.request_id if envelope.receipt else None,
@@ -822,7 +904,38 @@ def render_generation_payload(
         ).hexdigest(),
         "rendered_from_failed_input": envelope.failure is not None,
     }
+    if document_type == "research_report":
+        context = build_research_report_context(envelope, seed=seed)
+        manifest = render_research_report_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(
+                document,
+                include_administrative_event_dates=True,
+            ),
+            max_pages=10,
+            input_metadata=input_metadata,
+        )
+    else:
+        context = build_template_context(envelope, seed=seed)
+        manifest = render_official_document_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            identity_seed=seed,
+            template_slugs=template_slugs,
+            protected_context_keys=_CONTENT_CONTEXT_KEYS,
+            required_source_texts=source_text_atoms(document),
+            enforce_expected_pages=False,
+            reject_legacy_identity=False,
+        )
+
     for entry in manifest:
+        entry.setdefault("renderer_family", renderer_family)
         entry["input"] = input_metadata
 
     (output_dir / "manifest.json").write_text(
