@@ -154,6 +154,20 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+가이드·매뉴얼·지침 템플릿 slug:
+
+```text
+guide_01_classic
+guide_02_index
+guide_03_cards
+guide_04_field
+```
+
+`source_classification.document_type`이 `guide`이면 가이드·매뉴얼·지침
+4종으로 라우팅한다. 별도 장·절·절차 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. 입력에 없는 절차명이나 의미를
+추측해서 추가하지 않는다.
+
 질의회시집 템플릿 slug:
 
 ```text
@@ -202,9 +216,11 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/press_release_rendering.py`
 - `src/rd2/generators/administrative_rule_rendering.py`
 - `src/rd2/generators/interpretation_compilation_rendering.py`
+- `src/rd2/generators/guide_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
 - `src/rd2/generators/templates/administrative_rule/`
 - `src/rd2/generators/templates/interpretation_compilation/`
+- `src/rd2/generators/templates/guide/`

@@ -28,6 +28,10 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from rd2.generators.guide_rendering import (
+    GUIDE_MAX_PAGES,
+    render_guide_variations,
+)
 from rd2.generators.interpretation_compilation_rendering import (
     INTERPRETATION_COMPILATION_MAX_PAGES,
     render_interpretation_compilation_variations,
@@ -1137,6 +1141,42 @@ def build_interpretation_compilation_context(
     }
 
 
+def build_guide_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """공문과 같은 5종 block을 순서 그대로 guide context로 만든다."""
+
+    document = envelope.result.generated_document
+    blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        rendered = block.model_dump(mode="json")
+        rendered["is_wide"] = (
+            isinstance(block, TableBlock) and len(block.columns) >= 7
+        )
+        blocks.append(rendered)
+
+    metadata_context = build_template_context(envelope, seed=seed)
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": "GUIDE",
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "blocks": blocks,
+        "signers": metadata_context["signers"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -1169,6 +1209,8 @@ def render_generation_payload(
         renderer_family = "administrative_rule"
     elif document_type_enum == SemanticDocumentType.INTERPRETATION_COMPILATION:
         renderer_family = "interpretation_compilation"
+    elif document_type_enum == SemanticDocumentType.GUIDE:
+        renderer_family = "guide"
     else:
         renderer_family = "official_document"
     input_metadata = {
@@ -1236,6 +1278,17 @@ def render_generation_payload(
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(document),
             max_pages=INTERPRETATION_COMPILATION_MAX_PAGES,
+        )
+    elif document_type_enum == SemanticDocumentType.GUIDE:
+        context = build_guide_context(envelope, seed=seed)
+        manifest = render_guide_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(document),
+            max_pages=GUIDE_MAX_PAGES,
         )
     else:
         context = build_template_context(envelope, seed=seed)

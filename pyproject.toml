@@ -46,6 +46,8 @@ testpaths = ["tests"]
     "templates/administrative_rule/*.html",
     "templates/interpretation_compilation/*.css",
     "templates/interpretation_compilation/*.html",
+    "templates/guide/*.css",
+    "templates/guide/*.html",
     "templates/partials/*.html",
     "assets/fonts/*.ttf",
     "assets/fonts/LICENSE",

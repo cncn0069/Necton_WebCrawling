@@ -1,0 +1,546 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf");
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf");
+  font-weight: 700;
+}
+
+@page guide-content {
+  size: A4;
+  margin: 18mm 20mm 17mm;
+
+  @top-left {
+    content: string(guide-title);
+    color: #68747c;
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 7.5pt;
+  }
+
+  @top-right {
+    content: "GUIDE";
+    color: #68747c;
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+  }
+
+  @bottom-right {
+    content: counter(page, decimal-leading-zero);
+    color: #68747c;
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 7.5pt;
+  }
+}
+
+@page guide-content:first {
+  @top-left {
+    content: none;
+  }
+
+  @top-right {
+    content: none;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color: #20272c;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: 10pt;
+}
+
+body {
+  margin: 0;
+}
+
+.guide-document {
+  page: guide-content;
+  font-size: calc(10pt * var(--font-scale));
+  line-height: var(--line-height);
+  overflow-wrap: anywhere;
+}
+
+.guide-shell {
+  width: 100%;
+}
+
+.guide-header {
+  margin-bottom: 9mm;
+  padding-top: 3mm;
+  break-after: avoid;
+}
+
+.header-line {
+  display: flex;
+  justify-content: space-between;
+  min-height: 7mm;
+  padding-bottom: 3mm;
+  border-bottom: 1px solid #aab2b8;
+  color: #44596b;
+  font-size: 7.5pt;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+}
+
+.guide-header h1 {
+  max-width: 165mm;
+  margin: 10mm 0 0;
+  color: #20272c;
+  font-size: 24pt;
+  line-height: 1.3;
+  letter-spacing: -1.1px;
+  string-set: guide-title content();
+}
+
+.guide-header h1.title-long {
+  font-size: 20pt;
+}
+
+.guide-header h1.title-extra-long {
+  font-size: 17pt;
+  line-height: 1.4;
+}
+
+.guide-block {
+  position: relative;
+  margin-bottom: var(--block-gap);
+}
+
+.guide-block:last-child {
+  margin-bottom: 0;
+}
+
+.block-index {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 9mm;
+  color: #5d6c76;
+  font-size: 7.2pt;
+  font-weight: 700;
+  letter-spacing: .7px;
+}
+
+.block-content {
+  margin-left: 12mm;
+}
+
+.block-paragraph p {
+  margin: 0;
+  color: #30383e;
+  font-size: 10.3pt;
+  line-height: inherit;
+  white-space: pre-wrap;
+}
+
+.block-key-value {
+  break-inside: avoid;
+}
+
+.block-key-value dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1.2px solid #34434f;
+  border-bottom: 1px solid #b8c0c5;
+}
+
+.block-key-value dl > div {
+  min-height: 17mm;
+  padding: 3.5mm 4mm;
+  border-right: 1px solid #d4d9dc;
+}
+
+.block-key-value dl > div:nth-child(3n) {
+  border-right: 0;
+}
+
+.block-key-value dt {
+  color: #68747c;
+  font-size: 7.4pt;
+  font-weight: 700;
+}
+
+.block-key-value dd {
+  margin: 1.3mm 0 0;
+  color: #20272c;
+  font-size: 9.2pt;
+  font-weight: 700;
+}
+
+.block-bullet-list ul {
+  margin: 0;
+  padding: 4mm 5mm 4mm 10mm;
+  border-left: 3px solid #52697d;
+  background: #f1f3f4;
+}
+
+.block-bullet-list li {
+  margin: 1.1mm 0;
+  padding-left: 1mm;
+  break-inside: avoid;
+}
+
+.block-table {
+  margin-left: 0;
+}
+
+.block-table .block-content {
+  margin-left: 0;
+}
+
+.block-table .block-index {
+  position: static;
+  display: block;
+  width: auto;
+  margin-bottom: 2mm;
+}
+
+.block-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 8.6pt;
+  line-height: 1.48;
+}
+
+.block-table thead {
+  display: table-header-group;
+}
+
+.block-table tr {
+  break-inside: avoid;
+}
+
+.block-table th {
+  padding: 2.6mm 2.8mm;
+  border-top: 1.3px solid #2d3d49;
+  border-bottom: 1px solid #7f8a92;
+  background: #edf0f2;
+  text-align: left;
+  font-weight: 700;
+}
+
+.block-table td {
+  padding: 2.8mm;
+  border-bottom: 1px solid #d2d7da;
+  vertical-align: top;
+}
+
+.block-table.is-wide table {
+  font-size: 7.2pt;
+  line-height: 1.38;
+}
+
+.block-table.is-wide th,
+.block-table.is-wide td {
+  padding: 2mm 1.6mm;
+}
+
+.block-attachment-reference {
+  padding-top: 3.5mm;
+  border-top: 1px solid #adb6bc;
+  break-inside: avoid;
+}
+
+.attachment-line {
+  display: flex;
+  gap: 4mm;
+  margin: 0;
+  font-size: 8.8pt;
+}
+
+.attachment-line strong {
+  flex: 0 0 auto;
+  color: #344b5f;
+}
+
+.block-attachment-reference small {
+  display: block;
+  margin: 1mm 0 0 18mm;
+  color: #5f6970;
+  font-size: 8pt;
+}
+
+.guide-rail {
+  display: none;
+}
+
+.administrative-events {
+  margin-top: 9mm;
+  padding: 4mm 5mm;
+  border: 1px solid #c9cfd3;
+  break-inside: avoid;
+}
+
+.administrative-events p {
+  display: flex;
+  gap: 5mm;
+  margin: 1mm 0;
+  font-size: 8.6pt;
+}
+
+.administrative-events time {
+  flex: 0 0 auto;
+  color: #5c6971;
+}
+
+.guide-approval {
+  display: flex;
+  justify-content: flex-end;
+  gap: 3mm;
+  margin-top: 9mm;
+  break-inside: avoid;
+}
+
+.guide-approval > div {
+  position: relative;
+  width: 28mm;
+  min-height: 22mm;
+  padding: 2.5mm;
+  border: 1px solid #9ca6ad;
+  text-align: center;
+  font-size: 7.8pt;
+}
+
+.guide-approval strong,
+.guide-approval span,
+.guide-approval time {
+  display: block;
+}
+
+.guide-approval img {
+  position: absolute;
+  right: 1mm;
+  bottom: 0;
+  width: 17mm;
+  height: 17mm;
+  object-fit: contain;
+}
+
+/* 01. 정통 장절형 */
+.guide-classic::before {
+  position: fixed;
+  top: -18mm;
+  left: -25mm;
+  width: 250mm;
+  height: 4mm;
+  background: #34495a;
+  content: "";
+}
+
+.guide-classic .guide-header {
+  padding-top: 5mm;
+}
+
+.guide-classic .block-paragraph:first-child p {
+  font-size: 10.7pt;
+}
+
+/* 02. 좌측 인덱스형 */
+.guide-index .guide-shell {
+  margin-left: 31mm;
+  width: calc(100% - 31mm);
+}
+
+.guide-index .guide-rail {
+  position: fixed;
+  top: -18mm;
+  bottom: -17mm;
+  left: -22mm;
+  display: block;
+  width: 43mm;
+  padding: 23mm 8mm 0 9mm;
+  color: #f4f6f7;
+  background: #354550;
+}
+
+.guide-index .guide-rail strong {
+  display: block;
+  font-size: 16pt;
+  line-height: 1.2;
+}
+
+.guide-index .guide-rail span {
+  display: block;
+  margin-top: 4mm;
+  color: #c7d0d5;
+  font-size: 7pt;
+  letter-spacing: 1px;
+}
+
+.guide-index .header-line {
+  border-bottom-color: #7d8991;
+}
+
+.guide-index .guide-header h1 {
+  margin-top: 8mm;
+  font-size: 22pt;
+}
+
+.guide-index .block-content {
+  margin-left: 10mm;
+}
+
+.guide-index .block-table .block-content {
+  margin-left: 0;
+}
+
+/* 03. 블록 카드형 */
+.guide-cards {
+  color: #27302f;
+}
+
+.guide-cards .guide-header {
+  padding: 5mm 6mm 6mm;
+  border: 1px solid #d7dcda;
+  background: #f4f5f4;
+}
+
+.guide-cards .guide-header h1 {
+  margin-top: 7mm;
+  color: #263230;
+}
+
+.guide-cards .guide-block {
+  padding: 5mm 5.5mm;
+  border: 1px solid #d8ddda;
+  background: #f6f7f6;
+  break-inside: avoid;
+}
+
+.guide-cards .block-index {
+  top: 5mm;
+  left: 5.5mm;
+}
+
+.guide-cards .block-content {
+  margin-left: 11mm;
+}
+
+.guide-cards .block-table {
+  break-inside: auto;
+}
+
+.guide-cards .block-table .block-index {
+  margin: 0 0 2mm;
+}
+
+.guide-cards .block-table .block-content {
+  margin-left: 0;
+}
+
+.guide-cards .block-bullet-list ul {
+  border-left: 0;
+  background: #e7ebe8;
+}
+
+.guide-cards .block-attachment-reference {
+  border-top: 0;
+}
+
+/* 04. 현장 매뉴얼형 */
+.guide-field .guide-header {
+  display: grid;
+  grid-template-columns: 31mm 1fr;
+  gap: 7mm;
+  padding-bottom: 7mm;
+  border-bottom: 2px solid #3f4c53;
+}
+
+.guide-field .header-line {
+  display: block;
+  min-height: 25mm;
+  padding: 4mm;
+  border: 0;
+  color: #fff;
+  background: #3f4c53;
+  line-height: 1.7;
+}
+
+.guide-field .header-line span {
+  display: block;
+}
+
+.guide-field .guide-header h1 {
+  align-self: center;
+  margin: 0;
+  font-size: 21pt;
+}
+
+.guide-field .guide-block {
+  display: grid;
+  grid-template-columns: 22mm 1fr;
+  gap: 4mm;
+  padding-top: 4mm;
+  border-top: 1px solid #c6cdd1;
+}
+
+.guide-field .block-index {
+  position: static;
+  width: auto;
+  padding: 1.5mm 2mm;
+  border-top: 3px solid #9a7b42;
+  color: #4d565b;
+  background: #f2efe9;
+  font-size: 9pt;
+}
+
+.guide-field .block-content {
+  margin-left: 0;
+}
+
+.guide-field .block-key-value dl {
+  grid-template-columns: 1fr;
+}
+
+.guide-field .block-key-value dl > div {
+  display: grid;
+  grid-template-columns: 28mm 1fr;
+  min-height: auto;
+  padding: 2.7mm 3mm;
+  border-right: 0;
+  border-bottom: 1px solid #d4d9dc;
+}
+
+.guide-field .block-key-value dd {
+  margin: 0;
+}
+
+.guide-field .block-bullet-list ul {
+  border-left-color: #9a7b42;
+  background: #f5f3ef;
+}
+
+.guide-field .block-table {
+  display: block;
+}
+
+.guide-field .block-table .block-index {
+  margin-bottom: 3mm;
+}
+
+.guide-field .block-table .block-content {
+  margin-left: 0;
+}
+
+.density-compact .guide-header {
+  margin-bottom: 7mm;
+}
+
+.density-compact .guide-header h1 {
+  margin-top: 7mm;
+}
+
+.density-airy .guide-header {
+  margin-bottom: 11mm;
+}
