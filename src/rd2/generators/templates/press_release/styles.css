@@ -1,0 +1,363 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  font-style: normal;
+  font-weight: 400;
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  font-style: normal;
+  font-weight: 700;
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf") format("truetype");
+}
+
+@page press-content {
+  size: A4;
+  margin: 15mm 19mm 17mm;
+  @bottom-center {
+    content: "- " counter(page) " -";
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+@page press-wide {
+  size: A4 landscape;
+  margin: 16mm 17mm 17mm;
+  @bottom-center {
+    content: "- " counter(page) " -";
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  color: #171717;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: calc(10.2pt * var(--press-font-scale, 1));
+  line-height: var(--press-line-height, 1.65);
+}
+.release-shell { page: press-content; }
+.release-masthead {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.release-agency {
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.release-type {
+  font-size: 14pt;
+  font-weight: 700;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+.release-meta {
+  display: grid;
+  margin: 0;
+}
+.release-meta-entry {
+  display: grid;
+  gap: 3mm;
+  grid-template-columns: minmax(22mm, auto) 1fr;
+}
+.release-meta dt,
+.key-value-entry dt {
+  font-weight: 700;
+}
+.release-meta dd,
+.key-value-entry dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.meta-columns-1 .release-meta { grid-template-columns: 1fr; }
+.meta-columns-2 .release-meta { grid-template-columns: repeat(2, 1fr); }
+.release-title h1 {
+  font-size: 24pt;
+  letter-spacing: -.05em;
+  line-height: 1.32;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.release-title h1.title-long { font-size: 20pt; }
+.release-title h1.title-extra-long { font-size: 16.5pt; }
+.release-blocks {
+  display: block;
+}
+.release-blocks > .content-block,
+.release-blocks > .paragraph-group {
+  margin-top: var(--press-block-gap, 5.5mm);
+}
+.release-blocks > :first-child {
+  margin-top: 0;
+}
+.content-block,
+.paragraph-group {
+  break-inside: auto;
+}
+.block-paragraph p,
+.release-paragraph {
+  margin: 0;
+  text-align: justify;
+}
+.paragraph-group {
+  column-count: 1;
+  column-gap: 9mm;
+  column-rule: .2mm solid #d2d2d2;
+}
+.body-columns-2 .paragraph-group { column-count: 2; }
+.paragraph-group .release-paragraph + .release-paragraph {
+  margin-top: 4mm;
+}
+.block-paragraph.is-lead {
+  font-size: 11.8pt;
+  font-weight: 700;
+  line-height: 1.55;
+}
+.block-paragraph.is-lead.lead-long {
+  font-size: 10.7pt;
+  font-weight: 400;
+}
+.block-bullet-list ul {
+  margin: 0;
+  padding-left: 7mm;
+}
+.block-bullet-list li + li { margin-top: 1.5mm; }
+.summary-columns-2 .block-bullet-list.is-summary ul {
+  column-count: 2;
+  column-gap: 8mm;
+}
+.key-value-grid {
+  display: grid;
+  gap: 2.5mm 6mm;
+  grid-template-columns: 1fr;
+}
+.contact-columns-2 .is-footer-details .key-value-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+.key-value-entry {
+  display: grid;
+  gap: 3mm;
+  grid-template-columns: minmax(22mm, auto) 1fr;
+}
+.table-wrap {
+  overflow: hidden;
+  width: 100%;
+}
+table {
+  border-collapse: collapse;
+  font-size: .9em;
+  table-layout: fixed;
+  width: 100%;
+}
+th, td {
+  border: .2mm solid #777;
+  overflow-wrap: anywhere;
+  padding: var(--press-table-padding, 2.2mm);
+  text-align: left;
+  vertical-align: top;
+}
+th { font-weight: 700; }
+.block-table.is-wide {
+  break-before: page;
+  page: press-wide;
+}
+.block-table.is-wide + .content-block,
+.block-table.is-wide + .paragraph-group {
+  break-before: page;
+  page: press-content;
+}
+.block-attachment-reference {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: .88em;
+  gap: 2mm 4mm;
+}
+.block-attachment-reference::before {
+  content: "붙임";
+  font-weight: 700;
+}
+.administrative-events {
+  border-top: .3mm solid #555;
+  margin-top: var(--press-block-gap, 5.5mm);
+  padding-top: 3mm;
+}
+.administrative-events p {
+  display: flex;
+  gap: 4mm;
+  margin: 0;
+}
+.administrative-events p + p { margin-top: 2mm; }
+.administrative-events time {
+  font-size: .88em;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.press-approval {
+  display: grid;
+  gap: 2mm;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: var(--press-block-gap, 5.5mm);
+}
+.press-signer {
+  border: .2mm solid #777;
+  display: grid;
+  min-height: 25mm;
+  padding: 2mm;
+  position: relative;
+  text-align: center;
+}
+.press-signer span,
+.press-signer small { display: block; }
+.approval-stamp {
+  height: 17mm;
+  object-fit: contain;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 17mm;
+}
+
+/* 1. 정부 보도자료 정석형 */
+.press-classic .release-masthead {
+  border: .35mm solid #222;
+  min-height: 15mm;
+  padding: 2.5mm 6mm;
+}
+.press-classic .release-type { margin: 0 auto; }
+.press-classic .release-meta {
+  border-bottom: .35mm solid #222;
+  padding: 2.5mm 5mm;
+}
+.press-classic .release-title {
+  border: .45mm solid #222;
+  margin: 3mm 0 4mm;
+  padding: 6mm 7mm;
+  text-align: center;
+}
+.press-classic .block-paragraph.is-lead {
+  border-bottom: .25mm solid #888;
+  padding: 0 4mm 4mm;
+  text-align: center;
+}
+.press-classic .block-bullet-list.is-summary {
+  border-bottom: .35mm solid #333;
+  padding: 0 2mm 4mm;
+}
+.press-classic .block-bullet-list.is-summary li::marker {
+  content: "□  ";
+}
+.press-classic .is-footer-details {
+  border: .3mm solid #333;
+  padding: 3mm 4mm;
+}
+.press-classic th { background: #ededed; }
+
+/* 2. 제목 강조 브리핑형 */
+.press-brief .release-shell {
+  border-left: 5mm solid #27384a;
+  padding-left: 9mm;
+}
+.press-brief .release-masthead {
+  border-bottom: 1mm solid #27384a;
+  padding: 2mm 0 4mm;
+}
+.press-brief .release-type {
+  color: #27384a;
+  font-size: 12pt;
+}
+.press-brief .release-meta {
+  color: #414141;
+  margin: 4mm 0 0 28mm;
+}
+.press-brief .release-title {
+  margin: 9mm 0 5mm;
+}
+.press-brief .release-title h1 {
+  font-size: 28pt;
+  text-align: left;
+}
+.press-brief .release-title h1.title-long { font-size: 23pt; }
+.press-brief .release-title h1.title-extra-long { font-size: 18pt; }
+.press-brief .block-paragraph.is-lead {
+  border-left: 1.4mm solid #27384a;
+  padding: 1mm 0 1mm 5mm;
+}
+.press-brief .block-bullet-list.is-summary {
+  background: #f0f2f4;
+  padding: 4mm 6mm;
+}
+.press-brief .is-footer-details {
+  border-top: .7mm solid #27384a;
+  padding-top: 3mm;
+}
+.press-brief th {
+  background: #27384a;
+  color: #fff;
+}
+
+/* 3. 공동·모듈형 */
+.press-joint .release-masthead {
+  border-bottom: .7mm solid #111;
+  border-top: .25mm solid #111;
+  padding: 4mm 1mm;
+}
+.press-joint .release-type {
+  background: #111;
+  color: #fff;
+  font-size: 10.5pt;
+  letter-spacing: .04em;
+  padding: 1.5mm 4mm;
+}
+.press-joint .release-meta {
+  border-bottom: .25mm solid #666;
+  padding: 3mm 1mm;
+}
+.press-joint .release-title {
+  margin: 7mm 0 4mm;
+  padding: 0 3mm;
+}
+.press-joint .release-title h1 {
+  border-left: 2mm solid #111;
+  font-size: 25pt;
+  padding-left: 5mm;
+}
+.press-joint .block-paragraph.is-lead {
+  margin-left: 8mm;
+}
+.press-joint .block-bullet-list.is-summary {
+  border-bottom: .35mm solid #111;
+  border-top: .35mm solid #111;
+  padding: 3mm 3mm 3mm 7mm;
+}
+.press-joint .block-bullet-list.is-summary li::marker {
+  content: "–  ";
+}
+.press-joint .is-footer-details {
+  border: .3mm solid #222;
+  padding: 3mm 4mm;
+}
+.press-joint th {
+  background: #111;
+  color: #fff;
+}
+
+/* 밀도별로 단순 배율이 아닌 모듈 구조도 바꾼다. */
+.density-compact .release-title { margin-bottom: 3mm; }
+.density-compact .block-bullet-list.is-summary {
+  padding-top: 2.5mm;
+  padding-bottom: 2.5mm;
+}
+.density-compact .is-footer-details .key-value-entry {
+  grid-template-columns: minmax(18mm, auto) 1fr;
+}
+.density-airy .release-title { margin-bottom: 6mm; }
+.density-airy .block-bullet-list.is-summary {
+  padding-top: 5mm;
+  padding-bottom: 5mm;
+}
+.density-airy .is-footer-details { margin-top: 3mm; }

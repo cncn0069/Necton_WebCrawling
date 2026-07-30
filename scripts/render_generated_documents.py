@@ -20,6 +20,9 @@ from rd2.generators.notice_rendering import NOTICE_TEMPLATE_VARIANTS
 from rd2.generators.research_report_rendering import (
     RESEARCH_REPORT_TEMPLATE_VARIANTS,
 )
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_TEMPLATE_VARIANTS,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -126,6 +129,7 @@ def main() -> None:
         for variant in (
             *OFFICIAL_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
+            *PRESS_RELEASE_TEMPLATE_VARIANTS,
             *NOTICE_TEMPLATE_VARIANTS,
         )
     )
