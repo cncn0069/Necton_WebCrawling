@@ -85,6 +85,10 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 research_01_classic_flow
 research_02_modular_policy
 research_03_academic_flow
+status_01_brief
+status_02_ledger
+status_03_columns
+status_04_chapter
 ```
 
 `result.source_classification.document_type`이 `research_report`이면 위
@@ -92,6 +96,11 @@ research_03_academic_flow
 여러 개의 표를 그대로 보존하며, 기관명이 없을 때 가상 기관명을 채우지 않는다.
 표지와 페이지 번호 외에 입력에 없는 목차·장 제목·날짜·보고서 번호·로고도
 추가하지 않는다. 8열 이상 표는 가로 A4 페이지로 전환한다.
+
+`result.source_classification.document_type`이 `status_report`이면 위
+`status_*` 4종만 선택할 수 있다. 별도 현황 지표나 차트를 추론하지 않고
+공문과 같은 5종 block을 입력 순서대로 렌더링한다. 7열 이상 표는 가로 A4
+페이지로 전환하며 전체 출력은 최대 10쪽까지만 허용한다.
 
 연구보고서는 표지를 포함해 최대 10쪽까지만 허용한다. 원문을 잘라 10쪽에
 맞추지 않으며, 10쪽을 넘으면 해당 출력을 거부하고 manifest에 실제 쪽수를
@@ -125,6 +134,8 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/generated_document_pipeline.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
+- `src/rd2/generators/status_report_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
+- `src/rd2/generators/templates/status_report/`
