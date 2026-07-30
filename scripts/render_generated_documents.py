@@ -29,6 +29,9 @@ from rd2.generators.research_report_rendering import (
 from rd2.generators.press_release_rendering import (
     PRESS_RELEASE_TEMPLATE_VARIANTS,
 )
+from rd2.generators.status_report_rendering import (
+    STATUS_REPORT_TEMPLATE_VARIANTS,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -139,6 +142,7 @@ def main() -> None:
             *ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
             *INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
             *GUIDE_TEMPLATE_VARIANTS,
+            *STATUS_REPORT_TEMPLATE_VARIANTS,
         )
     )
     parser = argparse.ArgumentParser(description=__doc__)

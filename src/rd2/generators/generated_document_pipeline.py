@@ -46,6 +46,10 @@ from rd2.generators.official_document_rendering import (
 from rd2.generators.research_report_rendering import (
     render_research_report_variations,
 )
+from rd2.generators.status_report_rendering import (
+    STATUS_REPORT_MAX_PAGES,
+    render_status_report_variations,
+)
 from rd2.generators.press_release_rendering import (
     PRESS_RELEASE_MAX_PAGES,
     PRESS_RELEASE_WIDE_TABLE_MIN_COLUMNS,
@@ -1177,6 +1181,49 @@ def build_guide_context(
     }
 
 
+def build_status_report_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """공문과 같은 5종 block을 순서 그대로 현황보고 context로 만든다."""
+
+    document = envelope.result.generated_document
+    ordered_blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        rendered = block.model_dump(mode="json")
+        if isinstance(block, TableBlock):
+            rendered["column_count"] = len(block.columns)
+            rendered["is_wide"] = len(block.columns) >= 7
+        else:
+            rendered["is_wide"] = False
+        ordered_blocks.append(rendered)
+
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": "현황·통계자료",
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "blocks": ordered_blocks,
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -1211,6 +1258,8 @@ def render_generation_payload(
         renderer_family = "interpretation_compilation"
     elif document_type_enum == SemanticDocumentType.GUIDE:
         renderer_family = "guide"
+    elif document_type == "status_report":
+        renderer_family = "status_report"
     else:
         renderer_family = "official_document"
     input_metadata = {
@@ -1289,6 +1338,21 @@ def render_generation_payload(
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(document),
             max_pages=GUIDE_MAX_PAGES,
+        )
+    elif document_type == "status_report":
+        context = build_status_report_context(envelope, seed=seed)
+        manifest = render_status_report_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(
+                document,
+                include_administrative_event_dates=True,
+            ),
+            max_pages=STATUS_REPORT_MAX_PAGES,
+            input_metadata=input_metadata,
         )
     else:
         context = build_template_context(envelope, seed=seed)

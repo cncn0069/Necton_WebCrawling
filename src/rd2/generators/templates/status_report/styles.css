@@ -1,0 +1,524 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+@page status-content {
+  size: A4;
+  margin: 17mm 18mm 18mm;
+  @bottom-center {
+    color: #687078;
+    content: counter(page);
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+@page status-wide {
+  size: A4 landscape;
+  margin: 16mm 17mm;
+  @bottom-center {
+    color: #687078;
+    content: counter(page);
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 8pt;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  page: status-content;
+  color: #171a1f;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: calc(10pt * var(--status-font-scale, 1));
+  line-height: var(--status-line-height, 1.68);
+}
+h1, p, ul, dl { margin: 0; }
+p, li, dd, td, th {
+  overflow-wrap: anywhere;
+}
+.status-rail { display: none; }
+.status-shell { position: relative; }
+.status-header {
+  break-inside: avoid;
+  margin-bottom: 9mm;
+}
+.status-eyebrow {
+  display: flex;
+  font-size: 8pt;
+  font-weight: 700;
+  justify-content: space-between;
+  letter-spacing: .1em;
+}
+.status-header h1 {
+  font-size: 25pt;
+  letter-spacing: -.05em;
+  line-height: 1.3;
+  margin-top: 6mm;
+  overflow-wrap: anywhere;
+}
+.status-header h1.title-long { font-size: 21pt; }
+.status-header h1.title-extra-long { font-size: 18pt; }
+.status-agency {
+  color: #626d76;
+  font-size: 8.8pt;
+  margin-top: 2mm;
+  text-align: right;
+}
+.status-blocks {
+  display: block;
+}
+.status-block {
+  break-inside: auto;
+  margin-bottom: var(--status-block-gap, 5mm);
+}
+.block-index {
+  color: #71808c;
+  display: none;
+  font-size: 8.5pt;
+  font-weight: 700;
+}
+.block-content > p {
+  orphans: 3;
+  text-align: justify;
+  white-space: pre-line;
+  widows: 3;
+}
+.key-value-grid {
+  display: grid;
+  margin: 0;
+}
+.key-value-grid > div {
+  break-inside: avoid;
+  min-width: 0;
+}
+.key-value-grid dt {
+  color: #63717c;
+  font-size: .8em;
+  margin-bottom: 1mm;
+}
+.key-value-grid dd {
+  font-weight: 700;
+  margin: 0;
+}
+.kv-columns-1 .key-value-grid { grid-template-columns: 1fr; }
+.kv-columns-2 .key-value-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.kv-columns-3 .key-value-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.status-list {
+  margin: 0;
+  padding-left: 6mm;
+}
+.status-list li {
+  break-inside: avoid;
+  margin-bottom: 1.8mm;
+}
+.list-columns-2 .status-list {
+  column-count: 2;
+  column-gap: 9mm;
+}
+.table-wrap {
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th, td {
+  line-height: 1.45;
+  padding: var(--status-table-padding, 2.2mm) 1.8mm;
+  text-align: center;
+  vertical-align: middle;
+}
+th {
+  font-size: .82em;
+  font-weight: 700;
+}
+td { font-size: .84em; }
+th:first-child,
+td:first-child { text-align: left; }
+.columns-7 th,
+.columns-7 td,
+.columns-8 th,
+.columns-8 td {
+  font-size: .74em;
+  padding-left: 1mm;
+  padding-right: 1mm;
+}
+.status-block.is-wide {
+  break-after: page;
+  break-before: page;
+  page: status-wide;
+}
+.status-block.is-wide th,
+.status-block.is-wide td {
+  font-size: .72em;
+  padding: 1.4mm 1.1mm;
+}
+.attachment-reference {
+  break-inside: avoid;
+  font-size: .88em;
+}
+.attachment-reference strong,
+.attachment-reference span,
+.attachment-reference small {
+  display: block;
+}
+.attachment-reference small {
+  color: #606b74;
+  margin-top: 1mm;
+}
+.administrative-events {
+  break-inside: avoid;
+  margin: 7mm 0;
+  padding: 4mm 5mm;
+}
+.administrative-events p + p { margin-top: 2mm; }
+.administrative-events time {
+  font-size: .86em;
+  font-weight: 700;
+  margin-right: 3mm;
+  white-space: nowrap;
+}
+.status-approval {
+  break-inside: avoid;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-left: auto;
+  margin-top: 8mm;
+  max-width: 120mm;
+}
+.status-approval.signer-count-1 {
+  grid-template-columns: 1fr;
+  max-width: 30mm;
+}
+.status-approval.signer-count-2 {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 58mm;
+}
+.status-approval.signer-count-3 {
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 84mm;
+}
+.status-approval.signer-count-4 {
+  grid-template-columns: repeat(4, 1fr);
+  max-width: 106mm;
+}
+.status-signer {
+  align-items: center;
+  border: .2mm solid #888;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 24mm;
+  overflow: visible;
+  padding: 2mm 1mm;
+  position: relative;
+  text-align: center;
+}
+.status-signer + .status-signer { border-left: 0; }
+.status-signer strong,
+.status-signer span,
+.status-signer small {
+  position: relative;
+  z-index: 1;
+}
+.status-signer .approval-stamp {
+  height: 23mm;
+  opacity: .78;
+  pointer-events: none;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 23mm;
+  z-index: 2;
+}
+
+/* 01: 업무 브리프형 */
+.status-brief .status-header {
+  border-top: 5mm solid #183858;
+  margin-left: calc(-1 * var(--status-horizontal-offset, 0mm));
+  padding-top: 8mm;
+}
+.status-brief .status-eyebrow {
+  border-bottom: .35mm solid #183858;
+  color: #183858;
+  padding-bottom: 3mm;
+}
+.status-brief .block-paragraph {
+  background: #f0f3f5;
+  border-left: 1.4mm solid #183858;
+  padding: 4.5mm 5.5mm;
+}
+.status-brief .block-paragraph p {
+  font-size: .96em;
+  line-height: 1.75;
+}
+.status-brief .key-value-grid {
+  border-bottom: .3mm solid #77838d;
+  border-top: .3mm solid #77838d;
+}
+.status-brief .key-value-grid > div {
+  border-right: .2mm solid #c7cdd2;
+  padding: 3.5mm 4mm;
+}
+.status-brief .key-value-grid > div:last-child { border-right: 0; }
+.status-brief .status-list {
+  list-style: none;
+  padding-left: 0;
+}
+.status-brief .status-list li {
+  padding-left: 5mm;
+  position: relative;
+}
+.status-brief .status-list li::before {
+  color: #183858;
+  content: "○";
+  left: 0;
+  position: absolute;
+}
+.status-brief table {
+  border-bottom: .35mm solid #183858;
+}
+.status-brief th {
+  background: #344c63;
+  border-right: .2mm solid #fff;
+  color: #fff;
+}
+.status-brief td {
+  border-bottom: .2mm solid #b9c1c8;
+  border-right: .2mm solid #d5dadd;
+}
+.status-brief .attachment-reference {
+  border-top: .35mm solid #183858;
+  padding-top: 3mm;
+}
+.status-brief .administrative-events {
+  background: #f0f3f5;
+  border-left: .8mm solid #183858;
+}
+
+/* 02: 표 중심 장부형 */
+.status-ledger {
+  background: #fbfbf9;
+  color: #1d2125;
+}
+.status-ledger .status-rail {
+  align-items: flex-start;
+  background: #263542;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  height: 297mm;
+  left: -20mm;
+  padding: 12mm 5mm 18mm;
+  position: fixed;
+  top: -17mm;
+  width: 27mm;
+}
+.status-ledger .status-rail::after {
+  background: #aebbc5;
+  content: "";
+  display: block;
+  height: .8mm;
+  margin-top: auto;
+  margin-bottom: 4mm;
+  width: 11mm;
+}
+.status-ledger .status-shell { margin-left: 12mm; }
+.status-ledger .status-header {
+  border-bottom: .35mm solid #263542;
+  padding-bottom: 5mm;
+}
+.status-ledger .status-eyebrow { color: #56636d; }
+.status-ledger .status-header h1 {
+  font-size: 22pt;
+  margin-top: 5mm;
+}
+.status-ledger .block-paragraph p {
+  font-size: .92em;
+  line-height: 1.75;
+}
+.status-ledger .key-value-grid {
+  border: .35mm solid #263542;
+}
+.status-ledger .key-value-grid > div {
+  display: grid;
+  grid-template-columns: minmax(23mm, .55fr) 1fr;
+  min-height: 11mm;
+}
+.status-ledger .key-value-grid dt {
+  background: #e3e6e7;
+  color: #202a32;
+  font-weight: 700;
+  margin: 0;
+  padding: 3mm;
+}
+.status-ledger .key-value-grid dd { padding: 3mm; }
+.status-ledger table {
+  border-bottom: .7mm solid #263542;
+  border-top: .7mm solid #263542;
+}
+.status-ledger th {
+  background: #d9ddde;
+  border-right: .2mm solid #fff;
+}
+.status-ledger td {
+  border-bottom: .2mm solid #b9c0c4;
+  border-right: .2mm solid #d8dcde;
+}
+.status-ledger .status-list {
+  border: .25mm solid #b7bdc1;
+  column-rule: .2mm solid #d4d8da;
+  padding: 4mm 4mm 4mm 9mm;
+}
+.status-ledger .attachment-reference {
+  color: #4f5a62;
+  padding-top: 2mm;
+}
+.status-ledger .administrative-events {
+  border: .25mm solid #b7bdc1;
+}
+
+/* 03: 2단 분석형 */
+.status-columns {
+  color: #1e2527;
+}
+.status-columns .status-header {
+  border-bottom: 1.2mm solid #315b5d;
+  padding: 3mm 0 6mm;
+}
+.status-columns .status-eyebrow { color: #315b5d; }
+.status-columns .status-header h1 {
+  font-size: 23pt;
+  margin-top: 4mm;
+}
+.status-columns .status-blocks {
+  display: block;
+}
+.status-columns .status-block {
+  border-top: .25mm solid #c1cbcb;
+  margin-bottom: var(--status-block-gap, 5mm);
+  padding-top: 3mm;
+}
+.status-columns .block-paragraph p {
+  column-count: 2;
+  column-gap: 8mm;
+  column-rule: .25mm solid #c1cbcb;
+  font-size: .93em;
+  line-height: 1.75;
+}
+.status-columns .key-value-grid > div {
+  border-bottom: .2mm solid #c6d0d0;
+  padding: 2.5mm 3mm;
+}
+.status-columns .status-list { padding-left: 5mm; }
+.status-columns th {
+  background: #315b5d;
+  border-right: .2mm solid #fff;
+  color: #fff;
+}
+.status-columns td {
+  border-bottom: .2mm solid #bfcaca;
+}
+.status-columns td:first-child { background: #e7eded; }
+.status-columns .attachment-reference {
+  background: #e4ecec;
+  border-left: 1mm solid #315b5d;
+  padding: 4mm;
+}
+.status-columns .administrative-events {
+  background: #e4ecec;
+  border-left: 1mm solid #315b5d;
+}
+
+/* 04: 절·항 중심 보고서형 */
+.status-chapter .status-header {
+  border-bottom: .35mm solid #202c36;
+  padding-bottom: 6mm;
+}
+.status-chapter .status-eyebrow {
+  color: #5d6871;
+  font-weight: 400;
+}
+.status-chapter .status-header h1 {
+  font-size: 24pt;
+  margin-top: 8mm;
+}
+.status-chapter .status-header::after {
+  background: #202c36;
+  content: "";
+  display: block;
+  height: 1mm;
+  margin-top: 5mm;
+  width: 18mm;
+}
+.status-chapter .status-block {
+  display: grid;
+  gap: 5mm;
+  grid-template-columns: 17mm minmax(0, 1fr);
+  margin-bottom: var(--status-block-gap, 6mm);
+}
+.status-chapter .block-index {
+  display: block;
+  padding-top: .5mm;
+}
+.status-chapter .block-content > p {
+  line-height: 1.8;
+}
+.status-chapter .key-value-grid {
+  border-bottom: .2mm solid #aeb6bc;
+  border-top: .4mm solid #202c36;
+}
+.status-chapter .key-value-grid > div {
+  border-right: .2mm solid #d0d4d7;
+  min-height: 15mm;
+  padding: 3.5mm;
+}
+.status-chapter .key-value-grid > div:last-child { border-right: 0; }
+.status-chapter .status-list {
+  list-style: none;
+  padding-left: 0;
+}
+.status-chapter .status-list li {
+  padding-left: 5mm;
+  position: relative;
+}
+.status-chapter .status-list li::before {
+  color: #68737b;
+  content: "—";
+  left: 0;
+  position: absolute;
+}
+.status-chapter table {
+  border-top: .6mm solid #202c36;
+}
+.status-chapter th {
+  background: #e5e7e9;
+  border-bottom: .3mm solid #727c84;
+}
+.status-chapter td {
+  border-bottom: .2mm solid #c4c9cd;
+}
+.status-chapter .attachment-reference {
+  color: #56616a;
+}
+.status-chapter .administrative-events {
+  border-left: .8mm solid #202c36;
+  margin-left: 22mm;
+}
+.status-chapter .status-approval { margin-right: 0; }
+
+@media print {
+  a { color: inherit; text-decoration: none; }
+}

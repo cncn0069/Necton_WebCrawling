@@ -154,6 +154,20 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+현황·통계자료 템플릿 slug:
+
+```text
+status_01_brief
+status_02_ledger
+status_03_columns
+status_04_chapter
+```
+
+`result.source_classification.document_type`이 `status_report`이면 위
+`status_*` 4종만 선택할 수 있다. 별도 현황 지표나 차트를 추론하지 않고
+공문과 같은 5종 block을 입력 순서대로 렌더링한다. 7열 이상 표는 가로 A4
+페이지로 전환하며 전체 출력은 최대 10쪽까지만 허용한다.
+
 가이드·매뉴얼·지침 템플릿 slug:
 
 ```text
@@ -217,6 +231,7 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/administrative_rule_rendering.py`
 - `src/rd2/generators/interpretation_compilation_rendering.py`
 - `src/rd2/generators/guide_rendering.py`
+- `src/rd2/generators/status_report_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
@@ -224,3 +239,4 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/templates/administrative_rule/`
 - `src/rd2/generators/templates/interpretation_compilation/`
 - `src/rd2/generators/templates/guide/`
+- `src/rd2/generators/templates/status_report/`
