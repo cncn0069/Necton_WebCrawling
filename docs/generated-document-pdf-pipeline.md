@@ -3,6 +3,8 @@
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
 `research_report` 전용 3종, `press_release` 전용 3종을 지원한다.
+`directive`(훈령), `regulation`(예규), `notification`(고시)은
+행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
 ## 준비
 
@@ -152,6 +154,15 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+행정규칙 템플릿 slug:
+
+```text
+rule_01_promulgation
+rule_02_article_rail
+rule_03_gazette_columns
+rule_04_notice_frame
+```
+
 ## 결과 확인
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
@@ -175,7 +186,9 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`
+- `src/rd2/generators/administrative_rule_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
+- `src/rd2/generators/templates/administrative_rule/`
