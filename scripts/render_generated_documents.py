@@ -13,6 +13,9 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
     render_generation_payload,
 )
+from rd2.generators.interpretation_compilation_rendering import (
+    INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+)
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
 )
@@ -125,6 +128,7 @@ def main() -> None:
         for variant in (
             *OFFICIAL_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
+            *INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
         )
     )
     parser = argparse.ArgumentParser(description=__doc__)
