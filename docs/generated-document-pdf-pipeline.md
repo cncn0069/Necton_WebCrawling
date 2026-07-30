@@ -2,8 +2,10 @@
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
-`research_report` 전용 3종, `press_release` 전용 3종, 공고 계열 전용 3종을
-지원한다.
+`research_report` 전용 3종, `press_release` 전용 3종,
+`meeting_minutes` 전용 회의록 4종, 공고 계열 전용 3종을 지원한다.
+`directive`(훈령), `regulation`(예규), `notification`(고시)은
+행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
 ## 준비
 
@@ -42,8 +44,8 @@ python scripts/render_generated_documents.py input.json \
 }
 ```
 
-`research_report`, `press_release`, 공고 계열 5종은 각 전용 렌더러를
-사용하고, 그 밖의 분류값이나 분류값이 없는 입력은 공문 계열 렌더러를 사용한다.
+문서 유형별 전용 렌더러가 있는 분류값은 해당 서식을 사용하고, 그 밖의
+분류값이나 분류값이 없는 입력은 공문 계열 렌더러를 사용한다.
 
 입력은 JSON 객체 하나, JSON 객체 배열, 또는 한 줄에 JSON 객체 하나가 들어 있는
 JSONL이다. 확장자가 `.txt`여도 내용 전체가 완전한 JSON 객체이면 그대로 전달할
@@ -71,9 +73,6 @@ done
 JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로 바꾼다.
 해당 문서 유형의 템플릿을 전부 만들려면 `--template` 줄을 제거한다. 같은
 템플릿의 변주를 여러 개 만들려면 `--per-template 3`처럼 지정한다.
-`--per-template` 기본값은 1이므로 공고 계열은 문서당 3개를 생성한다.
-`--per-template 3`은 같은 입력으로 3개 서식 × 3개 변주, 총 9개를 생성한다.
-현재 배치 명령은 후보 전체를 만들며 후보 중 하나를 무작위로 선택하지 않는다.
 
 ## 입력 규칙
 
@@ -171,6 +170,72 @@ notice_03_record_rail
 기관·공고번호·담당 부서·공고일도 입력에 없으면 추가하지 않는다. 최대
 10쪽을 넘으면 원문을 자르지 않고 해당 출력을 거부한다.
 
+회의록 템플릿 slug:
+
+```text
+meeting_01_registry
+meeting_02_sequence
+meeting_03_columns
+meeting_04_docket
+```
+
+`result.source_classification.document_type`이 `meeting_minutes`이면 위
+`meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
+렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
+수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
+전환하고 전체 출력은 최대 10쪽까지만 허용한다.
+
+현황·통계자료 템플릿 slug:
+
+```text
+status_01_brief
+status_02_ledger
+status_03_columns
+status_04_chapter
+```
+
+`result.source_classification.document_type`이 `status_report`이면 위
+`status_*` 4종만 선택할 수 있다. 별도 현황 지표나 차트를 추론하지 않고
+공문과 같은 5종 block을 입력 순서대로 렌더링한다. 7열 이상 표는 가로 A4
+페이지로 전환하며 전체 출력은 최대 10쪽까지만 허용한다.
+
+가이드·매뉴얼·지침 템플릿 slug:
+
+```text
+guide_01_classic
+guide_02_index
+guide_03_cards
+guide_04_field
+```
+
+`source_classification.document_type`이 `guide`이면 가이드·매뉴얼·지침
+4종으로 라우팅한다. 별도 장·절·절차 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. 입력에 없는 절차명이나 의미를
+추측해서 추가하지 않는다.
+
+질의회시집 템플릿 slug:
+
+```text
+interpretation_01_sequence
+interpretation_02_index
+interpretation_03_cards
+interpretation_04_margin
+```
+
+`source_classification.document_type`이 `interpretation_compilation`이면
+질의회시집 4종으로 라우팅한다. 별도 Q/A 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. `질의요지`, `회시요지` 같은 역할을
+추측하거나 입력에 없는 제목을 추가하지 않는다.
+
+행정규칙 템플릿 slug:
+
+```text
+rule_01_promulgation
+rule_02_article_rail
+rule_03_gazette_columns
+rule_04_notice_frame
+```
+
 ## 결과 확인
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
@@ -195,8 +260,18 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`
 - `src/rd2/generators/notice_rendering.py`
+- `src/rd2/generators/administrative_rule_rendering.py`
+- `src/rd2/generators/interpretation_compilation_rendering.py`
+- `src/rd2/generators/guide_rendering.py`
+- `src/rd2/generators/status_report_rendering.py`
+- `src/rd2/generators/meeting_minutes_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
 - `src/rd2/generators/templates/notice/`
+- `src/rd2/generators/templates/administrative_rule/`
+- `src/rd2/generators/templates/interpretation_compilation/`
+- `src/rd2/generators/templates/guide/`
+- `src/rd2/generators/templates/status_report/`
+- `src/rd2/generators/templates/meeting_minutes/`
