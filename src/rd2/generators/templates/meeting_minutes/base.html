@@ -1,0 +1,104 @@
+{% from "partials/approval_stamp.html" import approval_stamp %}
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="meeting_minutes/styles.css">
+  <style id="document-variation">{{ variation_css|safe }}</style>
+</head>
+<body class="meeting-document {{ variant_class }}{% if has_wide_blocks|default(false) %} has-wide-blocks{% endif %}">
+  <aside class="meeting-rail" aria-hidden="true"></aside>
+
+  <article class="meeting-shell">
+    <header class="meeting-header">
+      <div class="document-label">{{ document_type_label }}</div>
+      <h1 class="{{ title_class }}">{{ title }}</h1>
+      {% if agency_name %}
+      <p class="meeting-agency">{{ agency_name }}</p>
+      {% endif %}
+    </header>
+
+    <main class="meeting-blocks">
+      {% for block in blocks %}
+      <section
+        class="meeting-block block-{{ block.kind|replace('_', '-') }}{% if block.is_wide|default(false) %} is-wide{% endif %}"
+        data-block-id="{{ block.block_id }}"
+      >
+        <span class="block-index" aria-hidden="true"></span>
+        <div class="block-content">
+          {% if block.kind == "paragraph" %}
+          <p>{{ block.text }}</p>
+          {% elif block.kind == "key_value" %}
+          <dl class="key-value-grid">
+            {% for entry in block.entries %}
+            <div>
+              <dt>{{ entry.key }}</dt>
+              <dd>{{ entry.value }}</dd>
+            </div>
+            {% endfor %}
+          </dl>
+          {% elif block.kind == "bullet_list" %}
+          <ul class="meeting-list">
+            {% for item in block["items"] %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% elif block.kind == "table" %}
+          <div class="table-wrap columns-{{ block.column_count }}">
+            <table>
+              <thead>
+                <tr>
+                  {% for column in block.columns %}
+                  <th>{{ column }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in block.rows %}
+                <tr>
+                  {% for cell in row %}
+                  <td>{{ cell }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% elif block.kind == "attachment_reference" %}
+          <div class="attachment-reference">
+            <strong>{{ block.label }}</strong>
+            <span>{{ block.attachment_id }}</span>
+            {% if block.description %}
+            <small>{{ block.description }}</small>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </main>
+
+    {% if administrative_events %}
+    <section class="administrative-events">
+      {% for event in administrative_events %}
+      <p><time>{{ event.date }}</time><span>{{ event.text }}</span></p>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if signers %}
+    <section class="meeting-confirmation signer-count-{{ signers|length }}">
+      {% for signer in signers %}
+      <div class="meeting-signer{% if signer.stamp_data_uri %} has-stamp{% endif %}">
+        <strong>{{ signer.role }}</strong>
+        {% if signer.name %}<span>{{ signer.name }}</span>{% endif %}
+        {% if signer.date %}<small>{{ signer.date }}</small>{% endif %}
+        {{ approval_stamp(signer) }}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </article>
+</body>
+</html>

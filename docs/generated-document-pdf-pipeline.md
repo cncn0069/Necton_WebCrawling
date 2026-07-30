@@ -2,7 +2,8 @@
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
-`research_report` 전용 3종, `press_release` 전용 3종을 지원한다.
+`research_report` 전용 3종, `press_release` 전용 3종,
+`meeting_minutes` 전용 회의록 4종을 지원한다.
 `directive`(훈령), `regulation`(예규), `notification`(고시)은
 행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
@@ -154,6 +155,21 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+회의록 템플릿 slug:
+
+```text
+meeting_01_registry
+meeting_02_sequence
+meeting_03_columns
+meeting_04_docket
+```
+
+`result.source_classification.document_type`이 `meeting_minutes`이면 위
+`meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
+렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
+수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
+전환하고 전체 출력은 최대 10쪽까지만 허용한다.
+
 현황·통계자료 템플릿 slug:
 
 ```text
@@ -232,6 +248,7 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/interpretation_compilation_rendering.py`
 - `src/rd2/generators/guide_rendering.py`
 - `src/rd2/generators/status_report_rendering.py`
+- `src/rd2/generators/meeting_minutes_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
@@ -240,3 +257,4 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/templates/interpretation_compilation/`
 - `src/rd2/generators/templates/guide/`
 - `src/rd2/generators/templates/status_report/`
+- `src/rd2/generators/templates/meeting_minutes/`
