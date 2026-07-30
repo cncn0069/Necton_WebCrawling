@@ -204,6 +204,8 @@ def test_rule_variations_are_deterministic_and_support_three_densities(
         "compact",
         "airy",
     ]
+    assert [spec.key_value_columns for spec in first] == [2, 3, 1]
+    assert [spec.list_columns for spec in first] == [1, 2, 1]
 
     manifest = render_generation_payload(
         _payload("regulation"),
@@ -216,6 +218,65 @@ def test_rule_variations_are_deterministic_and_support_three_densities(
         "02_compact",
         "03_airy",
     ]
+
+
+@pytest.mark.parametrize(
+    "text_scale",
+    [1, 4, 8],
+    ids=["short", "medium", "long"],
+)
+def test_rule_variations_preserve_text_across_input_lengths(
+    tmp_path: Path,
+    text_scale: int,
+) -> None:
+    payload = _payload()
+    document = payload["result"]["generated_document"]
+    sentence = (
+        "각 부서는 검토 결과와 후속 조치의 완료 여부를 기록하고 "
+        "관련 자료를 정해진 기간 동안 관리한다. "
+    )
+    document["blocks"][0]["entries"] = [
+        {
+            "key": f"관리항목 {index}",
+            "value": f"{index:02d} {sentence * text_scale}",
+        }
+        for index in range(1, 7)
+    ]
+    document["blocks"][3]["text"] = (
+        "제1조(목적) " + sentence * text_scale
+    )
+    document["blocks"][4]["items"] = [
+        f"{index:02d} {sentence * text_scale}"
+        for index in range(1, 7)
+    ]
+
+    envelope = parse_generation_payload(payload)
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=3,
+        template_slugs={"rule_04_notice_frame"},
+    )
+
+    assert len(manifest) == 3
+    assert all(entry["status"] == "ok" for entry in manifest)
+    assert all(1 <= entry["actual_pages"] <= 10 for entry in manifest)
+    assert all(entry["source_text_present"] for entry in manifest)
+    if text_scale == 8:
+        assert all(
+            entry["parameters"]["key_value_columns"] == 1
+            and entry["parameters"]["list_columns"] == 1
+            for entry in manifest
+        )
+    # Long atoms may be interrupted by page metadata in PDF extraction.
+    if text_scale < 8:
+        required = source_text_atoms(envelope.result.generated_document)
+        for entry in manifest:
+            rendered_text = _pdf_text(Path(str(entry["pdf"])))
+            assert all(
+                "".join(atom.split()) in rendered_text
+                for atom in required
+            )
 
 
 def test_administrative_rule_rejects_wrong_template_family(
