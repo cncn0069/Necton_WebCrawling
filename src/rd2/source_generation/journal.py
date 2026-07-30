@@ -1,4 +1,4 @@
-"""Append-only stage journal, content-addressed artifacts, and resume planning."""
+"""Append-only five-stage journal, content-addressed artifacts, and resume."""
 
 from __future__ import annotations
 
@@ -8,41 +8,49 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import TypeVar
+from typing import Callable, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
+from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
+from rd2.source_generation.classification_taxonomy import ClauseNumber
 from rd2.source_generation.contracts import (
+    CONTRACT_SCHEMA_VERSION,
     AuditStageArtifact,
+    ClassificationStageArtifact,
     DocumentPipelineResult,
     DocumentSelection,
     FailureCode,
     FailureStage,
+    GenerationRoute,
+    GenerationStageArtifact,
     GenerationTarget,
     JournalRecord,
     JournalStage,
     JournalStatus,
-    Pass1StageArtifact,
-    Pass2StageArtifact,
+    PlanningStageArtifact,
     SourceDocumentSnapshot,
     StageFailure,
+    ValidationStageArtifact,
 )
 from rd2.source_generation.document_select import SelectionConfig
-from rd2.source_generation.pipeline import (
-    PipelineConfig,
-    StructuredOutputGateway,
-    execute_pass1,
-    execute_pass2,
-)
 from rd2.source_generation.legacy_synthetic import (
     FullySyntheticContext,
     FullySyntheticDocumentGenerator,
 )
-from rd2.source_generation.prompts import (
-    PromptBundle,
-    build_prompt_bundle,
+from rd2.source_generation.pipeline import (
+    PLANNER_POLICY_SHA256,
+    GenerationPlanningError,
+    PipelineConfig,
+    StructuredOutputGateway,
+    build_generation_plan,
+    execute_classification,
+    execute_consistency_validation,
+    execute_generation,
+    model_sha256,
 )
+from rd2.source_generation.prompts import PromptBundle, build_prompt_bundle
 
 ArtifactT = TypeVar("ArtifactT", bound=BaseModel)
 
@@ -56,7 +64,7 @@ class JournalCorruptError(JournalError):
 
 
 class JournalWriterConflict(JournalError):
-    """Another process owns the run directory writer lock."""
+    """Another process owns the run-directory writer lock."""
 
 
 @dataclass(frozen=True)
@@ -65,33 +73,116 @@ class ArtifactReference:
     sha256: str
 
 
+def _validate_sha256(name: str, value: str) -> None:
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{name} must be a lowercase SHA-256 hex digest")
+
+
 @dataclass(frozen=True)
 class JournalIdentity:
+    """Inputs that independently invalidate each persisted stage."""
+
     source_sha256: str
     selection_sha256: str
-    prompt_bundle_sha256: str
+    classifier_prompt_sha256: str
+    generator_prompt_sha256: str
+    sensitive_generator_prompt_sha256: str
+    validator_prompt_sha256: str
+    sensitive_validator_prompt_sha256: str
+    planner_policy_sha256: str
+    target_sha256: str
+    classifier_model: str
     generator_model: str
-    grader_model: str
+    validator_model: str
     audit_config_sha256: str
 
     def __post_init__(self) -> None:
         for name in (
             "source_sha256",
             "selection_sha256",
-            "prompt_bundle_sha256",
+            "classifier_prompt_sha256",
+            "generator_prompt_sha256",
+            "sensitive_generator_prompt_sha256",
+            "validator_prompt_sha256",
+            "sensitive_validator_prompt_sha256",
+            "planner_policy_sha256",
+            "target_sha256",
             "audit_config_sha256",
         ):
-            value = getattr(self, name)
-            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-                raise ValueError(f"{name} must be a lowercase SHA-256 hex digest")
-        if not self.generator_model.strip() or not self.grader_model.strip():
-            raise ValueError("journal model IDs must not be blank")
+            _validate_sha256(name, getattr(self, name))
+        for name in (
+            "classifier_model",
+            "generator_model",
+            "validator_model",
+        ):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be blank")
+        if self.validator_model in {
+            self.classifier_model,
+            self.generator_model,
+        }:
+            raise ValueError(
+                "validator_model must differ from classifier_model and generator_model"
+            )
+
+    @classmethod
+    def from_pipeline(
+        cls,
+        *,
+        snapshot: SourceDocumentSnapshot,
+        selection: DocumentSelection,
+        target: GenerationTarget,
+        config: PipelineConfig,
+        prompt_bundle: PromptBundle,
+        audit_config_sha256: str,
+    ) -> "JournalIdentity":
+        return cls(
+            source_sha256=snapshot.source_sha256,
+            selection_sha256=selection.selection_sha256,
+            classifier_prompt_sha256=prompt_bundle.definition("classifier").sha256,
+            generator_prompt_sha256=prompt_bundle.definition("generator").sha256,
+            sensitive_generator_prompt_sha256=prompt_bundle.definition(
+                "sensitive_generator"
+            ).sha256,
+            validator_prompt_sha256=prompt_bundle.definition("validator").sha256,
+            sensitive_validator_prompt_sha256=prompt_bundle.definition(
+                "sensitive_validator"
+            ).sha256,
+            planner_policy_sha256=PLANNER_POLICY_SHA256,
+            target_sha256=model_sha256(target),
+            classifier_model=config.classifier_model,
+            generator_model=config.generator_model,
+            validator_model=config.validator_model,
+            audit_config_sha256=audit_config_sha256,
+        )
+
+    @property
+    def planning_config_sha256(self) -> str:
+        return canonical_sha256(
+            {
+                "planner_policy_sha256": self.planner_policy_sha256,
+                "target_sha256": self.target_sha256,
+            },
+            normalization_version=NORMALIZATION_VERSION,
+        )
+
+    def generation_prompt_for_clause(self, clause: ClauseNumber | None) -> str:
+        if clause == ClauseNumber.CLAUSE_6:
+            return self.sensitive_generator_prompt_sha256
+        return self.generator_prompt_sha256
+
+    def validation_prompt_for_clause(self, clause: ClauseNumber | None) -> str:
+        if clause == ClauseNumber.CLAUSE_6:
+            return self.sensitive_validator_prompt_sha256
+        return self.validator_prompt_sha256
 
 
 @dataclass(frozen=True)
 class ResumePlan:
-    pass1_record: JournalRecord | None
-    pass2_record: JournalRecord | None
+    classification_record: JournalRecord | None
+    planning_record: JournalRecord | None
+    generation_record: JournalRecord | None
+    validation_record: JournalRecord | None
     audit_record: JournalRecord | None
     next_stage: JournalStage | None
     completed_noop: bool
@@ -106,6 +197,13 @@ class JournaledPipelineResult:
     next_stage: JournalStage | None
     completed_noop: bool
     invalidation_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _JournalReadState:
+    records: tuple[JournalRecord, ...]
+    next_sequence: int
+    legacy_contract_detected: bool
 
 
 def _canonical_model_bytes(model: BaseModel) -> bytes:
@@ -171,7 +269,9 @@ class ArtifactStore:
         try:
             payload = target.read_bytes()
         except OSError as exc:
-            raise JournalCorruptError("journal artifact is missing or unreadable") from exc
+            raise JournalCorruptError(
+                "journal artifact is missing or unreadable"
+            ) from exc
         if sha256(payload).hexdigest() != reference.sha256:
             raise JournalCorruptError("journal artifact hash mismatch")
         return payload
@@ -192,57 +292,85 @@ class ArtifactStore:
 
 def _artifact_reference(record: JournalRecord) -> ArtifactReference:
     if record.artifact_path is None or record.artifact_sha256 is None:
-        raise JournalCorruptError("successful journal record has no artifact reference")
-    return ArtifactReference(path=record.artifact_path, sha256=record.artifact_sha256)
+        raise JournalCorruptError(
+            "successful journal record has no artifact reference"
+        )
+    return ArtifactReference(
+        path=record.artifact_path,
+        sha256=record.artifact_sha256,
+    )
 
 
 def _success_identity(record: JournalRecord) -> tuple[object, ...]:
-    return (
+    identity = (
         record.run_id,
         record.source_document_id,
         record.stage,
         record.source_sha256,
         record.selection_sha256,
-        record.prompt_bundle_sha256,
+        record.prompt_sha256,
         record.model_id,
         record.upstream_artifact_sha256,
         record.stage_config_sha256,
     )
+    # 같은 locked plan에서 생성만 다시 수행하는 것은 정상적인 repair lineage다.
+    # 생성 attempt는 content-addressed artifact hash로 서로 구분한다.
+    if record.stage == JournalStage.GENERATED:
+        return (*identity, record.artifact_sha256)
+    return identity
 
 
-def read_journal(path: Path | str) -> tuple[JournalRecord, ...]:
-    """Read complete JSONL records; ignore only a torn final non-newline fragment."""
-
+def _read_journal_state(path: Path | str) -> _JournalReadState:
     journal_path = Path(path)
     if not journal_path.exists():
-        return ()
+        return _JournalReadState((), 1, False)
     try:
         payload = journal_path.read_bytes()
     except OSError as exc:
         raise JournalCorruptError("journal is unreadable") from exc
+
     complete_end = payload.rfind(b"\n")
     if complete_end < 0:
-        return ()
+        return _JournalReadState((), 1, False)
     complete = payload[: complete_end + 1]
 
     records: list[JournalRecord] = []
     successful: dict[tuple[object, ...], ArtifactReference] = {}
     run_id: str | None = None
     expected_sequence = 1
+    legacy_contract_detected = False
     for line in complete.splitlines():
         if not line:
             raise JournalCorruptError("journal contains an empty record")
         try:
-            record = JournalRecord.model_validate_json(line)
-        except (ValidationError, ValueError) as exc:
-            raise JournalCorruptError("journal contains an invalid complete record") from exc
-        if record.sequence != expected_sequence:
+            raw = json.loads(line)
+        except (TypeError, ValueError) as exc:
+            raise JournalCorruptError(
+                "journal contains invalid complete JSON"
+            ) from exc
+        if not isinstance(raw, dict):
+            raise JournalCorruptError("journal record must be a JSON object")
+        sequence = raw.get("sequence")
+        if sequence != expected_sequence:
             raise JournalCorruptError("journal sequence is not contiguous")
         expected_sequence += 1
+        raw_run_id = raw.get("run_id")
+        if not isinstance(raw_run_id, str) or not raw_run_id.strip():
+            raise JournalCorruptError("journal record has no valid run ID")
         if run_id is None:
-            run_id = record.run_id
-        elif record.run_id != run_id:
+            run_id = raw_run_id
+        elif raw_run_id != run_id:
             raise JournalCorruptError("journal mixes multiple run IDs")
+
+        if raw.get("contract_version") != CONTRACT_SCHEMA_VERSION:
+            legacy_contract_detected = True
+            continue
+        try:
+            record = JournalRecord.model_validate(raw)
+        except (ValidationError, ValueError) as exc:
+            raise JournalCorruptError(
+                "journal contains an invalid v2 record"
+            ) from exc
         if record.status == JournalStatus.SUCCEEDED:
             identity = _success_identity(record)
             reference = _artifact_reference(record)
@@ -253,7 +381,17 @@ def read_journal(path: Path | str) -> tuple[JournalRecord, ...]:
                 )
             successful[identity] = reference
         records.append(record)
-    return tuple(records)
+    return _JournalReadState(
+        records=tuple(records),
+        next_sequence=expected_sequence,
+        legacy_contract_detected=legacy_contract_detected,
+    )
+
+
+def read_journal(path: Path | str) -> tuple[JournalRecord, ...]:
+    """Read verified v2 records and retain, but never reuse, legacy lines."""
+
+    return _read_journal_state(path).records
 
 
 class JournalWriter:
@@ -267,6 +405,8 @@ class JournalWriter:
         self._owner_token = uuid4().hex
         self._entered = False
         self._records: tuple[JournalRecord, ...] = ()
+        self._next_sequence = 1
+        self._legacy_contract_detected = False
 
     @property
     def records(self) -> tuple[JournalRecord, ...]:
@@ -276,7 +416,15 @@ class JournalWriter:
 
     @property
     def next_sequence(self) -> int:
-        return len(self.records) + 1
+        if not self._entered:
+            raise RuntimeError("journal writer is not active")
+        return self._next_sequence
+
+    @property
+    def legacy_contract_detected(self) -> bool:
+        if not self._entered:
+            raise RuntimeError("journal writer is not active")
+        return self._legacy_contract_detected
 
     def __enter__(self) -> "JournalWriter":
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -306,7 +454,10 @@ class JournalWriter:
                 os.fsync(stream.fileno())
             self._entered = True
             self._truncate_torn_tail()
-            self._records = read_journal(self.journal_path)
+            state = _read_journal_state(self.journal_path)
+            self._records = state.records
+            self._next_sequence = state.next_sequence
+            self._legacy_contract_detected = state.legacy_contract_detected
             if self._records and self._records[0].run_id != self.run_id:
                 raise JournalCorruptError("run ID does not match existing journal")
             return self
@@ -333,7 +484,9 @@ class JournalWriter:
         try:
             owner = json.loads(self.lock_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
-            raise JournalWriterConflict("writer lock ownership cannot be verified") from exc
+            raise JournalWriterConflict(
+                "writer lock ownership cannot be verified"
+            ) from exc
         if owner.get("owner_token") != self._owner_token:
             raise JournalWriterConflict("writer lock ownership changed")
 
@@ -343,12 +496,16 @@ class JournalWriter:
             raise ValueError("journal record run ID does not match writer")
         if record.sequence != self.next_sequence:
             raise ValueError("journal record sequence does not match next sequence")
-        line = record.model_dump_json(exclude_computed_fields=True).encode("utf-8") + b"\n"
+        line = (
+            record.model_dump_json(exclude_computed_fields=True).encode("utf-8")
+            + b"\n"
+        )
         with self.journal_path.open("ab") as stream:
             stream.write(line)
             stream.flush()
             os.fsync(stream.fileno())
         self._records = (*self._records, record)
+        self._next_sequence += 1
 
     def _release_lock(self) -> None:
         if not self._entered:
@@ -365,20 +522,12 @@ class JournalWriter:
         self._release_lock()
 
 
-def _matches_common(record: JournalRecord, identity: JournalIdentity) -> bool:
-    return (
-        record.source_sha256 == identity.source_sha256
-        and record.selection_sha256 == identity.selection_sha256
-        and record.prompt_bundle_sha256 == identity.prompt_bundle_sha256
-    )
-
-
 def _latest_success(
     records: tuple[JournalRecord, ...],
     *,
     source_document_id: str,
     stage: JournalStage,
-    predicate,
+    predicate: Callable[[JournalRecord], bool],
 ) -> JournalRecord | None:
     for record in reversed(records):
         if (
@@ -391,77 +540,196 @@ def _latest_success(
     return None
 
 
-def _invalidation_reason(
+def _document_records(
+    records: tuple[JournalRecord, ...],
+    source_document_id: str,
+) -> tuple[JournalRecord, ...]:
+    return tuple(
+        record
+        for record in records
+        if record.source_document_id == source_document_id
+    )
+
+
+def _base_matches(record: JournalRecord, identity: JournalIdentity) -> bool:
+    return (
+        record.source_sha256 == identity.source_sha256
+        and record.selection_sha256 == identity.selection_sha256
+    )
+
+
+def _load_verified_chain(
+    *,
     records: tuple[JournalRecord, ...],
     source_document_id: str,
     identity: JournalIdentity,
-    pass1_record: JournalRecord | None,
-    pass2_record: JournalRecord | None,
-    audit_record: JournalRecord | None,
-) -> str | None:
-    document_records = tuple(
-        record for record in records if record.source_document_id == source_document_id
+    artifact_store: ArtifactStore,
+) -> tuple[
+    JournalRecord | None,
+    JournalRecord | None,
+    JournalRecord | None,
+    JournalRecord | None,
+    JournalRecord | None,
+]:
+    classified = _latest_success(
+        records,
+        source_document_id=source_document_id,
+        stage=JournalStage.CLASSIFIED,
+        predicate=lambda record: (
+            _base_matches(record, identity)
+            and record.prompt_sha256 == identity.classifier_prompt_sha256
+            and record.model_id == identity.classifier_model
+        ),
     )
+    if classified is None:
+        return None, None, None, None, None
+    classified_artifact = artifact_store.read(
+        _artifact_reference(classified),
+        ClassificationStageArtifact,
+    )
+
+    planned = _latest_success(
+        records,
+        source_document_id=source_document_id,
+        stage=JournalStage.PLANNED,
+        predicate=lambda record: (
+            _base_matches(record, identity)
+            and record.upstream_artifact_sha256 == classified.artifact_sha256
+            and record.stage_config_sha256 == identity.planning_config_sha256
+        ),
+    )
+    if planned is None:
+        return classified, None, None, None, None
+    planned_artifact = artifact_store.read(
+        _artifact_reference(planned),
+        PlanningStageArtifact,
+    )
+    if (
+        planned_artifact.generation_plan.source_assessment_sha256
+        != model_sha256(classified_artifact.source_assessment)
+    ):
+        raise JournalCorruptError(
+            "planning artifact does not reference the classified assessment"
+        )
+
+    plan = planned_artifact.generation_plan
+    source_free = plan.generation_route == GenerationRoute.FULLY_SYNTHETIC
+    expected_generation_prompt = (
+        None
+        if source_free
+        else identity.generation_prompt_for_clause(plan.final_target.clause_no)
+    )
+    expected_generation_model = None if source_free else identity.generator_model
+    generated = _latest_success(
+        records,
+        source_document_id=source_document_id,
+        stage=JournalStage.GENERATED,
+        predicate=lambda record: (
+            _base_matches(record, identity)
+            and record.upstream_artifact_sha256 == planned.artifact_sha256
+            and record.prompt_sha256 == expected_generation_prompt
+            and record.model_id == expected_generation_model
+        ),
+    )
+    if generated is None:
+        return classified, planned, None, None, None
+    generated_artifact = artifact_store.read(
+        _artifact_reference(generated),
+        GenerationStageArtifact,
+    )
+    if (
+        generated_artifact.generation_artifact.plan_sha256
+        != model_sha256(plan)
+    ):
+        raise JournalCorruptError(
+            "generation artifact does not reference the locked plan"
+        )
+
+    expected_validation_prompt = identity.validation_prompt_for_clause(
+        plan.final_target.clause_no
+    )
+    validated = _latest_success(
+        records,
+        source_document_id=source_document_id,
+        stage=JournalStage.VALIDATED,
+        predicate=lambda record: (
+            _base_matches(record, identity)
+            and record.upstream_artifact_sha256 == generated.artifact_sha256
+            and record.prompt_sha256 == expected_validation_prompt
+            and record.model_id == identity.validator_model
+        ),
+    )
+    if validated is None:
+        return classified, planned, generated, None, None
+    validated_artifact = artifact_store.read(
+        _artifact_reference(validated),
+        ValidationStageArtifact,
+    )
+    if (
+        validated_artifact.generated_document_sha256
+        != model_sha256(
+            generated_artifact.generation_artifact.generated_document
+        )
+    ):
+        raise JournalCorruptError(
+            "validation artifact does not reference the generated document"
+        )
+
+    audited = _latest_success(
+        records,
+        source_document_id=source_document_id,
+        stage=JournalStage.AUDITED,
+        predicate=lambda record: (
+            _base_matches(record, identity)
+            and record.upstream_artifact_sha256 == validated.artifact_sha256
+            and record.stage_config_sha256 == identity.audit_config_sha256
+        ),
+    )
+    if audited is not None:
+        artifact_store.read(
+            _artifact_reference(audited),
+            AuditStageArtifact,
+        )
+    return classified, planned, generated, validated, audited
+
+
+def _invalidation_reason(
+    *,
+    records: tuple[JournalRecord, ...],
+    source_document_id: str,
+    identity: JournalIdentity,
+    chain: tuple[
+        JournalRecord | None,
+        JournalRecord | None,
+        JournalRecord | None,
+        JournalRecord | None,
+        JournalRecord | None,
+    ],
+    legacy_contract_detected: bool,
+) -> str | None:
+    if legacy_contract_detected:
+        return FailureCode.CONTRACT_VERSION_CHANGED.value
+    document_records = _document_records(records, source_document_id)
     if not document_records:
         return None
-    if pass1_record is None:
-        pass1_records = tuple(
-            record
-            for record in document_records
-            if record.stage == JournalStage.PASS1_GENERATED
-        )
-        if not pass1_records:
-            return None
-        latest = pass1_records[-1]
-        if (
-            latest.status == JournalStatus.FAILED
-            and _matches_common(latest, identity)
-            and latest.model_id == identity.generator_model
-        ):
-            return "pass1_retry_after_failure"
+    classified, planned, generated, validated, audited = chain
+    if classified is None:
+        latest = document_records[-1]
         if latest.source_sha256 != identity.source_sha256:
             return "source_sha256_changed"
         if latest.selection_sha256 != identity.selection_sha256:
             return "selection_sha256_changed"
-        if latest.prompt_bundle_sha256 != identity.prompt_bundle_sha256:
-            return "prompt_bundle_sha256_changed"
-        return "generator_model_changed"
-    if pass2_record is None:
-        matching_failures = tuple(
-            record
-            for record in document_records
-            if (
-                record.stage == JournalStage.PASS2_GRADED
-                and record.status == JournalStatus.FAILED
-                and _matches_common(record, identity)
-                and record.model_id == identity.grader_model
-                and record.upstream_artifact_sha256 == pass1_record.artifact_sha256
-            )
-        )
-        if matching_failures:
-            return "pass2_retry_after_failure"
-        if not any(
-            record.stage == JournalStage.PASS2_GRADED
-            for record in document_records
-        ):
-            return None
-        return "grader_model_or_pass1_artifact_changed"
-    if audit_record is None:
-        matching_audits = tuple(
-            record
-            for record in document_records
-            if (
-                record.stage == JournalStage.AUDITED
-                and _matches_common(record, identity)
-                and record.upstream_artifact_sha256 == pass2_record.artifact_sha256
-                and record.stage_config_sha256 == identity.audit_config_sha256
-            )
-        )
-        if matching_audits and matching_audits[-1].status == JournalStatus.FAILED:
-            return "audit_retry_after_failure"
-        if any(record.stage == JournalStage.AUDITED for record in document_records):
-            return "audit_config_changed"
-        return None
+        return "classifier_prompt_or_model_changed"
+    if planned is None:
+        return "target_or_planner_policy_changed"
+    if generated is None:
+        return "generator_prompt_model_or_plan_changed"
+    if validated is None:
+        return "validator_prompt_model_or_generation_changed"
+    if audited is None and any(
+        record.stage == JournalStage.AUDITED for record in document_records
+    ):
+        return "audit_config_changed"
     return None
 
 
@@ -471,90 +739,41 @@ def build_resume_plan(
     source_document_id: str,
     identity: JournalIdentity,
     artifact_store: ArtifactStore,
+    legacy_contract_detected: bool = False,
 ) -> ResumePlan:
-    pass1_record = _latest_success(
-        records,
+    chain = _load_verified_chain(
+        records=records,
         source_document_id=source_document_id,
-        stage=JournalStage.PASS1_GENERATED,
-        predicate=lambda record: (
-            _matches_common(record, identity)
-            and record.model_id == identity.generator_model
-        ),
+        identity=identity,
+        artifact_store=artifact_store,
     )
-    if pass1_record is not None:
-        artifact_store.read(_artifact_reference(pass1_record), Pass1StageArtifact)
-
-    pass2_record = None
-    if pass1_record is not None:
-        pass2_record = _latest_success(
-            records,
-            source_document_id=source_document_id,
-            stage=JournalStage.PASS2_GRADED,
-            predicate=lambda record: (
-                _matches_common(record, identity)
-                and record.model_id == identity.grader_model
-                and record.upstream_artifact_sha256
-                == pass1_record.artifact_sha256
-            ),
-        )
-        if pass2_record is not None:
-            artifact_store.read(_artifact_reference(pass2_record), Pass2StageArtifact)
-
-    audit_record = None
-    if pass2_record is not None:
-        matching_audit = tuple(
-            record
-            for record in records
-            if (
-                record.source_document_id == source_document_id
-                and record.stage == JournalStage.AUDITED
-                and _matches_common(record, identity)
-                and record.upstream_artifact_sha256 == pass2_record.artifact_sha256
-                and record.stage_config_sha256 == identity.audit_config_sha256
-            )
-        )
-        if matching_audit and matching_audit[-1].status == JournalStatus.SUCCEEDED:
-            audit_record = matching_audit[-1]
-            audit_marker = artifact_store.read(
-                _artifact_reference(audit_record),
-                AuditStageArtifact,
-            )
-            audit_path = Path(audit_marker.audit_artifact_path)
-            if not audit_path.is_absolute():
-                audit_path = artifact_store.run_dir / audit_path
-            try:
-                audit_payload = audit_path.read_bytes()
-            except OSError as exc:
-                raise JournalCorruptError(
-                    "completed audit artifact is missing or unreadable"
-                ) from exc
-            if (
-                sha256(audit_payload).hexdigest()
-                != audit_marker.audit_artifact_sha256
-            ):
-                raise JournalCorruptError("completed audit artifact hash mismatch")
-
-    if pass1_record is None:
-        next_stage = JournalStage.PASS1_GENERATED
-    elif pass2_record is None:
-        next_stage = JournalStage.PASS2_GRADED
-    elif audit_record is None:
+    classified, planned, generated, validated, audited = chain
+    if classified is None:
+        next_stage = JournalStage.CLASSIFIED
+    elif planned is None:
+        next_stage = JournalStage.PLANNED
+    elif generated is None:
+        next_stage = JournalStage.GENERATED
+    elif validated is None:
+        next_stage = JournalStage.VALIDATED
+    elif audited is None:
         next_stage = JournalStage.AUDITED
     else:
         next_stage = None
     return ResumePlan(
-        pass1_record=pass1_record,
-        pass2_record=pass2_record,
-        audit_record=audit_record,
+        classification_record=classified,
+        planning_record=planned,
+        generation_record=generated,
+        validation_record=validated,
+        audit_record=audited,
         next_stage=next_stage,
         completed_noop=next_stage is None,
         invalidation_reason=_invalidation_reason(
-            records,
-            source_document_id,
-            identity,
-            pass1_record,
-            pass2_record,
-            audit_record,
+            records=records,
+            source_document_id=source_document_id,
+            identity=identity,
+            chain=chain,
+            legacy_contract_detected=legacy_contract_detected,
         ),
     )
 
@@ -582,63 +801,37 @@ def _journal_failure_result(
     )
 
 
-def _pass1_record(
+def _stage_record(
     *,
     writer: JournalWriter,
     run_id: str,
-    snapshot: SourceDocumentSnapshot,
-    selection: DocumentSelection,
+    source_document_id: str,
     identity: JournalIdentity,
+    stage: JournalStage,
     status: JournalStatus,
+    prompt_sha256: str | None = None,
+    model_id: str | None = None,
     artifact: ArtifactReference | None = None,
-    failure: StageFailure | None = None,
+    upstream_artifact_sha256: str | None = None,
+    stage_config_sha256: str | None = None,
     token_usage=None,
+    failure: StageFailure | None = None,
 ) -> JournalRecord:
     return JournalRecord(
         run_id=run_id,
         sequence=writer.next_sequence,
-        source_document_id=snapshot.source_document_id,
-        stage=JournalStage.PASS1_GENERATED,
+        source_document_id=source_document_id,
+        stage=stage,
         status=status,
         recorded_at=datetime.now(UTC),
-        source_sha256=snapshot.source_sha256,
-        selection_sha256=selection.selection_sha256,
-        prompt_bundle_sha256=identity.prompt_bundle_sha256,
-        model_id=identity.generator_model,
+        source_sha256=identity.source_sha256,
+        selection_sha256=identity.selection_sha256,
+        prompt_sha256=prompt_sha256,
+        model_id=model_id,
         artifact_sha256=artifact.sha256 if artifact else None,
         artifact_path=artifact.path if artifact else None,
-        token_usage=token_usage,
-        failure=failure,
-    )
-
-
-def _pass2_record(
-    *,
-    writer: JournalWriter,
-    run_id: str,
-    snapshot: SourceDocumentSnapshot,
-    selection: DocumentSelection,
-    identity: JournalIdentity,
-    pass1_artifact_sha256: str,
-    status: JournalStatus,
-    artifact: ArtifactReference | None = None,
-    failure: StageFailure | None = None,
-    token_usage=None,
-) -> JournalRecord:
-    return JournalRecord(
-        run_id=run_id,
-        sequence=writer.next_sequence,
-        source_document_id=snapshot.source_document_id,
-        stage=JournalStage.PASS2_GRADED,
-        status=status,
-        recorded_at=datetime.now(UTC),
-        source_sha256=snapshot.source_sha256,
-        selection_sha256=selection.selection_sha256,
-        prompt_bundle_sha256=identity.prompt_bundle_sha256,
-        model_id=identity.grader_model,
-        artifact_sha256=artifact.sha256 if artifact else None,
-        artifact_path=artifact.path if artifact else None,
-        upstream_artifact_sha256=pass1_artifact_sha256,
+        upstream_artifact_sha256=upstream_artifact_sha256,
+        stage_config_sha256=stage_config_sha256,
         token_usage=token_usage,
         failure=failure,
     )
@@ -647,21 +840,25 @@ def _pass2_record(
 def _pipeline_from_artifacts(
     *,
     source_document_id: str,
-    pass1_artifact: Pass1StageArtifact,
-    pass2_artifact: Pass2StageArtifact,
+    classified: ClassificationStageArtifact,
+    planned: PlanningStageArtifact,
+    generated: GenerationStageArtifact,
+    validated: ValidationStageArtifact,
 ) -> DocumentPipelineResult:
     return DocumentPipelineResult(
         source_document_id=source_document_id,
-        pass1_result=pass1_artifact.pass1_result,
-        pass2_assessment=pass2_artifact.pass2_assessment,
-        pass1_receipt=pass1_artifact.receipt,
-        pass2_receipt=pass2_artifact.receipt,
-        generation_provenance=pass1_artifact.generation_provenance,
-        comparison=pass2_artifact.comparison,
+        source_assessment=classified.source_assessment,
+        generation_plan=planned.generation_plan,
+        generation_artifact=generated.generation_artifact,
+        consistency_assessment=validated.consistency_assessment,
+        classification_receipt=classified.receipt,
+        generation_receipt=generated.receipt,
+        validation_receipt=validated.receipt,
+        comparison=validated.comparison,
     )
 
 
-def run_two_pass_with_journal(
+def run_three_stage_with_journal(
     *,
     run_dir: Path | str,
     run_id: str,
@@ -673,203 +870,403 @@ def run_two_pass_with_journal(
     audit_config_sha256: str,
     selection_config: SelectionConfig | None = None,
     prompt_bundle: PromptBundle | None = None,
+    sensitive_seed: str | None = None,
     fully_synthetic_generator: FullySyntheticDocumentGenerator | None = None,
     fully_synthetic_context: FullySyntheticContext | None = None,
 ) -> JournaledPipelineResult:
-    """Resume one document from its last verified stage without replaying paid calls."""
+    """Resume one document from its last verified five-stage checkpoint."""
 
     resolved_selection_config = selection_config or SelectionConfig()
     resolved_prompt_bundle = prompt_bundle or build_prompt_bundle(
         resolved_selection_config
     )
     try:
-        identity = JournalIdentity(
-            source_sha256=snapshot.source_sha256,
-            selection_sha256=selection.selection_sha256,
-            prompt_bundle_sha256=resolved_prompt_bundle.sha256,
-            generator_model=config.generator_model,
-            grader_model=config.grader_model,
+        identity = JournalIdentity.from_pipeline(
+            snapshot=snapshot,
+            selection=selection,
+            target=counterfactual_target,
+            config=config,
+            prompt_bundle=resolved_prompt_bundle,
             audit_config_sha256=audit_config_sha256,
         )
     except ValueError:
         return _journal_failure_result(
             snapshot.source_document_id,
             code=FailureCode.MANIFEST_INVALID,
-            message="journal identity contains an invalid hash or model ID",
+            message="journal identity contains invalid hashes or model IDs",
         )
-    artifact_store = ArtifactStore(run_dir)
 
+    artifact_store = ArtifactStore(run_dir)
     try:
         with JournalWriter(run_dir, run_id) as writer:
-            plan = build_resume_plan(
+            resume = build_resume_plan(
                 records=writer.records,
                 source_document_id=snapshot.source_document_id,
                 identity=identity,
                 artifact_store=artifact_store,
+                legacy_contract_detected=writer.legacy_contract_detected,
             )
             resumed: list[JournalStage] = []
             executed: list[JournalStage] = []
 
-            if plan.pass1_record is not None:
-                pass1_reference = _artifact_reference(plan.pass1_record)
-                pass1_artifact = artifact_store.read(
-                    pass1_reference,
-                    Pass1StageArtifact,
+            if resume.classification_record is not None:
+                classified_reference = _artifact_reference(
+                    resume.classification_record
                 )
-                resumed.append(JournalStage.PASS1_GENERATED)
+                classified_artifact = artifact_store.read(
+                    classified_reference,
+                    ClassificationStageArtifact,
+                )
+                resumed.append(JournalStage.CLASSIFIED)
             else:
-                pass1 = execute_pass1(
+                execution = execute_classification(
                     snapshot=snapshot,
                     selection=selection,
-                    counterfactual_target=counterfactual_target,
                     gateway=gateway,
                     config=config,
                     selection_config=resolved_selection_config,
                     prompt_bundle=resolved_prompt_bundle,
-                    fully_synthetic_generator=fully_synthetic_generator,
-                    fully_synthetic_context=fully_synthetic_context,
                 )
-                executed.append(JournalStage.PASS1_GENERATED)
-                if pass1.failure is not None:
-                    if pass1.failure.stage == FailureStage.PASS1:
+                executed.append(JournalStage.CLASSIFIED)
+                if execution.failure is not None:
+                    if execution.failure.stage == FailureStage.CLASSIFICATION:
                         writer.append(
-                            _pass1_record(
+                            _stage_record(
                                 writer=writer,
                                 run_id=run_id,
-                                snapshot=snapshot,
-                                selection=selection,
+                                source_document_id=snapshot.source_document_id,
                                 identity=identity,
+                                stage=JournalStage.CLASSIFIED,
                                 status=JournalStatus.FAILED,
-                                failure=pass1.failure,
+                                prompt_sha256=identity.classifier_prompt_sha256,
+                                model_id=identity.classifier_model,
                                 token_usage=(
-                                    pass1.receipt.token_usage
-                                    if pass1.receipt is not None
+                                    execution.receipt.token_usage
+                                    if execution.receipt is not None
                                     else None
                                 ),
+                                failure=execution.failure,
                             )
                         )
                     return JournaledPipelineResult(
                         pipeline_result=DocumentPipelineResult(
                             source_document_id=snapshot.source_document_id,
-                            pass1_result=pass1.result,
-                            pass1_receipt=pass1.receipt,
-                            failure=pass1.failure,
+                            source_assessment=execution.assessment,
+                            classification_receipt=execution.receipt,
+                            failure=execution.failure,
                         ),
                         resumed_stages=tuple(resumed),
                         executed_stages=tuple(executed),
-                        next_stage=JournalStage.PASS1_GENERATED,
+                        next_stage=JournalStage.CLASSIFIED,
                         completed_noop=False,
-                        invalidation_reason=plan.invalidation_reason,
+                        invalidation_reason=resume.invalidation_reason,
                     )
-                assert pass1.result is not None
-                assert pass1.receipt is not None
-                pass1_artifact = Pass1StageArtifact(
-                    pass1_result=pass1.result,
-                    receipt=pass1.receipt,
-                    generation_provenance=pass1.provenance,
+                assert execution.assessment is not None
+                assert execution.receipt is not None
+                classified_artifact = ClassificationStageArtifact(
+                    source_assessment=execution.assessment,
+                    receipt=execution.receipt,
                 )
-                pass1_reference = artifact_store.write(pass1_artifact)
+                classified_reference = artifact_store.write(classified_artifact)
                 writer.append(
-                    _pass1_record(
+                    _stage_record(
                         writer=writer,
                         run_id=run_id,
-                        snapshot=snapshot,
-                        selection=selection,
+                        source_document_id=snapshot.source_document_id,
                         identity=identity,
+                        stage=JournalStage.CLASSIFIED,
                         status=JournalStatus.SUCCEEDED,
-                        artifact=pass1_reference,
-                        token_usage=pass1.receipt.token_usage,
+                        prompt_sha256=identity.classifier_prompt_sha256,
+                        model_id=identity.classifier_model,
+                        artifact=classified_reference,
+                        token_usage=execution.receipt.token_usage,
                     )
                 )
 
-            if plan.pass2_record is not None:
-                pass2_artifact = artifact_store.read(
-                    _artifact_reference(plan.pass2_record),
-                    Pass2StageArtifact,
+            if resume.planning_record is not None:
+                planned_reference = _artifact_reference(resume.planning_record)
+                planned_artifact = artifact_store.read(
+                    planned_reference,
+                    PlanningStageArtifact,
                 )
-                resumed.append(JournalStage.PASS2_GRADED)
+                resumed.append(JournalStage.PLANNED)
             else:
-                pass2 = execute_pass2(
-                    pass1_result=pass1_artifact.pass1_result,
-                    gateway=gateway,
-                    config=config,
-                    selection_config=resolved_selection_config,
-                    prompt_bundle=resolved_prompt_bundle,
-                )
-                executed.append(JournalStage.PASS2_GRADED)
-                if pass2.failure is not None:
+                executed.append(JournalStage.PLANNED)
+                try:
+                    locked_plan = build_generation_plan(
+                        assessment=classified_artifact.source_assessment,
+                        requested_target=counterfactual_target,
+                        snapshot=snapshot,
+                        selection=selection,
+                        sensitive_seed=sensitive_seed,
+                        has_synthetic_generator=(
+                            fully_synthetic_generator is not None
+                            and fully_synthetic_context is not None
+                        ),
+                    )
+                except GenerationPlanningError as exc:
+                    failure = StageFailure(
+                        stage=FailureStage.PLANNING,
+                        code=exc.code,
+                        retryable=exc.retryable,
+                        message=str(exc),
+                    )
                     writer.append(
-                        _pass2_record(
+                        _stage_record(
                             writer=writer,
                             run_id=run_id,
-                            snapshot=snapshot,
-                            selection=selection,
+                            source_document_id=snapshot.source_document_id,
                             identity=identity,
-                            pass1_artifact_sha256=pass1_reference.sha256,
+                            stage=JournalStage.PLANNED,
                             status=JournalStatus.FAILED,
-                            failure=pass2.failure,
-                            token_usage=(
-                                pass2.receipt.token_usage
-                                if pass2.receipt is not None
-                                else None
-                            ),
+                            upstream_artifact_sha256=classified_reference.sha256,
+                            stage_config_sha256=identity.planning_config_sha256,
+                            failure=failure,
                         )
                     )
                     return JournaledPipelineResult(
                         pipeline_result=DocumentPipelineResult(
                             source_document_id=snapshot.source_document_id,
-                            pass1_result=pass1_artifact.pass1_result,
-                            pass2_assessment=pass2.assessment,
-                            pass1_receipt=pass1_artifact.receipt,
-                            pass2_receipt=pass2.receipt,
-                            generation_provenance=(
-                                pass1_artifact.generation_provenance
-                            ),
-                            failure=pass2.failure,
+                            source_assessment=classified_artifact.source_assessment,
+                            classification_receipt=classified_artifact.receipt,
+                            failure=failure,
                         ),
                         resumed_stages=tuple(resumed),
                         executed_stages=tuple(executed),
-                        next_stage=JournalStage.PASS2_GRADED,
+                        next_stage=JournalStage.PLANNED,
                         completed_noop=False,
-                        invalidation_reason=plan.invalidation_reason,
+                        invalidation_reason=resume.invalidation_reason,
                     )
-                assert pass2.assessment is not None
-                assert pass2.receipt is not None
-                assert pass2.comparison is not None
-                pass2_artifact = Pass2StageArtifact(
-                    pass2_assessment=pass2.assessment,
-                    receipt=pass2.receipt,
-                    comparison=pass2.comparison,
+                planned_artifact = PlanningStageArtifact(
+                    generation_plan=locked_plan
                 )
-                pass2_reference = artifact_store.write(pass2_artifact)
+                planned_reference = artifact_store.write(planned_artifact)
                 writer.append(
-                    _pass2_record(
+                    _stage_record(
                         writer=writer,
                         run_id=run_id,
-                        snapshot=snapshot,
-                        selection=selection,
+                        source_document_id=snapshot.source_document_id,
                         identity=identity,
-                        pass1_artifact_sha256=pass1_reference.sha256,
+                        stage=JournalStage.PLANNED,
                         status=JournalStatus.SUCCEEDED,
-                        artifact=pass2_reference,
-                        token_usage=pass2.receipt.token_usage,
+                        artifact=planned_reference,
+                        upstream_artifact_sha256=classified_reference.sha256,
+                        stage_config_sha256=identity.planning_config_sha256,
+                    )
+                )
+
+            locked_plan = planned_artifact.generation_plan
+            source_free = (
+                locked_plan.generation_route
+                == GenerationRoute.FULLY_SYNTHETIC
+            )
+            generation_prompt_sha256 = (
+                None
+                if source_free
+                else identity.generation_prompt_for_clause(
+                    locked_plan.final_target.clause_no
+                )
+            )
+            generation_model = None if source_free else identity.generator_model
+
+            if resume.generation_record is not None:
+                generated_reference = _artifact_reference(
+                    resume.generation_record
+                )
+                generated_artifact = artifact_store.read(
+                    generated_reference,
+                    GenerationStageArtifact,
+                )
+                resumed.append(JournalStage.GENERATED)
+            else:
+                execution = execute_generation(
+                    snapshot=snapshot,
+                    selection=selection,
+                    assessment=classified_artifact.source_assessment,
+                    plan=locked_plan,
+                    gateway=gateway,
+                    config=config,
+                    selection_config=resolved_selection_config,
+                    prompt_bundle=resolved_prompt_bundle,
+                    sensitive_seed=sensitive_seed,
+                    fully_synthetic_generator=fully_synthetic_generator,
+                    fully_synthetic_context=fully_synthetic_context,
+                )
+                executed.append(JournalStage.GENERATED)
+                if execution.failure is not None:
+                    writer.append(
+                        _stage_record(
+                            writer=writer,
+                            run_id=run_id,
+                            source_document_id=snapshot.source_document_id,
+                            identity=identity,
+                            stage=JournalStage.GENERATED,
+                            status=JournalStatus.FAILED,
+                            prompt_sha256=generation_prompt_sha256,
+                            model_id=generation_model,
+                            upstream_artifact_sha256=planned_reference.sha256,
+                            token_usage=(
+                                execution.receipt.token_usage
+                                if execution.receipt is not None
+                                else None
+                            ),
+                            failure=execution.failure,
+                        )
+                    )
+                    return JournaledPipelineResult(
+                        pipeline_result=DocumentPipelineResult(
+                            source_document_id=snapshot.source_document_id,
+                            source_assessment=classified_artifact.source_assessment,
+                            generation_plan=locked_plan,
+                            generation_artifact=execution.artifact,
+                            classification_receipt=classified_artifact.receipt,
+                            generation_receipt=execution.receipt,
+                            failure=execution.failure,
+                        ),
+                        resumed_stages=tuple(resumed),
+                        executed_stages=tuple(executed),
+                        next_stage=JournalStage.GENERATED,
+                        completed_noop=False,
+                        invalidation_reason=resume.invalidation_reason,
+                    )
+                assert execution.artifact is not None
+                generated_artifact = GenerationStageArtifact(
+                    generation_artifact=execution.artifact,
+                    receipt=execution.receipt,
+                )
+                generated_reference = artifact_store.write(generated_artifact)
+                writer.append(
+                    _stage_record(
+                        writer=writer,
+                        run_id=run_id,
+                        source_document_id=snapshot.source_document_id,
+                        identity=identity,
+                        stage=JournalStage.GENERATED,
+                        status=JournalStatus.SUCCEEDED,
+                        prompt_sha256=generation_prompt_sha256,
+                        model_id=generation_model,
+                        artifact=generated_reference,
+                        upstream_artifact_sha256=planned_reference.sha256,
+                        token_usage=(
+                            execution.receipt.token_usage
+                            if execution.receipt is not None
+                            else None
+                        ),
+                    )
+                )
+
+            validation_prompt_sha256 = identity.validation_prompt_for_clause(
+                locked_plan.final_target.clause_no
+            )
+            if resume.validation_record is not None:
+                validated_reference = _artifact_reference(
+                    resume.validation_record
+                )
+                validated_artifact = artifact_store.read(
+                    validated_reference,
+                    ValidationStageArtifact,
+                )
+                resumed.append(JournalStage.VALIDATED)
+            else:
+                execution = execute_consistency_validation(
+                    assessment=classified_artifact.source_assessment,
+                    plan=locked_plan,
+                    artifact=generated_artifact.generation_artifact,
+                    gateway=gateway,
+                    config=config,
+                    selection_config=resolved_selection_config,
+                    prompt_bundle=resolved_prompt_bundle,
+                )
+                executed.append(JournalStage.VALIDATED)
+                if execution.failure is not None:
+                    writer.append(
+                        _stage_record(
+                            writer=writer,
+                            run_id=run_id,
+                            source_document_id=snapshot.source_document_id,
+                            identity=identity,
+                            stage=JournalStage.VALIDATED,
+                            status=JournalStatus.FAILED,
+                            prompt_sha256=validation_prompt_sha256,
+                            model_id=identity.validator_model,
+                            upstream_artifact_sha256=generated_reference.sha256,
+                            token_usage=(
+                                execution.receipt.token_usage
+                                if execution.receipt is not None
+                                else None
+                            ),
+                            failure=execution.failure,
+                        )
+                    )
+                    return JournaledPipelineResult(
+                        pipeline_result=DocumentPipelineResult(
+                            source_document_id=snapshot.source_document_id,
+                            source_assessment=classified_artifact.source_assessment,
+                            generation_plan=locked_plan,
+                            generation_artifact=(
+                                generated_artifact.generation_artifact
+                            ),
+                            consistency_assessment=execution.assessment,
+                            classification_receipt=classified_artifact.receipt,
+                            generation_receipt=generated_artifact.receipt,
+                            validation_receipt=execution.receipt,
+                            failure=execution.failure,
+                        ),
+                        resumed_stages=tuple(resumed),
+                        executed_stages=tuple(executed),
+                        next_stage=JournalStage.VALIDATED,
+                        completed_noop=False,
+                        invalidation_reason=resume.invalidation_reason,
+                    )
+                assert execution.assessment is not None
+                assert execution.receipt is not None
+                assert execution.comparison is not None
+                validated_artifact = ValidationStageArtifact(
+                    generated_document_sha256=model_sha256(
+                        generated_artifact.generation_artifact.generated_document
+                    ),
+                    consistency_assessment=execution.assessment,
+                    receipt=execution.receipt,
+                    comparison=execution.comparison,
+                    repair_codes=execution.repair_codes,
+                )
+                validated_reference = artifact_store.write(validated_artifact)
+                writer.append(
+                    _stage_record(
+                        writer=writer,
+                        run_id=run_id,
+                        source_document_id=snapshot.source_document_id,
+                        identity=identity,
+                        stage=JournalStage.VALIDATED,
+                        status=JournalStatus.SUCCEEDED,
+                        prompt_sha256=validation_prompt_sha256,
+                        model_id=identity.validator_model,
+                        artifact=validated_reference,
+                        upstream_artifact_sha256=generated_reference.sha256,
+                        token_usage=execution.receipt.token_usage,
                     )
                 )
 
             result = _pipeline_from_artifacts(
                 source_document_id=snapshot.source_document_id,
-                pass1_artifact=pass1_artifact,
-                pass2_artifact=pass2_artifact,
+                classified=classified_artifact,
+                planned=planned_artifact,
+                generated=generated_artifact,
+                validated=validated_artifact,
             )
-            if plan.audit_record is not None:
+            if resume.audit_record is not None:
                 resumed.append(JournalStage.AUDITED)
             return JournaledPipelineResult(
                 pipeline_result=result,
                 resumed_stages=tuple(resumed),
                 executed_stages=tuple(executed),
-                next_stage=None if plan.audit_record is not None else JournalStage.AUDITED,
-                completed_noop=plan.audit_record is not None,
-                invalidation_reason=plan.invalidation_reason,
+                next_stage=(
+                    None
+                    if resume.audit_record is not None
+                    else JournalStage.AUDITED
+                ),
+                completed_noop=resume.audit_record is not None,
+                invalidation_reason=resume.invalidation_reason,
             )
     except JournalWriterConflict:
         return _journal_failure_result(
@@ -885,22 +1282,25 @@ def run_two_pass_with_journal(
         )
 
 
-def _matching_pass2_record(
+def _matching_validation_record(
     *,
     writer: JournalWriter,
     source_document_id: str,
     identity: JournalIdentity,
     artifact_store: ArtifactStore,
 ) -> JournalRecord:
-    plan = build_resume_plan(
+    resume = build_resume_plan(
         records=writer.records,
         source_document_id=source_document_id,
         identity=identity,
         artifact_store=artifact_store,
+        legacy_contract_detected=writer.legacy_contract_detected,
     )
-    if plan.pass2_record is None:
-        raise JournalCorruptError("cannot record audit before a verified Pass 2")
-    return plan.pass2_record
+    if resume.validation_record is None:
+        raise JournalCorruptError(
+            "cannot record audit before a verified validation stage"
+        )
+    return resume.validation_record
 
 
 def record_audit_success(
@@ -913,7 +1313,7 @@ def record_audit_success(
 ) -> JournalRecord:
     artifact_store = ArtifactStore(run_dir)
     with JournalWriter(run_dir, run_id) as writer:
-        pass2_record = _matching_pass2_record(
+        validation_record = _matching_validation_record(
             writer=writer,
             source_document_id=source_document_id,
             identity=identity,
@@ -925,25 +1325,23 @@ def record_audit_success(
                 record.source_document_id == source_document_id
                 and record.stage == JournalStage.AUDITED
                 and record.status == JournalStatus.SUCCEEDED
-                and _matches_common(record, identity)
-                and record.upstream_artifact_sha256 == pass2_record.artifact_sha256
-                and record.stage_config_sha256 == identity.audit_config_sha256
+                and _base_matches(record, identity)
+                and record.upstream_artifact_sha256
+                == validation_record.artifact_sha256
+                and record.stage_config_sha256
+                == identity.audit_config_sha256
                 and _artifact_reference(record) == reference
             ):
                 return record
-        record = JournalRecord(
+        record = _stage_record(
+            writer=writer,
             run_id=run_id,
-            sequence=writer.next_sequence,
             source_document_id=source_document_id,
+            identity=identity,
             stage=JournalStage.AUDITED,
             status=JournalStatus.SUCCEEDED,
-            recorded_at=datetime.now(UTC),
-            source_sha256=identity.source_sha256,
-            selection_sha256=identity.selection_sha256,
-            prompt_bundle_sha256=identity.prompt_bundle_sha256,
-            artifact_sha256=reference.sha256,
-            artifact_path=reference.path,
-            upstream_artifact_sha256=pass2_record.artifact_sha256,
+            artifact=reference,
+            upstream_artifact_sha256=validation_record.artifact_sha256,
             stage_config_sha256=identity.audit_config_sha256,
         )
         writer.append(record)
@@ -962,23 +1360,20 @@ def record_audit_failure(
         raise ValueError("audit journal failure requires FailureStage.AUDIT")
     artifact_store = ArtifactStore(run_dir)
     with JournalWriter(run_dir, run_id) as writer:
-        pass2_record = _matching_pass2_record(
+        validation_record = _matching_validation_record(
             writer=writer,
             source_document_id=source_document_id,
             identity=identity,
             artifact_store=artifact_store,
         )
-        record = JournalRecord(
+        record = _stage_record(
+            writer=writer,
             run_id=run_id,
-            sequence=writer.next_sequence,
             source_document_id=source_document_id,
+            identity=identity,
             stage=JournalStage.AUDITED,
             status=JournalStatus.FAILED,
-            recorded_at=datetime.now(UTC),
-            source_sha256=identity.source_sha256,
-            selection_sha256=identity.selection_sha256,
-            prompt_bundle_sha256=identity.prompt_bundle_sha256,
-            upstream_artifact_sha256=pass2_record.artifact_sha256,
+            upstream_artifact_sha256=validation_record.artifact_sha256,
             stage_config_sha256=identity.audit_config_sha256,
             failure=failure,
         )

@@ -33,7 +33,7 @@ def _snapshot(page_count: int, *, source_hash: str = "a" * 64, text_size: int = 
                 page_number=page,
                 blocks=(
                     SourceTextBlock(
-                        block_id=f"p{page}:b0",
+                        block_id=f"page{page}:b0",
                         text=f"{page}쪽 " + ("가" * text_size),
                     ),
                 ),
@@ -68,7 +68,7 @@ def test_86_pages_builds_one_front_limited_relevance_request():
     assert prepared.relevance_request.candidate_page_numbers == (1, 2, 3)
     assert tuple(
         block.block_id for block in prepared.relevance_request.candidate_blocks
-    ) == ("p1:b0", "p2:b0", "p3:b0")
+    ) == ("page1:b0", "page2:b0", "page3:b0")
     assert "[PAGE 1]" in render_source_blocks(
         prepared.relevance_request.candidate_blocks
     )
@@ -84,17 +84,17 @@ def test_relevance_response_is_validated_and_normalized_to_source_order():
         snapshot,
         request,
         RelevanceSelectionResponse(
-            selected_block_ids=("p3:b0", "p1:b0"),
+            selected_block_ids=("page3:b0", "page1:b0"),
             rationale="첫 페이지의 문서 개요와 셋째 페이지의 법적 근거가 중요하다.",
         ),
         config,
     )
 
-    assert selection.selected_block_ids == ("p1:b0", "p3:b0")
+    assert selection.selected_block_ids == ("page1:b0", "page3:b0")
     assert selection.selected_page_numbers == (1, 3)
     assert selection.truncated is True
-    assert render_selected_source(snapshot, selection, config).index("p1:b0") < (
-        render_selected_source(snapshot, selection, config).index("p3:b0")
+    assert render_selected_source(snapshot, selection, config).index("page1:b0") < (
+        render_selected_source(snapshot, selection, config).index("page3:b0")
     )
     validate_selection_hash(snapshot, selection, config)
 
@@ -104,7 +104,7 @@ def test_relevance_response_rejects_empty_duplicate_unknown_and_too_many_ids():
         RelevanceSelectionResponse(selected_block_ids=(), rationale="없음")
     with pytest.raises(ValidationError, match="must be unique"):
         RelevanceSelectionResponse(
-            selected_block_ids=("p1:b0", "p1:b0"),
+            selected_block_ids=("page1:b0", "page1:b0"),
             rationale="중복",
         )
 
@@ -130,7 +130,7 @@ def test_relevance_response_rejects_empty_duplicate_unknown_and_too_many_ids():
             snapshot,
             request,
             RelevanceSelectionResponse(
-                selected_block_ids=("p1:b0", "p2:b0", "p3:b0"),
+                selected_block_ids=("page1:b0", "page2:b0", "page3:b0"),
                 rationale="너무 많이 선택",
             ),
             config,
@@ -179,7 +179,7 @@ def test_stale_relevance_request_is_rejected_before_response_is_applied():
             changed_extraction,
             request,
             RelevanceSelectionResponse(
-                selected_block_ids=("p1:b0",),
+                selected_block_ids=("page1:b0",),
                 rationale="첫 block",
             ),
             config,
@@ -192,7 +192,7 @@ def test_stale_relevance_request_is_rejected_before_response_is_applied():
             original,
             request,
             RelevanceSelectionResponse(
-                selected_block_ids=("p1:b0",),
+                selected_block_ids=("page1:b0",),
                 rationale="첫 block",
             ),
             changed_config,
@@ -210,7 +210,7 @@ def test_snapshot_rejects_missing_page_number():
             pages=(
                 SourcePage(
                     page_number=2,
-                    blocks=(SourceTextBlock(block_id="p2:b0", text="본문"),),
+                    blocks=(SourceTextBlock(block_id="page2:b0", text="본문"),),
                 ),
             ),
         )

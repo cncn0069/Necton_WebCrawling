@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from rd2.administrative_status import AdminStatus
-from rd2.source_generation.classification_taxonomy import ClauseNumber, SubclauseKey
+from rd2.source_generation.classification_taxonomy import (
+    ClauseNumber,
+    DocumentForm,
+    SubclauseKey,
+)
 from rd2.source_generation.contracts import (
     AttachmentReferenceBlock,
     GeneratedDocumentIR,
@@ -13,7 +17,11 @@ from rd2.source_generation.contracts import (
     TableBlock,
     TargetClassification,
 )
-from rd2.source_generation.document_form import check_document_form
+from rd2.source_generation.document_form import (
+    HEADER_KEYS_BY_FORM,
+    check_document_form,
+    render_header_key_guidance,
+)
 
 
 def _target(*statuses: AdminStatus) -> GenerationTarget:
@@ -132,3 +140,62 @@ def test_unrelated_documents_are_not_forced_to_carry_an_approval_table():
 
     assert report.has_approval_block is False
     assert report.passed is True
+
+
+def _minutes_header() -> KeyValueBlock:
+    return KeyValueBlock(
+        block_id="head",
+        entries=(
+            KeyValueEntry(key="회차", value="제4차"),
+            KeyValueEntry(key="개최일시", value="2026-07-29 14:00"),
+            KeyValueEntry(key="장소", value="본관 3층 회의실"),
+        ),
+    )
+
+
+def test_meeting_minutes_header_counts_for_its_own_form():
+    """생성기는 원문 문서형식을 그대로 쓴다 — 회의록에 시행문 표제부를 요구하면
+    프롬프트와 지표가 반대 방향을 가리킨다."""
+
+    document = GeneratedDocumentIR(
+        title="제4차 평가위원회 회의록",
+        blocks=(_minutes_header(), ParagraphBlock(block_id="p1", text="배점을 정했다.")),
+    )
+
+    report = check_document_form(
+        document, _target(), document_form=DocumentForm.MEETING_MINUTES
+    )
+
+    assert report.has_header is True
+    assert report.passed is True
+
+
+def test_meeting_minutes_header_does_not_satisfy_an_official_letter():
+    """형식별로 갈랐다고 아무 표제부나 통과시키지는 않는다."""
+
+    document = GeneratedDocumentIR(
+        title="협조 요청",
+        blocks=(_minutes_header(), ParagraphBlock(block_id="p1", text="본문")),
+    )
+
+    report = check_document_form(
+        document, _target(), document_form=DocumentForm.OFFICIAL_LETTER
+    )
+
+    assert report.has_header is False
+    assert any("문서번호" in m for m in report.missing)
+
+
+def test_header_keys_cover_every_document_form():
+    """형식이 추가되고 표제부가 빠지면 프롬프트에서 조용히 사라진다."""
+
+    assert set(HEADER_KEYS_BY_FORM) == set(DocumentForm)
+
+
+def test_header_key_guidance_renders_every_form_for_the_generator():
+    guidance = render_header_key_guidance()
+
+    for form in DocumentForm:
+        assert form.value in guidance
+        for key in HEADER_KEYS_BY_FORM[form]:
+            assert key in guidance

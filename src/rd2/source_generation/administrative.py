@@ -1,4 +1,4 @@
-"""행정상태 target이 P1 생성문에 자연스럽게 실현됐는지 검증한다."""
+"""행정상태 target이 생성문에 자연스럽게 실현됐는지 검증한다."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def administrative_status_generation_requirements(
     *,
     reference_date: date | None = None,
 ) -> tuple[dict[str, str], ...]:
-    """P1 generation plan에 넣을 상태별 의미 생성 요구사항.
+    """generation plan에 넣을 상태별 의미 생성 요구사항.
 
     ``reference_date``는 "오늘"에 해당하는 기준일이다. 이걸 안 주면 모델은
     미래·과거를 판단할 근거가 없어서 아무 날짜나 쓴다 — 실제로 '미도래'

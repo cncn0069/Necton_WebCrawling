@@ -318,6 +318,12 @@ def render_selected_source(
     return render_source_blocks(blocks)
 
 
+def render_full_source(snapshot: SourceDocumentSnapshot) -> str:
+    """생성 단계에 원문 전체 block 경계를 보존해 전달한다."""
+
+    return render_source_blocks(_all_candidate_blocks(snapshot))
+
+
 def validate_selection_hash(
     snapshot: SourceDocumentSnapshot,
     selection: DocumentSelection,

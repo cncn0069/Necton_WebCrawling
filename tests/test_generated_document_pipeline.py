@@ -19,7 +19,7 @@ from rd2.generators.generated_document_pipeline import (
 def _payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "policy_material",
                 "classification": "O",
@@ -32,7 +32,7 @@ def _payload() -> dict:
                 "generation_mode": "counterfactual",
             },
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "정책연구 평가결과 보고서",
                 "blocks": [
                     {
@@ -99,7 +99,7 @@ def _payload() -> dict:
             },
         },
         "receipt": {
-            "stage": "pass1",
+            "stage": "generation",
             "model_id": "gpt-4o",
             "response_id": "resp-test",
             "request_id": "request-test",
@@ -279,7 +279,7 @@ def test_body_text_mismatch_is_rejected_before_rendering() -> None:
 def test_failed_generation_is_rejected_unless_explicitly_allowed() -> None:
     payload = _payload()
     payload["failure"] = {
-        "stage": "pass1",
+        "stage": "generation",
         "code": "evidence_invalid",
         "retryable": False,
         "message": "evidence quote mismatch",
@@ -315,18 +315,34 @@ def test_invalid_table_width_and_contract_drift_are_rejected() -> None:
         parse_generation_payload(payload)
 
     payload = _payload()
-    payload["result"]["contract_version"] = "2.0.0"
-    payload["result"]["generated_document"]["contract_version"] = "2.0.0"
+    payload["result"]["contract_version"] = "1.0.0"
+    payload["result"]["generated_document"]["contract_version"] = "1.0.0"
 
-    with pytest.raises(ValidationError, match="expected 1.x.x"):
+    with pytest.raises(ValidationError, match="expected 2.x.x"):
         parse_generation_payload(payload)
 
 
-def test_same_major_version_allows_metadata_but_rejects_unknown_block_kind() -> None:
+def test_minor_contract_version_drift_from_the_source_module_is_accepted() -> None:
+    """rd2.source_generation.contracts는 이 모듈을 import하지 않고 IR 형태를
+    독자적으로 재선언한다. 그 소스 모듈의 ``CONTRACT_SCHEMA_VERSION``은
+    ``SourceAssessment`` 등 여러 계약이 공유하는 단일 상수라, 이 모듈이 실제로
+    쓰는 ``GeneratedDocumentIR``의 필드가 안 바뀌어도(예: primary_subclause
+    필드 추가로 2.0.0 -> 2.1.0) 마이너 버전이 오를 수 있다. v1 같은 실제 구조
+    드리프트만 막고 마이너 버전은 받아야 한다.
+    """
+
     payload = _payload()
-    payload["result"]["contract_version"] = "1.1.0"
+    payload["result"]["contract_version"] = "2.1.0"
+    payload["result"]["generated_document"]["contract_version"] = "2.1.0"
+
+    parsed = parse_generation_payload(payload)
+
+    assert parsed.result.contract_version == "2.1.0"
+
+
+def test_v2_allows_metadata_but_rejects_unknown_block_kind() -> None:
+    payload = _payload()
     document = payload["result"]["generated_document"]
-    document["contract_version"] = "1.1.0"
     document["trace_id"] = "trace-123"
     document["blocks"][0]["source_note"] = "compatible metadata"
 

@@ -23,13 +23,13 @@ from rd2.source_generation.contracts import (
     GenerationMode,
     GenerationTarget,
     ParagraphBlock,
-    Pass2Assessment,
+    ConsistencyAssessment,
     TargetClassification,
 )
 
 
 @pytest.mark.parametrize("status", tuple(AdminStatus))
-def test_every_admin_status_has_a_semantic_p1_requirement_without_fixed_phrase(
+def test_every_admin_status_has_a_semantic_generation_requirement_without_fixed_phrase(
     status: AdminStatus,
 ):
     policy = ADMIN_STATUS_TEXT_POLICIES[status]
@@ -88,8 +88,8 @@ def test_legal_and_administrative_targets_can_overlap():
     assert target.administrative_statuses == (AdminStatus.APPROVAL_PENDING,)
 
 
-def test_declared_status_makes_effective_classification_s_without_p2_detection():
-    """행정상태는 P2가 찾아내는 대상이 아니라 생성계획이 못 박는 메타데이터다.
+def test_declared_status_makes_effective_classification_s_without_validator_detection():
+    """행정상태는 validator가 찾아내는 대상이 아니라 생성계획이 못 박는 메타데이터다.
 
     PDF 렌더러가 결재란을 강제로 그려 그 상태를 문서에 구성해 넣으므로,
     라벨은 판정이 아니라 구성으로 보장된다.
@@ -97,7 +97,7 @@ def test_declared_status_makes_effective_classification_s_without_p2_detection()
 
     from rd2.source_generation.contracts import effective_classification
 
-    legal_only = Pass2Assessment(
+    legal_only = ConsistencyAssessment(
         document_form=DocumentForm.REPORT,
         classification=CsoClassification.O,
         rationale="정보공개법 조항 근거는 없다.",
@@ -105,8 +105,8 @@ def test_declared_status_makes_effective_classification_s_without_p2_detection()
 
     assert legal_only.classification == CsoClassification.O
     assert legal_only.clause_no is None
-    # P2는 행정상태를 판정하지 않는다 — 계약에서 아예 사라졌다.
-    assert "administrative_statuses" not in Pass2Assessment.model_fields
+    # validator는 행정상태를 판정하지 않는다 — 계약에서 아예 사라졌다.
+    assert "administrative_statuses" not in ConsistencyAssessment.model_fields
 
     # 선언된 상태가 있으면 최종 민감도는 S다.
     assert effective_classification(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from rd2.source_generation.contracts import EvidenceSpan
+from rd2.source_generation.contracts import EvidenceSpan, condense_whitespace
 
 
 class EvidenceResolutionError(ValueError):
@@ -24,13 +24,15 @@ def validate_evidence_quotes(
     - 같은 block에 두 번 이상 나오는 문장이라 어느 쪽인지 모르는 경우
 
     같은 (block, quote) 쌍을 중복 반환하는 것도 거부한다 — 근거 개수를
-    부풀려 신뢰도가 높아 보이게 만들 수 있다.
+    부풀려 신뢰도가 높아 보이게 만들 수 있다. 중복 판정은 **공백을 무시한**
+    형태로 한다. 매칭이 공백에 관대해졌으므로 공백만 다른 두 인용문은 같은
+    근거를 두 번 센 것이고, 원문 그대로 비교하면 그 우회를 놓친다.
     """
 
     validated: list[EvidenceSpan] = []
     seen: set[tuple[str, str]] = set()
     for span in spans:
-        key = (span.block_id, span.quote)
+        key = (span.block_id, condense_whitespace(span.quote))
         if key in seen:
             raise EvidenceResolutionError(
                 f"duplicate evidence quote for block {span.block_id!r}"

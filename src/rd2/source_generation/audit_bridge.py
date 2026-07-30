@@ -18,23 +18,24 @@ from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.generation_plan_schema import GenerationPlan
 from rd2.source_generation.contracts import (
-    effective_classification,
     CONTRACT_SCHEMA_VERSION,
     AuditStageArtifact,
+    ConsistencyAssessment,
+    ConsistencyComparison,
     ContractModel,
     DocumentPipelineResult,
     DocumentSelection,
     FailureCode,
     FailureStage,
-    GradeComparison,
     GenerationTarget,
     NonEmptyText,
-    Pass2Assessment,
     RunManifest,
+    SensitiveConsistencyAssessment,
     Sha256Hex,
-    SourceClassification,
+    SourceAssessment,
     StageFailure,
     TargetClassification,
+    effective_classification,
 )
 from rd2.source_generation.journal import (
     JournalIdentity,
@@ -42,7 +43,7 @@ from rd2.source_generation.journal import (
     record_audit_success,
 )
 
-AUDIT_BRIDGE_VERSION = "source-generation-audit-bridge-v2"
+AUDIT_BRIDGE_VERSION = "source-generation-audit-bridge-v3"
 
 AUDIT_INPUT_FILENAME = "source_generation_audit_input.csv"
 RUN_MANIFEST_FILENAME = "source_generation_run_manifest.json"
@@ -66,16 +67,20 @@ class AuditCoverageAssignment(ContractModel):
 
 
 class AuditBridgeDocument(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_manifest_key: NonEmptyText
     source_sha256: Sha256Hex
     selection: DocumentSelection
     selection_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
-    prompt_bundle_sha256: Sha256Hex
-    pass1_artifact_sha256: Sha256Hex
-    pass2_artifact_sha256: Sha256Hex
+    classifier_prompt_sha256: Sha256Hex
+    generator_prompt_sha256: Sha256Hex
+    validator_prompt_sha256: Sha256Hex
+    classification_artifact_sha256: Sha256Hex
+    planning_artifact_sha256: Sha256Hex
+    generation_artifact_sha256: Sha256Hex
+    validation_artifact_sha256: Sha256Hex
     pipeline_result: DocumentPipelineResult
     assignment: AuditCoverageAssignment
 
@@ -84,7 +89,7 @@ class AuditBridgeDocument(ContractModel):
         self,
     ) -> "AuditBridgeDocument":
         if not self.pipeline_result.succeeded:
-            raise ValueError("audit bridge requires a successful two-pass result")
+            raise ValueError("audit bridge requires a successful pipeline result")
         if self.pipeline_result.source_document_id != self.source_document_id:
             raise ValueError("pipeline result source document ID does not match bridge input")
         if self.selection.source_sha256 != self.source_sha256:
@@ -95,10 +100,10 @@ class AuditBridgeDocument(ContractModel):
 
 
 class ClassificationAuditArtifact(ContractModel):
-    """Separate source/target/Pass 2 labels; generated body is intentionally absent."""
+    """Separate source/target/validation labels; generated body is absent."""
 
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    bridge_version: Literal["source-generation-audit-bridge-v2"] = (
+    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    bridge_version: Literal["source-generation-audit-bridge-v3"] = (
         AUDIT_BRIDGE_VERSION
     )
     run_id: NonEmptyText
@@ -108,53 +113,77 @@ class ClassificationAuditArtifact(ContractModel):
     selection: DocumentSelection
     selection_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
-    prompt_bundle_sha256: Sha256Hex
-    pass1_artifact_sha256: Sha256Hex
-    pass2_artifact_sha256: Sha256Hex
+    classifier_prompt_sha256: Sha256Hex
+    generator_prompt_sha256: Sha256Hex
+    validator_prompt_sha256: Sha256Hex
+    classification_artifact_sha256: Sha256Hex
+    planning_artifact_sha256: Sha256Hex
+    generation_artifact_sha256: Sha256Hex
+    validation_artifact_sha256: Sha256Hex
+    classifier_model: NonEmptyText
     generator_model: NonEmptyText
-    grader_model: NonEmptyText
-    source_classification: SourceClassification
+    validator_model: NonEmptyText
+    source_assessment: SourceAssessment
     generation_target: GenerationTarget
-    pass2_assessment: Pass2Assessment
-    comparison: GradeComparison
+    consistency_assessment: SensitiveConsistencyAssessment | ConsistencyAssessment
+    comparison: ConsistencyComparison
     requires_review: bool
     review_reasons: tuple[NonEmptyText, ...] = ()
 
     @model_validator(mode="after")
     def _review_fields_must_match_comparison(self) -> "ClassificationAuditArtifact":
-        expected_comparison = GradeComparison(
+        source_classification = self.source_assessment.source_classification
+        subject_role_match = True
+        if isinstance(
+            self.consistency_assessment,
+            SensitiveConsistencyAssessment,
+        ):
+            allowed_roles = {
+                role.value for role in self.source_assessment.subject_roles
+            }
+            subject_role_match = all(
+                assertion.subject_role.value in allowed_roles
+                for assertion in self.consistency_assessment.assertions
+            )
+        expected_comparison = ConsistencyComparison(
             document_form_match=(
-                self.pass2_assessment.document_form
-                == self.source_classification.document_form
+                self.consistency_assessment.document_form
+                == source_classification.document_form
             ),
             classification_match=(
                 effective_classification(
-                    self.pass2_assessment.classification,
+                    self.consistency_assessment.classification,
                     self.generation_target.administrative_statuses,
                 ).value
                 == self.generation_target.classification.value
             ),
             clause_match=(
-                self.pass2_assessment.clause_no
+                self.consistency_assessment.clause_no
                 == self.generation_target.clause_no
             ),
             subclause_match=(
-                self.pass2_assessment.subclause_key
+                self.consistency_assessment.subclause_key
                 == self.generation_target.subclause_key
             ),
+            subject_role_match=subject_role_match,
         )
         if self.comparison != expected_comparison:
             raise ValueError(
-                "grade comparison does not match source/target/Pass 2 labels"
+                "comparison does not match source/target/validation labels"
             )
         expected = _comparison_review_reasons(self.comparison)
         if self.review_reasons != expected:
             raise ValueError("review reasons must exactly match grade comparison")
         if self.requires_review != bool(expected):
             raise ValueError("requires_review must match review reasons")
-        if self.generator_model == self.grader_model:
-            raise ValueError("classification artifact requires different model IDs")
-        source = self.source_classification
+        if self.validator_model in {
+            self.classifier_model,
+            self.generator_model,
+        }:
+            raise ValueError(
+                "validator model must differ from classifier and generator"
+            )
+        source = source_classification
         target = self.generation_target
         if source.classification.value == "O":
             if target.generation_mode.value != "counterfactual":
@@ -219,7 +248,7 @@ class AuditBridgeRunResult:
 
 
 def _comparison_review_reasons(
-    comparison: GradeComparison,
+    comparison: ConsistencyComparison,
 ) -> tuple[str, ...]:
     reasons = []
     if not comparison.document_form_match:
@@ -230,6 +259,8 @@ def _comparison_review_reasons(
         reasons.append("clause_mismatch")
     if not comparison.subclause_match:
         reasons.append("subclause_mismatch")
+    if not comparison.subject_role_match:
+        reasons.append("subject_role_mismatch")
     return tuple(reasons)
 
 
@@ -266,10 +297,11 @@ def _build_classification_artifact(
     document: AuditBridgeDocument,
 ) -> ClassificationAuditArtifact:
     result = document.pipeline_result
-    assert result.pass1_result is not None
-    assert result.pass2_assessment is not None
-    assert result.pass1_receipt is not None
-    assert result.pass2_receipt is not None
+    assert result.source_assessment is not None
+    assert result.generation_plan is not None
+    assert result.consistency_assessment is not None
+    assert result.classification_receipt is not None
+    assert result.validation_receipt is not None
     assert result.comparison is not None
     reasons = _comparison_review_reasons(result.comparison)
     return ClassificationAuditArtifact(
@@ -280,14 +312,21 @@ def _build_classification_artifact(
         selection=document.selection,
         selection_sha256=document.selection_sha256,
         selection_config_sha256=document.selection_config_sha256,
-        prompt_bundle_sha256=document.prompt_bundle_sha256,
-        pass1_artifact_sha256=document.pass1_artifact_sha256,
-        pass2_artifact_sha256=document.pass2_artifact_sha256,
-        generator_model=result.pass1_receipt.model_id,
-        grader_model=result.pass2_receipt.model_id,
-        source_classification=result.pass1_result.source_classification,
-        generation_target=result.pass1_result.generation_target,
-        pass2_assessment=result.pass2_assessment,
+        classifier_prompt_sha256=document.classifier_prompt_sha256,
+        generator_prompt_sha256=document.generator_prompt_sha256,
+        validator_prompt_sha256=document.validator_prompt_sha256,
+        classification_artifact_sha256=(
+            document.classification_artifact_sha256
+        ),
+        planning_artifact_sha256=document.planning_artifact_sha256,
+        generation_artifact_sha256=document.generation_artifact_sha256,
+        validation_artifact_sha256=document.validation_artifact_sha256,
+        classifier_model=result.classification_receipt.model_id,
+        generator_model=run_manifest.generator_model,
+        validator_model=result.validation_receipt.model_id,
+        source_assessment=result.source_assessment,
+        generation_target=result.generation_plan.final_target,
+        consistency_assessment=result.consistency_assessment,
         comparison=result.comparison,
         requires_review=bool(reasons),
         review_reasons=reasons,
@@ -307,13 +346,34 @@ def bridge_document_to_audit(
             f"run manifest에 없는 source document: {document.source_document_id!r}"
         )
     result = document.pipeline_result
-    assert result.pass1_result is not None
-    assert result.pass1_receipt is not None
-    assert result.pass2_receipt is not None
-    target = result.pass1_result.generation_target
+    assert result.generation_plan is not None
+    assert result.generation_artifact is not None
+    assert result.classification_receipt is not None
+    assert result.validation_receipt is not None
+    target = result.generation_plan.final_target
 
-    if document.prompt_bundle_sha256 != run_manifest.prompt_bundle_sha256:
-        raise AuditContractError("document prompt hash가 run manifest와 다릅니다")
+    prompt_pairs = (
+        (
+            document.classifier_prompt_sha256,
+            run_manifest.classifier_prompt_sha256,
+            "classifier",
+        ),
+        (
+            document.generator_prompt_sha256,
+            run_manifest.generator_prompt_sha256,
+            "generator",
+        ),
+        (
+            document.validator_prompt_sha256,
+            run_manifest.validator_prompt_sha256,
+            "validator",
+        ),
+    )
+    for actual, expected, stage_name in prompt_pairs:
+        if actual != expected:
+            raise AuditContractError(
+                f"document {stage_name} prompt hash가 run manifest와 다릅니다"
+            )
     if (
         document.selection_config_sha256
         != run_manifest.selection_config_sha256
@@ -321,10 +381,24 @@ def bridge_document_to_audit(
         raise AuditContractError(
             "document selection config hash가 run manifest와 다릅니다"
         )
-    if result.pass1_receipt.model_id != run_manifest.generator_model:
-        raise AuditContractError("Pass 1 model ID가 run manifest와 다릅니다")
-    if result.pass2_receipt.model_id != run_manifest.grader_model:
-        raise AuditContractError("Pass 2 model ID가 run manifest와 다릅니다")
+    if (
+        result.classification_receipt.model_id
+        != run_manifest.classifier_model
+    ):
+        raise AuditContractError(
+            "classifier model ID가 run manifest와 다릅니다"
+        )
+    if (
+        result.generation_receipt is not None
+        and result.generation_receipt.model_id != run_manifest.generator_model
+    ):
+        raise AuditContractError(
+            "generator model ID가 run manifest와 다릅니다"
+        )
+    if result.validation_receipt.model_id != run_manifest.validator_model:
+        raise AuditContractError(
+            "validator model ID가 run manifest와 다릅니다"
+        )
 
     cell = _plan_cell(plan, document.assignment.coverage_cell_key)
     expected_target = (
@@ -367,8 +441,8 @@ def bridge_document_to_audit(
     assignment = document.assignment
     row = GenerationAuditBridgeRow(
         row_id=assignment.row_id,
-        body_text=result.pass1_result.generated_document.body_text,
-        title=result.pass1_result.generated_document.title,
+        body_text=result.generation_artifact.generated_document.body_text,
+        title=result.generation_artifact.generated_document.title,
         cso_classification=target.classification,
         clause_no=target.clause_no.value if target.clause_no is not None else "",
         cso_subclause_key=(
@@ -414,7 +488,7 @@ def summarize_classification_artifacts(
             "classification_mismatch",
             "clause_mismatch",
             "subclause_mismatch",
-            "administrative_status_mismatch",
+            "subject_role_mismatch",
         )
     }
 
@@ -433,13 +507,15 @@ def summarize_classification_artifacts(
         "classification_match_count": matched("classification_match"),
         "clause_match_count": matched("clause_match"),
         "subclause_match_count": matched("subclause_match"),
+        "subject_role_match_count": matched("subject_role_match"),
         "mismatch_reason_counts": reason_counts,
         "counterfactual_count": sum(
             artifact.generation_target.generation_mode.value == "counterfactual"
             for artifact in artifacts
         ),
         "source_o_count": sum(
-            artifact.source_classification.classification.value == "O"
+            artifact.source_assessment.source_classification.classification.value
+            == "O"
             for artifact in artifacts
         ),
     }
@@ -522,7 +598,7 @@ def load_classification_sidecar(
     artifacts: list[ClassificationAuditArtifact] = []
     seen_rows: set[str] = set()
     seen_source_documents: set[str] = set()
-    sidecar_identity: tuple[str, str, str, str] | None = None
+    sidecar_identity: tuple[str, ...] | None = None
     for line_number, line in enumerate(payload.splitlines(), start=1):
         if not line:
             raise AuditContractError(
@@ -547,9 +623,12 @@ def load_classification_sidecar(
         seen_source_documents.add(artifact.source_document_id)
         current_identity = (
             artifact.run_id,
-            artifact.prompt_bundle_sha256,
+            artifact.classifier_prompt_sha256,
+            artifact.generator_prompt_sha256,
+            artifact.validator_prompt_sha256,
+            artifact.classifier_model,
             artifact.generator_model,
-            artifact.grader_model,
+            artifact.validator_model,
         )
         if sidecar_identity is None:
             sidecar_identity = current_identity

@@ -13,7 +13,10 @@ def test_quote_is_accepted_without_the_model_computing_any_offset():
     """모델은 인용문만 낸다. 위치는 코드가 찾는다."""
 
     text = "· 연구결과의 활용 가능성 · 비공개 시 사유의 적정성"
-    span = EvidenceSpan(block_id="p1:b14", quote="비공개 시 사유의 적정성")
+    span = EvidenceSpan(
+        block_id="source-page1:b14",
+        quote="비공개 시 사유의 적정성",
+    )
 
     result = validate_evidence_quotes((span,), lambda block_id: text)
 
@@ -48,6 +51,72 @@ def test_duplicate_quotes_cannot_inflate_the_evidence_count():
         )
 
 
+def test_whitespace_differences_no_longer_break_table_evidence():
+    """실측 회귀: classifier가 PDF 표를 인용할 때 글자는 다 맞히면서
+    칸 사이 공백 개수만 달라 ``str.find``에 걸리지 않았다.
+    """
+
+    text = "안전검사대상   안전검사수수료  10톤 미만   77,000"
+    span = EvidenceSpan(
+        block_id="p1:b0",
+        quote="안전검사대상 안전검사수수료 10톤 미만 77,000",
+    )
+
+    assert validate_evidence_quotes((span,), lambda block_id: text) == (span,)
+    # 위치는 여전히 원문 좌표로 돌려준다.
+    assert span.locate_in(text) == 0
+
+
+def test_full_width_space_is_also_forgiven():
+    """한글 공문에 흔한 전각 공백(\\u3000)도 공백으로 취급한다."""
+
+    span = EvidenceSpan(block_id="b1", quote="제166조제1항 산업안전보건법")
+
+    assert span.locate_in("제166조제1항　산업안전보건법") == 0
+
+
+def test_relaxing_whitespace_does_not_permit_paraphrase_or_omission():
+    """공백만 풀어줬다. 글자가 빠지거나 바뀌면 여전히 실패한다."""
+
+    text = "수수료가 다음과 같이 변경되어 이를 고시합니다"
+
+    # 요약(중간 생략)
+    with pytest.raises(EvidenceResolutionError, match="not found"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="수수료가 고시합니다"),),
+            lambda block_id: text,
+        )
+    # 바꿔쓰기
+    with pytest.raises(EvidenceResolutionError, match="not found"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="수수료가 아래와 같이 변경되어"),),
+            lambda block_id: text,
+        )
+
+
+def test_whitespace_only_variants_cannot_inflate_the_evidence_count():
+    """공백만 다른 두 인용문은 같은 근거를 두 번 센 것이다."""
+
+    with pytest.raises(EvidenceResolutionError, match="duplicate"):
+        validate_evidence_quotes(
+            (
+                EvidenceSpan(block_id="b1", quote="근거 문장"),
+                EvidenceSpan(block_id="b1", quote="근거  문장"),
+            ),
+            lambda block_id: "근거 문장",
+        )
+
+
+def test_ambiguity_is_still_detected_across_whitespace_variants():
+    """공백을 무시하면 같아지는 두 곳도 모호한 것이다."""
+
+    with pytest.raises(EvidenceResolutionError, match="ambiguous"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="반복 구간"),),
+            lambda block_id: "반복 구간 그리고 반복  구간",
+        )
+
+
 def test_byte_length_offsets_no_longer_break_valid_evidence():
     """실측 회귀: 모델이 3글자 '요약문'에 end=9(UTF-8 바이트 수)를 반환했다.
 
@@ -55,7 +124,7 @@ def test_byte_length_offsets_no_longer_break_valid_evidence():
     """
 
     text = "요약문"
-    span = EvidenceSpan(block_id="p1:b0", quote="요약문")
+    span = EvidenceSpan(block_id="source-page1:b0", quote="요약문")
 
     assert validate_evidence_quotes((span,), lambda block_id: text) == (span,)
     assert "start" not in EvidenceSpan.model_fields

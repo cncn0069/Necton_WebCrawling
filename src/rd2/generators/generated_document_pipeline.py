@@ -2,7 +2,7 @@
 
 데이터 흐름::
 
-    pass1 JSON
+    generation artifact JSON
         -> 계약/실패 검증
         -> blocks와 body_text 무결성 검증
         -> 기존 10종 템플릿 context
@@ -38,7 +38,13 @@ from rd2.generators.synthetic_approval_stamps import (
     generate_synthetic_approval_stamp,
 )
 
-_CONTRACT_VERSION_RE = re.compile(r"^1\.\d+\.\d+$")
+#: 메이저 버전 2대만 받는다. 이 모듈은 ``rd2.source_generation.contracts``를
+#: import하지 않고 자체 ``GeneratedDocumentContract``로 IR 형태를 다시 선언한다
+#: — 그 소스 모듈의 ``CONTRACT_SCHEMA_VERSION``은 ``SourceAssessment`` 등 여러
+#: 계약이 공유하는 단일 상수라, ``GeneratedDocumentIR`` 자체의 필드가 안 바뀌어도
+#: (예: primary_subclause 추가로 2.0.0 -> 2.1.0) 이 정규식이 낡아 있으면 이유 없이
+#: 거부당한다. 마이너 버전은 자유롭게 받고, v1 같은 실제 구조 변경만 막는다.
+_CONTRACT_VERSION_RE = re.compile(r"^2\.\d+\.\d+$")
 _CONTENT_CONTEXT_KEYS = frozenset(
     {
         "title",
@@ -73,7 +79,7 @@ class GeneratedDocumentContentMismatch(GeneratedDocumentPipelineError):
 
 
 class _ContractModel(BaseModel):
-    # 1.x 계약의 호환 가능한 메타데이터 확장은 보존하되, kind별 필수 내용과
+    # v2 계약의 호환 가능한 메타데이터 확장은 보존하되, kind별 필수 내용과
     # 표 형태는 아래 모델에서 계속 엄격하게 검증한다.
     model_config = ConfigDict(extra="allow")
 
@@ -334,7 +340,7 @@ class GenerationEnvelope(BaseModel):
             )
         if not _CONTRACT_VERSION_RE.fullmatch(result_version):
             raise ValueError(
-                f"Unsupported contract_version {result_version!r}; expected 1.x.x"
+                f"Unsupported contract_version {result_version!r}; expected 2.0.0"
             )
         return self
 

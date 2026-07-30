@@ -1,22 +1,22 @@
 """실제 원문 N건을 원본문서 기반 생성 파이프라인에 통과시키고 전 과정을 남긴다.
 
-PDF 렌더링 **직전**까지 — 즉 P1 생성과 blind P2 채점까지 — 를 수행하고,
+PDF 렌더링 **직전**까지 — 유형 판별, 생성, blind 정합성 검사 — 를 수행하고,
 각 문서마다 다음을 모두 기록해 사람이 눈으로 확인할 수 있게 한다.
 
     원문(제목·본문 일부, 수집 시점 doc_type)
-    -> P1이 추론한 것 (문서유형, C/S/O, 조항·세부조항, 근거, 적합성 수준)
-    -> P1이 고른 것 (generation route, 최종 target)
+    -> 유형 판별기가 확인한 것 (문서유형, S/O, 조항·세부조항, 근거, 적합성)
+    -> 결정론적 플래너가 잠근 것 (generation route, 최종 target)
     -> 생성된 문서 (제목, block 구성, 본문)
-    -> P2가 독립 판정한 것 (문서유형, C/S/O, 조항·세부조항, 행정상태)
+    -> validator가 독립 판정한 것 (문서유형, S/O, 조항·세부조항)
     -> 두 판정의 일치 여부
 
-P1과 P2가 같은 문서를 두고 어디서 갈라지는지가 이 산출물의 핵심이다. 특히
-**수집 시점 doc_type / P1 추론 유형 / P2 확인 유형** 셋을 나란히 두면, 불일치가
+판별·계획과 blind 검사가 어디서 갈라지는지가 이 산출물의 핵심이다. 특히
+**수집 시점 doc_type / 판별 유형 / validator 유형** 셋을 나란히 두면, 불일치가
 모델 오류인지 라벨 정의 차이인지 구분할 단서가 된다.
 
 입력은 프로덕션 DB의 공개(O) 문서다 — 실제 C/S 문서는 비공개라 본문을 갖고
-있지 않다(의도된 동작). 따라서 target은 counterfactual로 제안되며, P1이 원문
-근거를 보고 route와 최종 target을 스스로 정한다.
+있지 않다(의도된 동작). 따라서 target은 counterfactual로 요청되며, 코드가
+판별 결과와 실행 조건을 조합해 route와 최종 target을 잠근다.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from rd2.source_generation.contracts import (  # noqa: E402
     GenerationTarget,
     SourceDocumentSnapshot,
     TargetClassification,
+    effective_classification,
 )
 from rd2.source_generation.document_form import check_document_form  # noqa: E402
 from rd2.source_generation.document_select import (  # noqa: E402
@@ -66,7 +67,7 @@ from rd2.source_generation.pipeline import (  # noqa: E402
     OpenAIResponsesGateway,
     PipelineConfig,
     RetryingGateway,
-    run_two_pass,
+    run_three_stage_pipeline,
 )
 from rd2.source_generation.prompts import build_prompt_bundle  # noqa: E402
 
@@ -74,10 +75,10 @@ BLOCKS_PER_PAGE = 12
 
 
 class BatchSyntheticGenerator(FullySyntheticDocumentGenerator):
-    """P1이 ``fully_synthetic``을 고를 때 원문 없이 본문을 만드는 실행기.
+    """플래너가 ``fully_synthetic``을 고를 때 원문 없이 본문을 만드는 실행기.
 
-    이 경로가 없으면 P1이 route를 골라도 파이프라인이 진행되지 않는다. 실제
-    원문 50건 실측에서 P1은 절반 이상을 ``fully_synthetic``으로 보냈다 —
+    이 경로가 없으면 계획을 실행할 수 없다. 기존 실측에서는 공개 원문이
+    counterfactual 목표를 지지하지 못해 ``fully_synthetic``이 자주 필요했다 —
     공개 원문에 counterfactual C/S 목표를 지지하는 근거가 없을 때 억지로
     맞추지 않고 물러서는 것이 설계된 동작이기 때문이다.
 
@@ -173,16 +174,31 @@ def _snapshot_from_body(document_id: str, source: str, body: str) -> SourceDocum
 
 
 def _target_cycle() -> list[GenerationTarget]:
-    """24개 세부조항 + 행정상태 단독 12개를 고르게 도는 target 목록."""
+    """민감(S) 세부조항 + 행정상태 단독 12개를 고르게 도는 target 목록.
+
+    **왜 S만인가.** 이 파이프라인은 제5~8호만 다룬다 — ``SourceAssessment``가 C를
+    계약 단계에서 거부하고, 생성기가 받는 taxonomy도 제5~8호뿐이다. 그래서 C 목표를
+    요청하면 실패하지 않고 **계획기가 판별기의 1순위 호환 세부조항으로 조용히
+    대체한다.** 실측에서 이게 측정을 망쳤다: 목록이 조항 번호 순이고 배정이 위치
+    기반(``targets[(index - 1) % len(targets)]``)이라, 10건을 돌리면 앞 8칸이 전부
+    C트랙이어서 8건이 대체 경로만 검증했고 요청 목표는 한 번도 구현되지 않았다.
+
+    조항 번호를 박아 넣지 않고 ``expected_classification``으로 걸러낸다 — taxonomy가
+    바뀌면 목록이 따라온다.
+
+    기밀(C) 생성을 붙일 때는 이 필터를 푸는 것만으로는 안 된다. 계약과 생성기
+    taxonomy가 제1~4호를 받아들이게 먼저 고쳐야 한다.
+    """
 
     targets: list[GenerationTarget] = []
     for clause in ClauseNumber:
+        classification = TargetClassification(expected_classification(clause).value)
+        if classification is not TargetClassification.S:
+            continue
         for subclause in sorted(SUBCLAUSES_BY_CLAUSE[clause], key=lambda item: item.value):
             targets.append(
                 GenerationTarget(
-                    classification=TargetClassification(
-                        expected_classification(clause).value
-                    ),
+                    classification=classification,
                     clause_no=clause,
                     subclause_key=subclause,
                     generation_mode=GenerationMode.COUNTERFACTUAL,
@@ -230,8 +246,10 @@ def _fetch_documents(cursor, *, count: int, min_chars: int, max_chars: int) -> l
 
 def _record(row, target, result, snapshot) -> dict:
     row_id, source, doc_type, title, body = row
-    pass1 = result.pass1_result
-    pass2 = result.pass2_assessment
+    assessment = result.source_assessment
+    plan = result.generation_plan
+    generation = result.generation_artifact
+    validation = result.consistency_assessment
     record: dict = {
         "source_document_id": snapshot.source_document_id,
         "source": source,
@@ -246,48 +264,96 @@ def _record(row, target, result, snapshot) -> dict:
         record["failure_stage"] = result.failure.stage.value
         record["failure_code"] = result.failure.code.value
         record["failure_message"] = result.failure.message
-    if pass1 is not None:
-        source_cls = pass1.source_classification
-        suitability = pass1.source_suitability
+    if assessment is not None:
+        source_cls = assessment.source_classification
+        suitability = assessment.source_suitability
         record.update(
             {
-                "p1_source_document_type": source_cls.document_type.value,
-                "p1_source_classification": source_cls.classification.value,
-                "p1_source_clause": source_cls.clause_no.value if source_cls.clause_no else None,
-                "p1_source_subclause": (
+                "source_document_form": source_cls.document_form.value,
+                "source_classification": source_cls.classification.value,
+                "source_clause": (
+                    source_cls.clause_no.value if source_cls.clause_no else None
+                ),
+                "source_subclause": (
                     source_cls.subclause_key.value if source_cls.subclause_key else None
                 ),
-                "p1_source_rationale": source_cls.rationale,
-                "p1_evidence_level": suitability.evidence_level.value,
-                "p1_evidence_quotes": [span.quote for span in suitability.evidence_spans],
-                "p1_reason_code": suitability.reason_code,
-                "p1_route": pass1.generation_route.value,
-                "p1_final_target": pass1.generation_target.model_dump(mode="json"),
-                "generated_title": pass1.generated_document.title,
-                "generated_blocks": [
-                    block.kind for block in pass1.generated_document.blocks
+                "source_rationale": source_cls.rationale,
+                "source_evidence_level": suitability.evidence_level.value,
+                "source_evidence_quotes": [
+                    span.quote for span in suitability.evidence_spans
                 ],
-                "generated_body": pass1.generated_document.body_text,
+                "source_reason_code": suitability.reason_code,
+                "source_business_context": assessment.business_context,
+                "source_subject_roles": [
+                    role.value for role in assessment.subject_roles
+                ],
+                "primary_subclause": assessment.primary_subclause.value,
+                "primary_rationale": assessment.primary_rationale,
+                "compatible_subclauses": [
+                    item.value for item in assessment.compatible_subclauses
+                ],
             }
         )
-        form = check_document_form(pass1.generated_document, pass1.generation_target)
+    if plan is not None:
+        record.update(
+            {
+                "generation_route": plan.generation_route.value,
+                "generation_final_target": plan.final_target.model_dump(
+                    mode="json"
+                ),
+                "source_assessment_sha256": plan.source_assessment_sha256,
+            }
+        )
+    if generation is not None:
+        document = generation.generated_document
+        record.update(
+            {
+                "generated_title": document.title,
+                "generated_blocks": [
+                    block.kind for block in document.blocks
+                ],
+                "generated_body": document.body_text,
+                "generation_attempt_index": generation.attempt_index,
+                "generation_repair_codes": [
+                    code.value for code in generation.repair_codes
+                ],
+            }
+        )
+        form = check_document_form(
+            document,
+            plan.final_target,
+            document_form=(
+                assessment.source_classification.document_form
+                if assessment is not None
+                else None
+            ),
+        )
         record["form_has_header"] = form.has_header
         record["form_has_approval"] = form.has_approval_block
         record["form_has_attachment"] = form.has_attachment_block
         record["form_missing"] = list(form.missing)
-    if pass2 is not None:
+    if validation is not None:
+        effective = effective_classification(
+            validation.classification,
+            plan.final_target.administrative_statuses if plan is not None else (),
+        )
         record.update(
             {
-                "p2_document_type": pass2.document_type.value,
-                "p2_classification": pass2.classification.value,
-                "p2_clause": pass2.clause_no.value if pass2.clause_no else None,
-                "p2_subclause": pass2.subclause_key.value if pass2.subclause_key else None,
-                "p2_admin_statuses": [
-                    finding.status.value for finding in pass2.administrative_statuses
+                "validation_document_form": validation.document_form.value,
+                "validation_classification": validation.classification.value,
+                "validation_clause": (
+                    validation.clause_no.value if validation.clause_no else None
+                ),
+                "validation_subclause": (
+                    validation.subclause_key.value
+                    if validation.subclause_key
+                    else None
+                ),
+                "validation_effective_classification": effective.value,
+                "validation_evidence_quotes": [
+                    span.quote for span in validation.evidence_spans
                 ],
-                "p2_effective_classification": pass2.effective_classification.value,
-                "p2_evidence_quotes": [span.quote for span in pass2.evidence_spans],
-                "p2_rationale": pass2.rationale,
+                "validation_rationale": validation.rationale,
             }
         )
     if result.comparison is not None:
@@ -301,8 +367,9 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=50)
     parser.add_argument("--min-chars", type=int, default=800)
     parser.add_argument("--max-chars", type=int, default=6_000)
+    parser.add_argument("--classifier-model", default="gpt-4o")
     parser.add_argument("--generator-model", default="gpt-4o")
-    parser.add_argument("--grader-model", default="gpt-4o-mini")
+    parser.add_argument("--validator-model", default="gpt-4o-mini")
     parser.add_argument("--max-attempts", type=int, default=2)
     args = parser.parse_args()
 
@@ -320,8 +387,9 @@ def main() -> int:
         max_attempts=args.max_attempts,
     )
     config = PipelineConfig(
+        classifier_model=args.classifier_model,
         generator_model=args.generator_model,
-        grader_model=args.grader_model,
+        validator_model=args.validator_model,
         reference_date=date.today(),
     )
     synthetic_generator = BatchSyntheticGenerator(gateway, args.generator_model)
@@ -348,7 +416,7 @@ def main() -> int:
             print(f"[{index}/{len(rows)}] {document_id} <- {target.classification.value}"
                   f"/{target.clause_no.value if target.clause_no else '-'}"
                   f"/{target.subclause_key.value if target.subclause_key else '-'}")
-            result = run_two_pass(
+            result = run_three_stage_pipeline(
                 snapshot=snapshot,
                 selection=prepared.selection,
                 counterfactual_target=target,
@@ -372,10 +440,19 @@ def main() -> int:
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "prompt_bundle": prompt_bundle.version,
-        "prompt_bundle_sha256": prompt_bundle.sha256,
+        "classifier_prompt_sha256": prompt_bundle.definition(
+            "classifier"
+        ).sha256,
+        "generator_prompt_sha256": prompt_bundle.definition(
+            "generator"
+        ).sha256,
+        "validator_prompt_sha256": prompt_bundle.definition(
+            "validator"
+        ).sha256,
         "taxonomy_version": prompt_bundle.taxonomy_version,
+        "classifier_model": args.classifier_model,
         "generator_model": args.generator_model,
-        "grader_model": args.grader_model,
+        "validator_model": args.validator_model,
         "max_attempts": args.max_attempts,
         "total": len(records),
         "succeeded": ok,

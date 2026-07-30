@@ -416,17 +416,18 @@ SUBCLAUSE_DEFINITIONS: Mapping[SubclauseKey, SubclauseDefinition] = MappingProxy
         SubclauseKey.PERSONNEL_PII: SubclauseDefinition(
             label="인사·채용 개인정보",
             definition=(
-                "소속 직원 또는 지원자 개인의 신상·평가·징계 정보로 공개 시 "
-                "사생활의 비밀 또는 자유를 침해할 우려가 있는 정보"
+                "소속 직원 또는 지원자의 고위험 신상정보와 지원자의 개인 사정으로 "
+                "공개 시 사생활의 비밀 또는 자유를 침해할 우려가 있는 정보"
             ),
             includes=(
-                "개인별 근무평정과 징계 사유·처분 내역",
-                "지원자 이력과 개인별 시험 점수",
+                "직원의 주민등록번호·개인 연락처·주소·계좌·급여·건강정보",
+                "지원자의 개인 연락처·주소·이력과 개인별 시험 점수",
             ),
             excludes=(
                 "절차의 공정성이 핵심이고 개인 식별이 부수적이면 "
                 "personnel_management",
                 "직위·부서 등 직무상 공개되는 정보",
+                "직원의 근무평정과 징계 사유·처분 내역은 이 연구 라벨에서 O",
             ),
         ),
         SubclauseKey.WELFARE_PII: SubclauseDefinition(
@@ -597,6 +598,19 @@ def subclause_belongs_to_clause(
     return subclause_key in SUBCLAUSES_BY_CLAUSE[clause_no]
 
 
+def clause_of_subclause(subclause_key: SubclauseKey) -> ClauseNumber:
+    """세부조항이 속한 조항을 돌려준다.
+
+    ``SUBCLAUSES_BY_CLAUSE``가 이미 단일 출처이므로 역방향을 손으로 또
+    적지 않는다 — 두 목록이 어긋나면 조용히 틀린 조항이 붙는다.
+    """
+
+    for clause, subclauses in SUBCLAUSES_BY_CLAUSE.items():
+        if subclause_key in subclauses:
+            return clause
+    raise KeyError(f"subclause {subclause_key.value!r} belongs to no clause")
+
+
 SUBCLAUSE_BOUNDARY_RULES: tuple[str, ...] = (
     "문서에 '내부 검토'가 있다는 이유만으로 decision_review를 선택하지 않는다. "
     "입찰 평가기준·배점·예정가격·협상 내용이면 bid_contract를 우선한다.",
@@ -640,11 +654,28 @@ BOUNDARY_PAIRS: tuple[tuple[SubclauseKey, SubclauseKey], ...] = (
 """
 
 
-def render_taxonomy_guidance() -> str:
-    """P1/P2가 같은 조항·세부조항 의미를 보도록 결정론적으로 렌더링한다."""
+def render_taxonomy_guidance(
+    clause_numbers: tuple[ClauseNumber, ...] | None = None,
+) -> str:
+    """classifier와 validator가 같은 세부조항 의미를 보도록 렌더링한다.
 
+    각 세부유형 이름 뒤에 ``[제N호]``를 항상 붙인다. 실측 회귀: validator가
+    ``classification=S``와 ``subclause_key=business_strategy``(제7호 소속)는
+    맞혔는데 ``clause_no=5``를 내 계약 검증(``subclause_belongs_to_clause``)에서
+    응답 전체가 버려졌다. `제5호 (S)` 같은 절 머리는 한 번만 나오고 목록이 길어
+    개별 세부유형을 읽을 때는 잊히기 쉽다 — 항목마다 소속 호를 반복하면 그 줄만
+    보고도 조합을 맞힐 수 있다.
+    """
+
+    selected_clauses = clause_numbers or tuple(ClauseNumber)
+    selected_subclauses = {
+        subclause
+        for clause_no in selected_clauses
+        for subclause in SUBCLAUSES_BY_CLAUSE[clause_no]
+    }
+    excluded_subclauses = set(SubclauseKey) - selected_subclauses
     lines = ["[정보공개법 제9조 분류 taxonomy]"]
-    for clause_no in ClauseNumber:
+    for clause_no in selected_clauses:
         classification = expected_classification(clause_no).value
         lines.append(f"제{clause_no.value}호 ({classification})")
         for subclause in sorted(
@@ -653,13 +684,18 @@ def render_taxonomy_guidance() -> str:
         ):
             definition = SUBCLAUSE_DEFINITIONS[subclause]
             lines.append(
-                f"- {subclause.value} ({definition.label}): {definition.definition}"
+                f"- {subclause.value} [제{clause_no.value}호] ({definition.label}): "
+                f"{definition.definition}"
             )
             lines.append(f"  포함: {' / '.join(definition.includes)}")
             lines.append(f"  제외: {' / '.join(definition.excludes)}")
     lines.append("")
     lines.append("[세부조항 경계 규칙]")
-    lines.extend(f"- {rule}" for rule in SUBCLAUSE_BOUNDARY_RULES)
+    lines.extend(
+        f"- {rule}"
+        for rule in SUBCLAUSE_BOUNDARY_RULES
+        if not any(key.value in rule for key in excluded_subclauses)
+    )
     return "\n".join(lines)
 
 
@@ -952,19 +988,33 @@ DOCUMENT_FORM_BY_TYPE: Mapping[SemanticDocumentType, DocumentForm] = MappingProx
 
 #: 본문 서술만으로는 갈리기 어려워 명시적 우선순위가 필요한 형식 쌍.
 DOCUMENT_FORM_BOUNDARY_RULES: tuple[str, ...] = (
-    "수행 결과를 정리한 문서라도 감사·검사면 audit_material, 시설·시스템 "
-    "점검이면 inspection_report, 범죄 수사면 investigation_report를 선택하고, "
-    "그 어느 것도 아닐 때만 report를 선택한다.",
-    "앞으로 할 일을 정한 문서라도 사고·재난 대응 절차면 response_plan, "
-    "일반 사업 추진 설계면 plan_draft를 선택한다.",
-    "결재를 구하는 문서라도 사업 방향 설계가 핵심이면 plan_draft, 특정 지출이나 "
-    "행위의 승인이 핵심이면 approval_request를 선택한다.",
-    "받은 문서에 답하는 것이면 reply_notice, 먼저 보내는 것이면 "
-    "official_letter를 선택한다.",
-    "조문 형식으로 효력을 갖는 규범이면 administrative_rule, 운영 방법 안내면 "
-    "policy_material을 선택한다.",
-    "인사 관련 문서라도 발령·평정·징계 자체를 담으면 personnel_material, "
-    "그 결과를 상대에게 알리기만 하면 reply_notice를 선택한다.",
+    "문서 제목이나 특정 단어가 아니라 문서가 직접 수행하는 핵심 행정행위와 "
+    "주된 목적을 기준으로 하나의 문서 형식을 선택한다. 일부 문단이나 붙임의 "
+    "형식만으로 전체 문서 형식을 바꾸지 않는다.",
+    "사람·부서·기관의 업무 수행이 법령과 절차에 맞았는지 판단하고 시정·처분을 "
+    "요구하면 audit_material, 시설·장비·시스템의 상태·성능·취약성·안전성을 "
+    "기술적으로 확인하면 inspection_report, 범죄 혐의와 관련된 사실관계·진술·"
+    "증거·수사 진행 상황을 확인하면 investigation_report를 선택한다.",
+    "이미 발생했거나 발생 가능성이 구체적인 사고·재난·위험에 대한 탐지·보고·"
+    "통제·대피·복구 절차와 역할을 정하면 response_plan, 정상적인 행정·사업의 "
+    "목표·범위·일정·예산·과업과 담당 부서를 설계하면 plan_draft를 선택한다.",
+    "사업의 목표·범위·추진 방식·일정·예산 배분 등 전체 방향 자체를 결정받으려면 "
+    "plan_draft, 이미 정해진 업무 방향 안에서 특정 지출·계약·출장·구매·행위의 "
+    "실행 승인을 요청하면 approval_request를 선택한다. 결재란의 존재만으로 "
+    "approval_request를 선택하지 않는다.",
+    "기존 질의·신청·민원·요청·심사에 대한 답변이나 처리 결과를 알리면 "
+    "reply_notice, 선행 요청에 대한 답변이 아니라 기관이 먼저 협조·제출·조치를 "
+    "요청하거나 새로운 사안을 전달하면 official_letter를 선택한다.",
+    "문서 자체가 적용 대상, 의무, 권한, 절차 또는 기준을 새로 정하는 규범이면 "
+    "administrative_rule, 이미 존재하는 법령·규정·제도의 취지와 운영 방법·"
+    "신청 절차를 설명하거나 안내하면 policy_material을 선택한다. 제목이나 "
+    "조문 형식만으로 판정하지 않는다.",
+    "채용·발령·평정·승진·징계 등의 인사 판단을 수행하거나 그 근거·과정·결정을 "
+    "기록하면 personnel_material, 이미 결정된 인사 결과를 당사자나 관련 기관에 "
+    "단순히 통지하면 reply_notice를 선택한다. 효력을 발생시키는 인사발령문은 "
+    "personnel_material로 판정한다.",
+    "위 전문 형식 중 어느 것에도 해당하지 않고 조사·연구·업무 수행 결과를 "
+    "정리해 보고하는 문서일 때만 report를 선택한다.",
 )
 
 if set(DOCUMENT_FORM_BY_TYPE) != set(SemanticDocumentType):
@@ -974,7 +1024,7 @@ if set(DOCUMENT_FORM_DEFINITIONS) != set(DocumentForm):
 
 
 def render_document_form_guidance() -> str:
-    """P1/P2가 같은 문서 형식 의미를 보도록 결정론적으로 렌더링한다."""
+    """classifier와 validator가 같은 문서 형식 의미를 보도록 렌더링한다."""
 
     lines = ["[문서 형식]"]
     for form in DocumentForm:

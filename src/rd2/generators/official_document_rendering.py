@@ -9,11 +9,24 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 from typing import Any, Collection, Mapping, Sequence
 
 import fitz
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+
+_WINDOWS_DLL_HANDLES: list[object] = []
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    configured = os.environ.get("WEASYPRINT_DLL_DIRECTORIES", "")
+    candidates = [
+        *(Path(item) for item in configured.split(os.pathsep) if item),
+        Path(r"C:\tools\msys64\mingw64\bin"),
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            _WINDOWS_DLL_HANDLES.append(os.add_dll_directory(str(candidate)))
+
 from weasyprint import HTML
 
 from rd2.generators.official_document_variations import (

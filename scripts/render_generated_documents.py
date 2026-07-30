@@ -12,6 +12,13 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
     render_generation_payload,
 )
+from rd2.generators.output_naming import (
+    rename_rendered_files,
+    requested_output_filename,
+)
+from rd2.generators.pdf_sensitive_evidence import (
+    verify_rendered_sensitive_evidence,
+)
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
 )
@@ -39,11 +46,42 @@ def _load_payloads(input_path: Path) -> list[dict[str, Any]]:
 
 
 def _output_id(payload: dict[str, Any], index: int) -> str:
+    requested = requested_output_filename(payload, index)
+    if requested is not None:
+        return Path(requested).stem
     receipt = payload.get("receipt")
     request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
     raw = str(request_id or f"document-{index:05d}")
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
     return safe or f"document-{index:05d}"
+
+
+def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다."""
+
+    if isinstance(payload.get("result"), dict):
+        return payload
+    artifact = payload.get("generation_artifact")
+    plan = payload.get("generation_plan")
+    if not isinstance(artifact, dict) or not isinstance(plan, dict):
+        return payload
+    document = artifact.get("generated_document")
+    if not isinstance(document, dict):
+        return payload
+    return {
+        **payload,
+        "result": {
+            "contract_version": artifact.get(
+                "contract_version",
+                document.get("contract_version"),
+            ),
+            "generation_route": plan.get("generation_route"),
+            "generation_target": plan.get("final_target"),
+            "generated_document": document,
+        },
+        "receipt": payload.get("generation_receipt"),
+        "provenance": artifact.get("provenance"),
+    }
 
 
 def render_input_file(
@@ -61,6 +99,8 @@ def render_input_file(
     used_document_ids: set[str] = set()
 
     for index, payload in enumerate(payloads, start=1):
+        payload = _renderer_payload(payload)
+        requested_filename = requested_output_filename(payload, index)
         document_id = _output_id(payload, index)
         if document_id in used_document_ids:
             document_id = f"{document_id}-{index:05d}"
@@ -79,6 +119,22 @@ def render_input_file(
                 ),
                 template_slugs=template_slugs,
             )
+            rename_rendered_files(rendered, requested_filename)
+            evidence_results = verify_rendered_sensitive_evidence(
+                payload,
+                rendered,
+            )
+            evidence_by_pdf = {
+                str(item["pdf"]): item for item in evidence_results
+            }
+            for entry in rendered:
+                evidence = evidence_by_pdf.get(str(entry["pdf"]))
+                if evidence is not None:
+                    entry["sensitive_evidence"] = evidence
+            (document_output_dir / "manifest.json").write_text(
+                json.dumps(rendered, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except (GeneratedDocumentPipelineError, RuntimeError, ValueError) as exc:
             batch_manifest.append(
                 {
@@ -93,6 +149,7 @@ def render_input_file(
             {
                 "document_id": document_id,
                 "status": "ok",
+                "output_filename": requested_filename,
                 "render_count": len(rendered),
                 "output_dir": str(document_output_dir),
             }

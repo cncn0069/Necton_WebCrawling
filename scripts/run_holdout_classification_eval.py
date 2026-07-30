@@ -1,13 +1,13 @@
 """held-out 원문으로 분류 정확도를 재는 CLI.
 
-파이프라인이 보고하는 P1<->P2 일치율은 생성 문서에 대한 숫자이고, P1 프롬프트가
+파이프라인이 보고하는 계획<->blind 검사 일치율은 생성 문서에 대한 숫자이고, 생성 프롬프트가
 그 일치율을 직접 최적화 대상으로 삼고 있다. 이 명령은 **실제 라벨이 붙은 원문**에
 대한 정확도를 재서 그 일치율을 맥락에 놓는다. 둘의 차이가 곧 생성 문서가 실제보다
 쉬운 정도다.
 
 기본값은 실호출을 하지 않는다. manifest를 만들고 표본 구성만 보여주는 것까지가
 기본이고, 실제 LLM 호출은 ``--execute``를 명시할 때만 일어난다. 호출 수는
-``사례 수 x 2``(생성 모델 + 채점 모델)이고 그대로 과금된다.
+``사례 수 x 2``(판별 모델 + validator 모델)이고 그대로 과금된다.
 
 사용 예:
 
@@ -20,7 +20,7 @@
     python scripts/run_holdout_classification_eval.py \\
         --manifest data/holdout/manifest.json \\
         --snapshots data/holdout/snapshots.json \\
-        --generator-model gpt-5 --grader-model gpt-5-mini \\
+        --classifier-model gpt-5 --validator-model gpt-5-mini \\
         --report-out data/holdout/report.json \\
         --execute
 """
@@ -73,7 +73,7 @@ def _print_report_summary(report_json: str) -> None:
     report = json.loads(report_json)
     print(f"\nmanifest_sha256      : {report['manifest_sha256']}")
     print(f"taxonomy_version     : {report['taxonomy_version']}")
-    print(f"prompt_bundle_sha256 : {report['prompt_bundle_sha256']}")
+    print(f"validator_prompt_sha256 : {report['validator_prompt_sha256']}")
     for result in report["results"]:
         accuracy = result["accuracy"]
         print(f"\n[{result['model_id']}] 채점 {accuracy['scored']}건")
@@ -122,8 +122,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=20260729)
     parser.add_argument("--per-stratum", type=int, default=12)
     parser.add_argument("--exclude", type=Path, help="생성 입력으로 이미 쓴 문서 ID 목록")
-    parser.add_argument("--generator-model")
-    parser.add_argument("--grader-model")
+    parser.add_argument("--classifier-model")
+    parser.add_argument("--validator-model")
     parser.add_argument("--max-output-tokens", type=int, default=4_000)
     parser.add_argument(
         "--execute",
@@ -164,7 +164,12 @@ def main() -> int:
         )
         return 0
 
-    for required in ("snapshots", "generator_model", "grader_model", "report_out"):
+    for required in (
+        "snapshots",
+        "classifier_model",
+        "validator_model",
+        "report_out",
+    ):
         if not getattr(args, required):
             parser.error(f"--execute에는 --{required.replace('_', '-')}가 필요하다")
 
@@ -180,8 +185,9 @@ def main() -> int:
         titles,
         default_openai_gateway(),
         pipeline_config=PipelineConfig(
-            generator_model=args.generator_model,
-            grader_model=args.grader_model,
+            classifier_model=args.classifier_model,
+            generator_model=args.classifier_model,
+            validator_model=args.validator_model,
         ),
         generated_at=datetime.now(UTC),
         prompt_bundle=build_prompt_bundle(),

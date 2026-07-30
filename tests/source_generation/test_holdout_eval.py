@@ -18,7 +18,7 @@ from rd2.source_generation.contracts import (
     CONTRACT_SCHEMA_VERSION,
     EvidenceSpan,
     FailureCode,
-    Pass2Assessment,
+    ConsistencyAssessment,
     SourceDocumentSnapshot,
     SourcePage,
     SourceTextBlock,
@@ -105,8 +105,8 @@ def _snapshot(document_id: str, *, sha: str = SHA_A) -> SourceDocumentSnapshot:
             SourcePage(
                 page_number=1,
                 blocks=(
-                    SourceTextBlock(block_id="p1:b0", text="예정가격 산정 근거를 검토한다"),
-                    SourceTextBlock(block_id="p1:b1", text="평가위원 배점표는 비공개다"),
+                    SourceTextBlock(block_id="source:b0", text="예정가격 산정 근거를 검토한다"),
+                    SourceTextBlock(block_id="source:b1", text="평가위원 배점표는 비공개다"),
                 ),
             ),
         ),
@@ -119,15 +119,15 @@ def _assessment(
     clause: ClauseNumber | None = ClauseNumber.CLAUSE_5,
     classification: CsoClassification = CsoClassification.S,
     document_type: SemanticDocumentType = DocumentForm.OFFICIAL_LETTER,
-) -> Pass2Assessment:
+) -> ConsistencyAssessment:
     spans = ()
     if classification != CsoClassification.O:
         # "예정가격 산정 근거를 검토한다"의 0:4 — 실제 원문과 정확히 일치해야
         # validate_against_document를 통과한다.
         spans = (
-            EvidenceSpan(block_id="p1:b0", quote="예정가격"),
+            EvidenceSpan(block_id="source:b0", quote="예정가격"),
         )
-    return Pass2Assessment(
+    return ConsistencyAssessment(
         document_form=document_type,
         evidence_spans=spans,
         rationale="근거를 확인했다",
@@ -143,8 +143,11 @@ def test_snapshot_to_document_ir_preserves_block_ids_and_text():
     document = snapshot_to_document_ir(_snapshot("doc-1"), title="계약 검토")
 
     assert document.title == "계약 검토"
-    assert [block.block_id for block in document.blocks] == ["p1:b0", "p1:b1"]
-    assert document.block_text("p1:b1") == "평가위원 배점표는 비공개다"
+    assert [block.block_id for block in document.blocks] == [
+        "source:b0",
+        "source:b1",
+    ]
+    assert document.block_text("source:b1") == "평가위원 배점표는 비공개다"
 
 
 def test_holdout_case_rejects_labels_that_contradict_the_clause_map():
@@ -259,10 +262,10 @@ def test_stratified_sampling_drops_generation_inputs_before_sampling():
 def test_classify_case_records_evidence_failures_instead_of_raising():
     case = _case("c1")
     document = snapshot_to_document_ir(_snapshot("doc-c1"), title="제목")
-    bad = Pass2Assessment(
+    bad = ConsistencyAssessment(
         document_form=DocumentForm.OFFICIAL_LETTER,
         evidence_spans=(
-            EvidenceSpan(block_id="p1:b0", quote="없는인용구"),
+            EvidenceSpan(block_id="source:b0", quote="없는인용구"),
         ),
         rationale="근거",
         classification=CsoClassification.S,
@@ -354,7 +357,11 @@ def test_summary_scores_each_axis_and_counts_boundary_confusions():
     assert pair.confusions == 1
 
 
-def _outcome(manifest: HoldoutManifest, case_id: str, assessment: Pass2Assessment):
+def _outcome(
+    manifest: HoldoutManifest,
+    case_id: str,
+    assessment: ConsistencyAssessment,
+):
     from rd2.source_generation.contracts import CallReceipt, FailureStage
     from rd2.source_generation.holdout_eval import CaseOutcome
 
@@ -363,7 +370,7 @@ def _outcome(manifest: HoldoutManifest, case_id: str, assessment: Pass2Assessmen
         model_id="grader",
         assessment=assessment,
         receipt=CallReceipt(
-            stage=FailureStage.PASS2,
+            stage=FailureStage.VALIDATION,
             model_id="grader",
             response_id="r1",
         ),
@@ -386,18 +393,22 @@ def test_run_holdout_eval_classifies_every_case_with_both_models():
         {},
         gateway,
         pipeline_config=PipelineConfig(
-            generator_model="generator",
-            grader_model="grader",
+            classifier_model="classifier",
+            generator_model="classifier",
+            validator_model="validator",
         ),
         generated_at=NOW,
     )
 
     # 사례 2건 x 모델 2개
     assert len(gateway.calls) == 4
-    assert {result.model_id for result in report.results} == {"generator", "grader"}
+    assert {result.model_id for result in report.results} == {
+        "classifier",
+        "validator",
+    }
     assert all(result.accuracy.scored == 2 for result in report.results)
     assert report.stratum_counts == {"bid_contract": 2}
-    # P2 프롬프트로 분류하므로 route/target 어휘가 입력에 없어야 한다.
+    # blind validator 프롬프트이므로 route/target 어휘가 입력에 없어야 한다.
     for call in gateway.calls:
         assert "generation_route" not in call["user_prompt"]
         assert "source_aligned" not in call["system_prompt"]
@@ -418,8 +429,9 @@ def test_run_holdout_eval_refuses_documents_that_changed_since_sampling():
             {},
             FakeGateway([]),
             pipeline_config=PipelineConfig(
-                generator_model="generator",
-                grader_model="grader",
+                classifier_model="classifier",
+                generator_model="classifier",
+                validator_model="validator",
             ),
             generated_at=NOW,
         )
@@ -443,8 +455,9 @@ def test_report_knows_it_is_stale_when_the_prompt_bundle_changes():
         {},
         FakeGateway([_assessment(), _assessment()]),
         pipeline_config=PipelineConfig(
-            generator_model="generator",
-            grader_model="grader",
+            classifier_model="classifier",
+            generator_model="classifier",
+            validator_model="validator",
         ),
         generated_at=NOW,
         prompt_bundle=bundle,
@@ -452,11 +465,14 @@ def test_report_knows_it_is_stale_when_the_prompt_bundle_changes():
 
     assert report.is_stale_against(bundle) is False
 
-    pass1 = bundle.definition("pass1")
+    validator = bundle.definition("validator")
     from dataclasses import replace
 
     changed = bundle.with_definition(
-        replace(pass1, system_prompt=pass1.system_prompt + "\n새 규칙")
+        replace(
+            validator,
+            system_prompt=validator.system_prompt + "\n새 규칙",
+        )
     )
     assert report.is_stale_against(changed) is True
     assert report.contract_version == CONTRACT_SCHEMA_VERSION

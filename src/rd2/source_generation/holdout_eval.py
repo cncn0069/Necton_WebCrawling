@@ -1,7 +1,7 @@
 """실제 라벨이 붙은 원문으로 분류 정확도를 재는 held-out 평가 harness.
 
-**왜 필요한가.** 파이프라인이 내놓는 유일한 품질 숫자는 생성 문서에 대한
-P1↔P2 일치율이다. 그런데 P1 프롬프트는 "독립 채점자가 GeneratedDocumentIR만
+**왜 필요한가.** 파이프라인이 내놓는 품질 숫자 중 하나는 생성 문서에 대한
+계획↔blind 검사 일치율이다. 그런데 생성 프롬프트는 "독립 채점자가 GeneratedDocumentIR만
 읽어도 목표를 판단할 수 있을 만큼" 쓰라고 명시적으로 지시한다 — 즉 일치율을
 직접 최적화 대상으로 삼고 있다. 그래서 높은 일치율은 "라벨이 타당하다"가
 아니라 "탐지 가능한 신호를 잘 심었다"를 뜻할 수 있고, 산출물이 RD-1 학습
@@ -10,17 +10,17 @@ P1↔P2 일치율이다. 그런데 P1 프롬프트는 "독립 채점자가 Gener
 이 모듈은 그 숫자를 맥락에 놓을 대조군을 만든다.
 
     A. 실제 라벨이 붙은 원문에 대한 분류 정확도   <- 여기서 측정
-    B. 생성 문서에 대한 P1<->P2 일치율            <- audit_bridge
+    B. 생성 문서에 대한 계획<->blind 검사 일치율   <- audit_bridge
 
 ``B``가 ``A``보다 크게 높으면 그 차이가 곧 생성 문서가 실제보다 쉬운 정도다.
 
 **설계 결정 두 가지.**
 
-1. 두 모델 모두 **P2(blind grading) 프롬프트**로 분류한다. 프롬프트를 고정해
+1. 두 모델 모두 **blind validator 프롬프트**로 분류한다. 프롬프트를 고정해
    모델 변수만 남기고, 무엇보다 일치율을 맥락에 놓으려면 그 일치율을 만든
-   당사자인 P2의 프롬프트로 재야 사과 대 사과 비교가 된다. P1 프롬프트는 본문
+   당사자인 validator 프롬프트로 재야 사과 대 사과 비교가 된다. 생성 프롬프트는 본문
    생성까지 하므로 분류만 필요한 여기서는 버릴 토큰을 사게 된다.
-2. 실제 원문 snapshot을 ``GeneratedDocumentIR``로 변환해 넣는다. P2가 보는
+2. 실제 원문 snapshot을 ``GeneratedDocumentIR``로 변환해 넣는다. validator가 보는
    **직렬화 형식은 그대로 두고 내용만 진짜로** 바꿔야, 정확도 차이가 형식
    차이가 아니라 난이도 차이로 읽힌다.
 
@@ -57,8 +57,8 @@ from rd2.source_generation.contracts import (
     FailureStage,
     GeneratedDocumentIR,
     NonEmptyText,
+    ConsistencyAssessment,
     ParagraphBlock,
-    Pass2Assessment,
     Sha256Hex,
     SourceDocumentSnapshot,
     StageFailure,
@@ -75,10 +75,10 @@ from rd2.source_generation.pipeline import (
 from rd2.source_generation.prompts import (
     PromptBundle,
     build_prompt_bundle,
-    render_pass2_user_prompt,
+    render_validator_user_prompt,
 )
 
-HOLDOUT_POLICY_VERSION = "holdout-classification-eval-v1"
+HOLDOUT_POLICY_VERSION = "holdout-classification-eval-v2"
 
 #: O 문서에는 세부조항이 없다. confusion matrix에서 그 자리를 표시하는 값.
 NO_SUBCLAUSE = "__none__"
@@ -175,8 +175,8 @@ class HoldoutManifest(ContractModel):
     평가가 학습셋을 채점하게 되므로 계약 수준에서 막는다.
     """
 
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    policy_version: Literal["holdout-classification-eval-v1"] = HOLDOUT_POLICY_VERSION
+    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    policy_version: Literal["holdout-classification-eval-v2"] = HOLDOUT_POLICY_VERSION
     taxonomy_version: Literal["source-generation-taxonomy-v2"] = TAXONOMY_VERSION
     manifest_id: NonEmptyText
     created_at: datetime
@@ -237,7 +237,7 @@ class CaseOutcome(ContractModel):
 
     case_id: NonEmptyText
     model_id: NonEmptyText
-    assessment: Pass2Assessment | None = None
+    assessment: ConsistencyAssessment | None = None
     receipt: CallReceipt | None = None
     failure: StageFailure | None = None
 
@@ -366,15 +366,15 @@ class ModelEvalResult(ContractModel):
 class HoldoutEvalReport(ContractModel):
     """평가 결과 + 무효화 판단에 필요한 모든 지문.
 
-    ``taxonomy_version``이나 ``prompt_bundle_sha256``이 바뀌면 이 리포트는
+    ``taxonomy_version``이나 ``validator_prompt_sha256``이 바뀌면 이 리포트는
     낡은 것이다 — 세부조항의 의미나 판정 지침이 달라졌기 때문이다.
     """
 
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    policy_version: Literal["holdout-classification-eval-v1"] = HOLDOUT_POLICY_VERSION
+    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    policy_version: Literal["holdout-classification-eval-v2"] = HOLDOUT_POLICY_VERSION
     manifest_sha256: Sha256Hex
     taxonomy_version: NonEmptyText
-    prompt_bundle_sha256: Sha256Hex
+    validator_prompt_sha256: Sha256Hex
     generated_at: datetime
     stratum_counts: Mapping[str, int]
     results: tuple[ModelEvalResult, ...] = Field(min_length=1)
@@ -382,7 +382,8 @@ class HoldoutEvalReport(ContractModel):
     def is_stale_against(self, prompt_bundle: PromptBundle) -> bool:
         return (
             self.taxonomy_version != prompt_bundle.taxonomy_version
-            or self.prompt_bundle_sha256 != prompt_bundle.sha256
+            or self.validator_prompt_sha256
+            != prompt_bundle.definition("validator").sha256
         )
 
 
@@ -400,9 +401,9 @@ def snapshot_to_document_ir(
     *,
     title: str,
 ) -> GeneratedDocumentIR:
-    """실제 원문을 P2가 보는 직렬화 형식으로 감싼다.
+    """실제 원문을 validator가 보는 직렬화 형식으로 감싼다.
 
-    block ID를 그대로 보존하므로 P2가 반환한 evidence span을 원문에 대해
+    block ID를 그대로 보존하므로 validator가 반환한 evidence span을 원문에 대해
     검증할 수 있다. 형식만 맞추고 내용은 손대지 않는 것이 요점이다 — 요약하거나
     자르면 난이도가 달라져 비교가 무의미해진다.
     """
@@ -473,14 +474,14 @@ def build_stratified_manifest(
     )
 
 
-def _predicted_stratum(assessment: Pass2Assessment) -> str:
+def _predicted_stratum(assessment: ConsistencyAssessment) -> str:
     if assessment.subclause_key is None:
         return CsoClassification.O.value
     return assessment.subclause_key.value
 
 
 def _score_axes(
-    pairs: Sequence[tuple[HoldoutCase, Pass2Assessment]],
+    pairs: Sequence[tuple[HoldoutCase, ConsistencyAssessment]],
 ) -> AxisAccuracy:
     document_type = classification = clause = 0
     subclause_scored = subclause_correct = 0
@@ -506,7 +507,7 @@ def _score_axes(
 
 
 def _build_confusion(
-    pairs: Sequence[tuple[HoldoutCase, Pass2Assessment]],
+    pairs: Sequence[tuple[HoldoutCase, ConsistencyAssessment]],
 ) -> tuple[ConfusionCell, ...]:
     counter = Counter(
         (case.stratum, _predicted_stratum(assessment)) for case, assessment in pairs
@@ -522,7 +523,7 @@ def _build_confusion(
 
 
 def _build_boundary_pairs(
-    pairs: Sequence[tuple[HoldoutCase, Pass2Assessment]],
+    pairs: Sequence[tuple[HoldoutCase, ConsistencyAssessment]],
 ) -> tuple[BoundaryPairResult, ...]:
     results: list[BoundaryPairResult] = []
     for left, right in BOUNDARY_PAIRS:
@@ -559,17 +560,20 @@ def classify_case(
     prompt_bundle: PromptBundle,
     config: HoldoutEvalConfig,
 ) -> CaseOutcome:
-    """한 사례를 P2 프롬프트로 분류한다. evidence span까지 원문에 대조한다."""
+    """한 사례를 validator 프롬프트로 분류하고 evidence를 원문에 대조한다."""
 
-    definition = prompt_bundle.definition("pass2")
+    definition = prompt_bundle.definition("validator")
     try:
         call = gateway.parse(
             model=model_id,
             system_prompt=definition.system_prompt,
-            user_prompt=render_pass2_user_prompt(
-                document.model_dump_json(indent=2)
+            user_prompt=render_validator_user_prompt(
+                document.model_dump_json(
+                    indent=2,
+                    exclude_computed_fields=True,
+                )
             ),
-            response_model=Pass2Assessment,
+            response_model=ConsistencyAssessment,
             max_output_tokens=config.max_output_tokens,
         )
     except StructuredCallError as exc:
@@ -577,7 +581,7 @@ def classify_case(
             case_id=case.case_id,
             model_id=model_id,
             failure=StageFailure(
-                stage=FailureStage.PASS2,
+                stage=FailureStage.VALIDATION,
                 code=exc.code,
                 retryable=exc.retryable,
                 message=str(exc),
@@ -586,7 +590,7 @@ def classify_case(
 
     assessment = call.parsed
     try:
-        # 파이프라인(execute_pass1/2)과 같은 검증 경로를 쓴다. 인용문이 실제로
+        # 파이프라인 validator와 같은 검증 경로를 쓴다. 인용문이 실제로
         # 존재하고 유일한지만 보며, 문자 위치는 코드가 찾는다.
         validate_evidence_quotes(assessment.evidence_spans, document.block_text)
     except (EvidenceResolutionError, ValueError) as exc:
@@ -594,7 +598,7 @@ def classify_case(
             case_id=case.case_id,
             model_id=model_id,
             failure=StageFailure(
-                stage=FailureStage.PASS2,
+                stage=FailureStage.VALIDATION,
                 code=FailureCode.EVIDENCE_INVALID,
                 retryable=False,
                 message=str(exc),
@@ -606,7 +610,7 @@ def classify_case(
         model_id=model_id,
         assessment=assessment,
         receipt=CallReceipt(
-            stage=FailureStage.PASS2,
+            stage=FailureStage.VALIDATION,
             model_id=model_id,
             response_id=call.response_id,
             request_id=call.request_id,
@@ -624,7 +628,7 @@ def summarize_outcomes(
     """한 모델의 결과를 축별 정확도·confusion·경계쌍으로 집계한다."""
 
     cases_by_id = {case.case_id: case for case in manifest.cases}
-    pairs: list[tuple[HoldoutCase, Pass2Assessment]] = []
+    pairs: list[tuple[HoldoutCase, ConsistencyAssessment]] = []
     failed: list[str] = []
     for outcome in outcomes:
         if outcome.model_id != model_id:
@@ -688,7 +692,10 @@ def run_holdout_eval(
             "manifest taxonomy version does not match the prompt bundle",
         )
 
-    models = (pipeline_config.generator_model, pipeline_config.grader_model)
+    models = (
+        pipeline_config.classifier_model,
+        pipeline_config.validator_model,
+    )
     outcomes: list[CaseOutcome] = []
     for case in manifest.cases:
         snapshot = snapshots.get(case.source_document_id)
@@ -721,7 +728,7 @@ def run_holdout_eval(
     return HoldoutEvalReport(
         manifest_sha256=manifest.sha256,
         taxonomy_version=resolved_bundle.taxonomy_version,
-        prompt_bundle_sha256=resolved_bundle.sha256,
+        validator_prompt_sha256=resolved_bundle.definition("validator").sha256,
         generated_at=generated_at,
         stratum_counts=manifest.stratum_counts(),
         results=tuple(
