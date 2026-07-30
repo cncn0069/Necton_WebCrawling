@@ -16,6 +16,9 @@ from rd2.generators.generated_document_pipeline import (
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
 )
+from rd2.generators.meeting_minutes_rendering import (
+    MEETING_MINUTES_TEMPLATE_VARIANTS,
+)
 from rd2.generators.research_report_rendering import (
     RESEARCH_REPORT_TEMPLATE_VARIANTS,
 )
@@ -124,6 +127,7 @@ def main() -> None:
         variant["slug"]
         for variant in (
             *OFFICIAL_TEMPLATE_VARIANTS,
+            *MEETING_MINUTES_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
         )
     )

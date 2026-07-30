@@ -2,7 +2,8 @@
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 `research_report`는 전용
-연구보고서 3종을 사용하고, 그 밖의 입력은 기존 공문 10종을 사용한다.
+연구보고서 3종, `meeting_minutes`는 전용 회의록 4종을 사용하며 그 밖의
+입력은 기존 공문 10종을 사용한다.
 
 ## 준비
 
@@ -85,6 +86,10 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 research_01_classic_flow
 research_02_modular_policy
 research_03_academic_flow
+meeting_01_registry
+meeting_02_sequence
+meeting_03_columns
+meeting_04_docket
 ```
 
 `result.source_classification.document_type`이 `research_report`이면 위
@@ -96,6 +101,12 @@ research_03_academic_flow
 연구보고서는 표지를 포함해 최대 10쪽까지만 허용한다. 원문을 잘라 10쪽에
 맞추지 않으며, 10쪽을 넘으면 해당 출력을 거부하고 manifest에 실제 쪽수를
 남긴다.
+
+`result.source_classification.document_type`이 `meeting_minutes`이면 위
+`meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
+렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
+수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
+전환하고 전체 출력은 최대 10쪽까지만 허용한다.
 
 과대 입력이 PDF 생성 과정의 메모리와 CPU를 소진하지 않도록 렌더 시작 전에
 안전 한도를 검사한다. 연구보고서 1건의 한도는 제목 300자, block 160개,
@@ -123,8 +134,10 @@ python scripts/render_generated_documents.py input.json \
 
 - `scripts/render_generated_documents.py`
 - `src/rd2/generators/generated_document_pipeline.py`
+- `src/rd2/generators/meeting_minutes_rendering.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
+- `src/rd2/generators/templates/meeting_minutes/`
 - `src/rd2/generators/templates/research_report/`

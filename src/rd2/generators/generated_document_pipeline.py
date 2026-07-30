@@ -31,6 +31,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.meeting_minutes_rendering import (
+    MEETING_MINUTES_MAX_PAGES,
+    render_meeting_minutes_variations,
+)
 from rd2.generators.research_report_rendering import (
     render_research_report_variations,
 )
@@ -866,6 +870,53 @@ def build_research_report_context(
     }
 
 
+def build_meeting_minutes_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """공통 5종 block을 순서 그대로 독립 회의록 context로 만든다."""
+
+    document = envelope.result.generated_document
+    ordered_blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        rendered = block.model_dump(mode="json")
+        if isinstance(block, TableBlock):
+            rendered["column_count"] = len(block.columns)
+            rendered["is_wide"] = len(block.columns) >= 7
+        else:
+            rendered["is_wide"] = False
+        ordered_blocks.append(rendered)
+
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": "회의록",
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "blocks": ordered_blocks,
+        "has_wide_blocks": any(
+            block["is_wide"]
+            for block in ordered_blocks
+        ),
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -885,11 +936,12 @@ def render_generation_payload(
         if envelope.result.source_classification
         else None
     )
-    renderer_family = (
-        "research_report"
-        if document_type == "research_report"
-        else "official_document"
-    )
+    if document_type == "research_report":
+        renderer_family = "research_report"
+    elif document_type == "meeting_minutes":
+        renderer_family = "meeting_minutes"
+    else:
+        renderer_family = "official_document"
     input_metadata = {
         "contract_version": envelope.result.contract_version,
         "document_type": document_type,
@@ -917,6 +969,21 @@ def render_generation_payload(
                 include_administrative_event_dates=True,
             ),
             max_pages=10,
+            input_metadata=input_metadata,
+        )
+    elif document_type == "meeting_minutes":
+        context = build_meeting_minutes_context(envelope, seed=seed)
+        manifest = render_meeting_minutes_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(
+                document,
+                include_administrative_event_dates=True,
+            ),
+            max_pages=MEETING_MINUTES_MAX_PAGES,
             input_metadata=input_metadata,
         )
     else:
