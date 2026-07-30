@@ -13,7 +13,7 @@
 평탄화한 값과 같은지 검증하는 폴백이며, 두 값이 다르면 렌더링하지 않는다.
 ``generated_document.agency_name``이 있으면 기관명을 그대로 보존한다.
 공문 경로는 기관명이 없을 때 범용 공공기관 가상 풀을 사용하고,
-연구보고서 경로는 빈 기관명을 그대로 보존한다. 그 밖의 문서
+연구보고서·보도자료 경로는 빈 기관명을 그대로 보존한다. 그 밖의 문서
 메타데이터는 입력 계약에 없으면 생성하지 않는다.
 """
 
@@ -37,6 +37,11 @@ from rd2.generators.research_report_rendering import (
 from rd2.generators.status_report_rendering import (
     STATUS_REPORT_MAX_PAGES,
     render_status_report_variations,
+)
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_MAX_PAGES,
+    PRESS_RELEASE_WIDE_TABLE_MIN_COLUMNS,
+    render_press_release_variations,
 )
 from rd2.generators.synthetic_approval_stamps import (
     StampProfile,
@@ -870,6 +875,126 @@ def build_research_report_context(
     }
 
 
+def build_press_release_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """입력 순서를 보존해 보도자료 전용 context를 만든다."""
+
+    document = envelope.result.generated_document
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
+
+    ordered_blocks: list[dict[str, Any]] = []
+    for block in document.blocks:
+        rendered = block.model_dump(mode="json")
+        rendered["is_lead"] = False
+        rendered["is_summary"] = False
+        rendered["is_footer_details"] = False
+        if isinstance(block, TableBlock):
+            rendered["column_count"] = len(block.columns)
+            rendered["is_wide"] = (
+                len(block.columns)
+                >= PRESS_RELEASE_WIDE_TABLE_MIN_COLUMNS
+            )
+        else:
+            rendered["is_wide"] = False
+        ordered_blocks.append(rendered)
+
+    header_meta: dict[str, Any] | None = None
+    if ordered_blocks and ordered_blocks[0]["kind"] == "key_value":
+        header_meta = ordered_blocks.pop(0)
+
+    first_paragraph_index = next(
+        (
+            index
+            for index, block in enumerate(ordered_blocks)
+            if block["kind"] == "paragraph"
+        ),
+        None,
+    )
+    first_summary_index = next(
+        (
+            index
+            for index, block in enumerate(ordered_blocks)
+            if block["kind"] == "bullet_list"
+        ),
+        None,
+    )
+    last_non_attachment_index = next(
+        (
+            index
+            for index in range(len(ordered_blocks) - 1, -1, -1)
+            if ordered_blocks[index]["kind"] != "attachment_reference"
+        ),
+        None,
+    )
+    if first_paragraph_index is not None:
+        lead = ordered_blocks[first_paragraph_index]
+        lead["is_lead"] = True
+        lead["lead_class"] = (
+            "lead-long"
+            if len(re.sub(r"\s+", "", str(lead["text"]))) >= 180
+            else ""
+        )
+    if first_summary_index is not None:
+        ordered_blocks[first_summary_index]["is_summary"] = True
+    if (
+        last_non_attachment_index is not None
+        and ordered_blocks[last_non_attachment_index]["kind"] == "key_value"
+    ):
+        ordered_blocks[last_non_attachment_index][
+            "is_footer_details"
+        ] = True
+
+    render_items: list[dict[str, Any]] = []
+    index = 0
+    while index < len(ordered_blocks):
+        block = ordered_blocks[index]
+        if block["kind"] == "paragraph" and not block["is_lead"]:
+            paragraphs: list[dict[str, Any]] = []
+            while (
+                index < len(ordered_blocks)
+                and ordered_blocks[index]["kind"] == "paragraph"
+                and not ordered_blocks[index]["is_lead"]
+            ):
+                paragraphs.append(ordered_blocks[index])
+                index += 1
+            render_items.append(
+                {
+                    "kind": "paragraph_group",
+                    "blocks": paragraphs,
+                }
+            )
+            continue
+        render_items.append(block)
+        index += 1
+
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": "보도자료",
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "header_meta": header_meta,
+        "render_items": render_items,
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def build_status_report_context(
     envelope: GenerationEnvelope,
     *,
@@ -934,6 +1059,8 @@ def render_generation_payload(
     )
     if document_type == "research_report":
         renderer_family = "research_report"
+    elif document_type == "press_release":
+        renderer_family = "press_release"
     elif document_type == "status_report":
         renderer_family = "status_report"
     else:
@@ -965,6 +1092,21 @@ def render_generation_payload(
                 include_administrative_event_dates=True,
             ),
             max_pages=10,
+            input_metadata=input_metadata,
+        )
+    elif document_type == "press_release":
+        context = build_press_release_context(envelope, seed=seed)
+        manifest = render_press_release_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(
+                document,
+                include_administrative_event_dates=True,
+            ),
+            max_pages=PRESS_RELEASE_MAX_PAGES,
             input_metadata=input_metadata,
         )
     elif document_type == "status_report":

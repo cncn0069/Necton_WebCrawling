@@ -19,6 +19,9 @@ from rd2.generators.official_document_rendering import (
 from rd2.generators.research_report_rendering import (
     RESEARCH_REPORT_TEMPLATE_VARIANTS,
 )
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_TEMPLATE_VARIANTS,
+)
 from rd2.generators.status_report_rendering import (
     STATUS_REPORT_TEMPLATE_VARIANTS,
 )
@@ -128,6 +131,7 @@ def main() -> None:
         for variant in (
             *OFFICIAL_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
+            *PRESS_RELEASE_TEMPLATE_VARIANTS,
             *STATUS_REPORT_TEMPLATE_VARIANTS,
         )
     )
