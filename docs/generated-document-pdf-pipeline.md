@@ -2,7 +2,9 @@
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 `research_report`는 전용
-연구보고서 3종을 사용하고, 그 밖의 입력은 기존 공문 10종을 사용한다.
+연구보고서 3종을 사용한다. `bid_notice`, `bid_renotice`,
+`pre_spec_notice`, `public_offering`, `notice`는 공고 계열 3종을 사용하고,
+그 밖의 입력은 기존 공문 10종을 사용한다.
 
 ## 준비
 
@@ -55,6 +57,9 @@ done
 JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로 바꾼다.
 해당 문서 유형의 템플릿을 전부 만들려면 `--template` 줄을 제거한다. 같은
 템플릿의 변주를 여러 개 만들려면 `--per-template 3`처럼 지정한다.
+`--per-template` 기본값은 1이므로 공고 계열은 문서당 3개를 생성한다.
+`--per-template 3`은 같은 입력으로 3개 서식 × 3개 변주, 총 9개를 생성한다.
+현재 배치 명령은 후보 전체를 만들며 후보 중 하나를 무작위로 선택하지 않는다.
 
 ## 입력 규칙
 
@@ -85,6 +90,9 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 research_01_classic_flow
 research_02_modular_policy
 research_03_academic_flow
+notice_01_classic_gazette
+notice_02_structured
+notice_03_record_rail
 ```
 
 `result.source_classification.document_type`이 `research_report`이면 위
@@ -96,6 +104,11 @@ research_03_academic_flow
 연구보고서는 표지를 포함해 최대 10쪽까지만 허용한다. 원문을 잘라 10쪽에
 맞추지 않으며, 10쪽을 넘으면 해당 출력을 거부하고 manifest에 실제 쪽수를
 남긴다.
+
+공고 계열 5개 문서 타입은 위 `notice_*` 3종만 선택할 수 있다. 입력 block
+순서와 표·붙임을 보존하고 기관명이 없을 때 가상 기관명을 채우지 않는다.
+기관·공고번호·담당 부서·공고일도 입력에 없으면 추가하지 않는다. 최대 10쪽을
+넘으면 원문을 자르지 않고 해당 출력을 거부한다.
 
 과대 입력이 PDF 생성 과정의 메모리와 CPU를 소진하지 않도록 렌더 시작 전에
 안전 한도를 검사한다. 연구보고서 1건의 한도는 제목 300자, block 160개,
@@ -125,6 +138,8 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/generated_document_pipeline.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
+- `src/rd2/generators/notice_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
+- `src/rd2/generators/templates/notice/`

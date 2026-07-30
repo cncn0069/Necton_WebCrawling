@@ -46,8 +46,9 @@ python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 `result.generated_document`에 `paragraph`, `key_value`, `bullet_list`,
 `table`, `attachment_reference` blocks가 들어 있는 계약 JSON은 문서 유형별
 템플릿으로 바로 렌더링할 수 있다. `source_classification.document_type`이
-`research_report`이면 연구보고서 3종, 그 밖의 입력은 기존 공문 10종을
-사용한다. JSON 배열과 JSONL 배치 입력도 지원한다.
+`research_report`이면 연구보고서 3종, `bid_notice`, `bid_renotice`,
+`pre_spec_notice`, `public_offering`, `notice`이면 공고 계열 3종, 그 밖의
+입력은 기존 공문 10종을 사용한다. JSON 배열과 JSONL 배치 입력도 지원한다.
 
 단일 파일과 디렉터리 일괄 실행, 입력 규칙, 템플릿 선택 방법은
 [`docs/generated-document-pdf-pipeline.md`](./docs/generated-document-pdf-pipeline.md)에
@@ -61,6 +62,9 @@ python scripts/render_generated_documents.py input.json \
 
 기본값은 해당 문서 유형의 템플릿 전체이며
 `--template research_01_classic_flow`처럼 일부 템플릿만 반복 지정할 수 있다.
+`--per-template` 기본값은 1이므로 공고 계열은 문서당 3개를 만든다.
+`--per-template 3`이면 같은 입력으로 3개 서식의 변주를 모두 만들어 총 9개가
+된다. 이 명령은 여러 후보를 생성하며, 후보 중 하나를 무작위로 선택하지 않는다.
 입력의 `failure`가 `null`이 아니면 렌더링하지 않는다.
 실패 결과를 조사 목적으로 출력할 때만 `--allow-failed-input`을 명시한다.
 
@@ -80,6 +84,10 @@ blocks를 평탄화한 결과와 같은지 먼저 검사한다. 두 값이 다�
 연구보고서는 기관명이 없을 때 가상 기관명을 만들지 않는다. 입력 block 순서와
 각 표를 보존하며, 표지를 포함해 최대 10쪽을 넘으면 원문을 자르지 않고
 렌더링을 거부한다.
+
+공고 계열도 기관명이 없을 때 가상 기관명을 만들지 않는다. 공고 본문과 무관한
+기관·공고번호·담당 부서·공고일을 추측해서 추가하지 않으며, 입력 block 순서를
+보존하고 최대 10쪽을 넘으면 렌더링을 거부한다.
 
 결재선과 행정 처리 문구는 입력에 있을 때만 렌더링한다. 다음처럼
 `generated_document.document_metadata`에 명시하며, `pending` 슬롯에는
