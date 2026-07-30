@@ -110,6 +110,7 @@ def render_official_document_variations(
     *,
     per_template: int = 3,
     base_seed: int = 20260728,
+    variation_offset: int = 0,
     identity_seed: int | None = None,
     template_slugs: Collection[str] | None = None,
     protected_context_keys: Collection[str] = (),
@@ -125,6 +126,8 @@ def render_official_document_variations(
 
     if per_template < 1:
         raise ValueError("per_template must be at least 1")
+    if variation_offset < 0:
+        raise ValueError("variation_offset must be at least 0")
 
     variants = _selected_variants(template_slugs)
     if not variants:
@@ -163,6 +166,7 @@ def render_official_document_variations(
             template_slug,
             count=per_template,
             base_seed=base_seed,
+            start_offset=variation_offset,
         ):
             identity = build_identity_spec(
                 template_slug,

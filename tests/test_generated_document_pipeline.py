@@ -247,6 +247,23 @@ def test_all_templates_render_attachment_reference(tmp_path: Path) -> None:
         assert "끝." in rendered_text
 
 
+def test_pipeline_can_render_one_selected_structural_variation(
+    tmp_path: Path,
+) -> None:
+    manifest = render_generation_payload(
+        _payload(),
+        tmp_path,
+        per_template=1,
+        base_seed=20260730,
+        variation_offset=2,
+        template_slugs={"01_classic_municipal"},
+    )
+
+    assert len(manifest) == 1
+    assert manifest[0]["template_slug"] == "01_classic_municipal"
+    assert str(manifest[0]["variation_slug"]).startswith("03_")
+
+
 def test_missing_document_metadata_is_not_synthesized() -> None:
     envelope = parse_generation_payload(_payload())
     context = build_template_context(envelope, seed=100)

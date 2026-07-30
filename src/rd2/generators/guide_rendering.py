@@ -83,6 +83,7 @@ def build_guide_variation_specs(
     *,
     count: int = 1,
     base_seed: int = _DEFAULT_VARIATION_SEED,
+    start_offset: int = 0,
 ) -> list[GuideVariationSpec]:
     """같은 입력에서 재현 가능한 문서 밀도 변주를 만든다."""
 
@@ -93,6 +94,13 @@ def build_guide_variation_specs(
             "count must be between 1 and "
             f"{_MAX_VARIATIONS_PER_TEMPLATE}"
         )
+    if start_offset < 0:
+        raise ValueError("start_offset must be at least 0")
+    if start_offset + count > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "start_offset + count must be at most "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE}"
+        )
 
     template_number = int(template_slug.split("_", 2)[1])
     ranges = {
@@ -101,7 +109,7 @@ def build_guide_variation_specs(
         "airy": ((1.01, 1.05), (1.78, 1.88), (20.5, 22.5), (5.6, 6.8)),
     }
     specs: list[GuideVariationSpec] = []
-    for offset in range(count):
+    for offset in range(start_offset, start_offset + count):
         density = _DENSITIES[offset % len(_DENSITIES)]
         seed = base_seed + template_number * 1000 + offset
         rng = random.Random(seed)
@@ -412,6 +420,7 @@ def render_guide_variations(
     *,
     per_template: int = 1,
     base_seed: int = _DEFAULT_VARIATION_SEED,
+    variation_offset: int = 0,
     template_slugs: Collection[str] | None = None,
     required_source_texts: Sequence[str] = (),
     max_pages: int = GUIDE_MAX_PAGES,
@@ -422,7 +431,14 @@ def render_guide_variations(
         raise ValueError(
             "per_template must be between 1 and "
             f"{_MAX_VARIATIONS_PER_TEMPLATE}"
-    )
+        )
+    if variation_offset < 0:
+        raise ValueError("variation_offset must be at least 0")
+    if variation_offset + per_template > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "variation_offset + per_template must be at most "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE}"
+        )
     if max_pages < 1:
         raise ValueError("max_pages must be at least 1")
     variants = _selected_variants(template_slugs)
@@ -484,6 +500,7 @@ def render_guide_variations(
                 variant["slug"],
                 count=per_template,
                 base_seed=base_seed,
+                start_offset=variation_offset,
             ):
                 effective_spec = _adapt_columns_to_content(
                     spec,

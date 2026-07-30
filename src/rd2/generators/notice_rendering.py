@@ -103,6 +103,7 @@ def build_notice_variation_specs(
     *,
     count: int = 1,
     base_seed: int = 20260730,
+    start_offset: int = 0,
 ) -> list[NoticeVariationSpec]:
     """기본 시안마다 재현 가능한 구조 변주를 만든다."""
 
@@ -111,6 +112,13 @@ def build_notice_variation_specs(
     if not 1 <= count <= _MAX_VARIATIONS_PER_TEMPLATE:
         raise ValueError(
             "count must be between 1 and "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE}"
+        )
+    if start_offset < 0:
+        raise ValueError("start_offset must be at least 0")
+    if start_offset + count > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "start_offset + count must be at most "
             f"{_MAX_VARIATIONS_PER_TEMPLATE}"
         )
 
@@ -140,7 +148,7 @@ def build_notice_variation_specs(
         ),
     }
     specs: list[NoticeVariationSpec] = []
-    for offset in range(count):
+    for offset in range(start_offset, start_offset + count):
         density = _DENSITIES[offset % len(_DENSITIES)]
         key_value_columns, list_columns = layouts[offset % len(layouts)]
         seed = base_seed + template_number * 1000 + offset
@@ -423,6 +431,7 @@ def render_notice_variations(
     *,
     per_template: int = 1,
     base_seed: int = 20260730,
+    variation_offset: int = 0,
     template_slugs: Collection[str] | None = None,
     required_source_texts: Sequence[str] = (),
     max_pages: int = NOTICE_MAX_PAGES,
@@ -433,6 +442,13 @@ def render_notice_variations(
     if not 1 <= per_template <= _MAX_VARIATIONS_PER_TEMPLATE:
         raise ValueError(
             "per_template must be between 1 and "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE}"
+        )
+    if variation_offset < 0:
+        raise ValueError("variation_offset must be at least 0")
+    if variation_offset + per_template > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "variation_offset + per_template must be at most "
             f"{_MAX_VARIATIONS_PER_TEMPLATE}"
         )
     if max_pages < 1:
@@ -474,6 +490,7 @@ def render_notice_variations(
             template_slug,
             count=per_template,
             base_seed=base_seed,
+            start_offset=variation_offset,
         ):
             effective_spec = _adapt_columns_to_content(spec, base_context)
             html = template.render(

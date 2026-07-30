@@ -76,15 +76,20 @@ def build_administrative_rule_variation_specs(
     *,
     count: int = 1,
     base_seed: int = 20260730,
+    start_offset: int = 0,
 ) -> list[AdministrativeRuleVariationSpec]:
     if template_slug not in _VARIANTS_BY_SLUG:
         raise ValueError(f"Unknown administrative rule template: {template_slug}")
     if not 1 <= count <= 10:
         raise ValueError("count must be between 1 and 10")
+    if start_offset < 0:
+        raise ValueError("start_offset must be at least 0")
+    if start_offset + count > 10:
+        raise ValueError("start_offset + count must be at most 10")
 
     template_number = int(template_slug.split("_", 2)[1])
     specs: list[AdministrativeRuleVariationSpec] = []
-    for offset in range(count):
+    for offset in range(start_offset, start_offset + count):
         density = _DENSITIES[offset % len(_DENSITIES)]
         seed = base_seed + template_number * 1000 + offset
         rng = random.Random(seed)
@@ -241,6 +246,7 @@ def render_administrative_rule_variations(
     *,
     per_template: int = 1,
     base_seed: int = 20260730,
+    variation_offset: int = 0,
     template_slugs: Collection[str] | None = None,
     required_source_texts: Sequence[str] = (),
     max_pages: int = ADMINISTRATIVE_RULE_MAX_PAGES,
@@ -249,6 +255,10 @@ def render_administrative_rule_variations(
 
     if not 1 <= per_template <= 10:
         raise ValueError("per_template must be between 1 and 10")
+    if variation_offset < 0:
+        raise ValueError("variation_offset must be at least 0")
+    if variation_offset + per_template > 10:
+        raise ValueError("variation_offset + per_template must be at most 10")
     variants = _selected_variants(template_slugs)
     if not variants:
         raise ValueError("At least one administrative rule template is required")
@@ -286,6 +296,7 @@ def render_administrative_rule_variations(
             variant["slug"],
             count=per_template,
             base_seed=base_seed,
+            start_offset=variation_offset,
         ):
             effective_spec = _adapt_columns_to_content(spec, base_context)
             html = template.render(

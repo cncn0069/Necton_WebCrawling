@@ -102,6 +102,7 @@ def build_research_variation_specs(
     *,
     count: int = 1,
     base_seed: int = 20260729,
+    start_offset: int = 0,
 ) -> list[ResearchVariationSpec]:
     """템플릿별 구조 변주를 seed 기반으로 결정한다."""
 
@@ -114,11 +115,18 @@ def build_research_variation_specs(
             "count must be at most "
             f"{_MAX_VARIATIONS_PER_TEMPLATE} per template"
         )
+    if start_offset < 0:
+        raise ValueError("start_offset must be at least 0")
+    if start_offset + count > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "start_offset + count must be at most "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE} per template"
+        )
 
     template_number = int(template_slug.split("_", 2)[1])
     layouts = _LAYOUT_CYCLES[template_slug]
     specs: list[ResearchVariationSpec] = []
-    for offset in range(count):
+    for offset in range(start_offset, start_offset + count):
         density = _DENSITIES[offset % len(_DENSITIES)]
         key_value_columns, list_columns = layouts[offset % len(layouts)]
         seed = base_seed + template_number * 1000 + offset
@@ -394,6 +402,7 @@ def render_research_report_variations(
     *,
     per_template: int = 1,
     base_seed: int = 20260729,
+    variation_offset: int = 0,
     template_slugs: Collection[str] | None = None,
     required_source_texts: Sequence[str] = (),
     max_pages: int = 10,
@@ -406,6 +415,13 @@ def render_research_report_variations(
     if per_template > _MAX_VARIATIONS_PER_TEMPLATE:
         raise ValueError(
             "per_template must be at most "
+            f"{_MAX_VARIATIONS_PER_TEMPLATE}"
+        )
+    if variation_offset < 0:
+        raise ValueError("variation_offset must be at least 0")
+    if variation_offset + per_template > _MAX_VARIATIONS_PER_TEMPLATE:
+        raise ValueError(
+            "variation_offset + per_template must be at most "
             f"{_MAX_VARIATIONS_PER_TEMPLATE}"
         )
     if max_pages < 1:
@@ -434,6 +450,7 @@ def render_research_report_variations(
             template_slug,
             count=per_template,
             base_seed=base_seed,
+            start_offset=variation_offset,
         ):
             context = {
                 **base_context,
