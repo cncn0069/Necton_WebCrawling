@@ -23,6 +23,7 @@ from rd2.generators.administrative_rule_rendering import (
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
 )
+from rd2.generators.notice_rendering import NOTICE_TEMPLATE_VARIANTS
 from rd2.generators.meeting_minutes_rendering import (
     MEETING_MINUTES_TEMPLATE_VARIANTS,
 )
@@ -147,6 +148,7 @@ def main() -> None:
             *GUIDE_TEMPLATE_VARIANTS,
             *STATUS_REPORT_TEMPLATE_VARIANTS,
             *MEETING_MINUTES_TEMPLATE_VARIANTS,
+            *NOTICE_TEMPLATE_VARIANTS,
         )
     )
     parser = argparse.ArgumentParser(description=__doc__)

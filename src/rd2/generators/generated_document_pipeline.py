@@ -12,9 +12,9 @@
 ``generated_document.blocks``가 내용의 기준이다. ``body_text``는 blocks를
 평탄화한 값과 같은지 검증하는 폴백이며, 두 값이 다르면 렌더링하지 않는다.
 ``generated_document.agency_name``이 있으면 기관명을 그대로 보존한다.
-공문 경로는 기관명이 없을 때 범용 공공기관 가상 풀을 사용하고,
-연구보고서·보도자료 경로는 빈 기관명을 그대로 보존한다. 그 밖의 문서
-메타데이터는 입력 계약에 없으면 생성하지 않는다.
+공문 경로는 기관명이 없을 때 범용 공공기관 가상 풀을 사용한다.
+연구보고서·보도자료·공고 계열 경로는 빈 기관명을 그대로 보존한다. 그 밖의
+문서 메타데이터는 입력 계약에 없으면 생성하지 않는다.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from rd2.generators.administrative_rule_rendering import (
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.notice_rendering import render_notice_variations
 from rd2.generators.meeting_minutes_rendering import (
     MEETING_MINUTES_MAX_PAGES,
     render_meeting_minutes_variations,
@@ -87,6 +88,14 @@ _CONTENT_CONTEXT_KEYS = frozenset(
     }
 )
 _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
+_NOTICE_DOCUMENT_TYPE_LABELS = {
+    "bid_notice": "입찰공고",
+    "bid_renotice": "입찰재공고",
+    "pre_spec_notice": "사전규격공개",
+    "public_offering": "공모",
+    "notice": "공고",
+}
+_NOTICE_DOCUMENT_TYPES = frozenset(_NOTICE_DOCUMENT_TYPE_LABELS)
 _ADMINISTRATIVE_RULE_LABELS = {
     SemanticDocumentType.DIRECTIVE: "훈령",
     SemanticDocumentType.REGULATION: "예규",
@@ -1275,6 +1284,57 @@ def build_meeting_minutes_context(
     }
 
 
+def build_notice_context(
+    envelope: GenerationEnvelope,
+    *,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """입력 block 순서와 값만 보존한 공고 계열 전용 context를 만든다."""
+
+    document_type = (
+        envelope.result.source_classification.document_type.value
+        if envelope.result.source_classification
+        else None
+    )
+    if document_type not in _NOTICE_DOCUMENT_TYPES:
+        raise ValueError(
+            "notice context requires one of: "
+            + ", ".join(sorted(_NOTICE_DOCUMENT_TYPES))
+        )
+
+    ordered_blocks: list[dict[str, Any]] = []
+    for block in envelope.result.generated_document.blocks:
+        rendered = block.model_dump(mode="json")
+        if isinstance(block, TableBlock):
+            rendered["column_count"] = len(block.columns)
+        ordered_blocks.append(rendered)
+
+    document = envelope.result.generated_document
+    resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
+    metadata_context = _build_document_metadata_context(
+        envelope,
+        seed=resolved_seed,
+    )
+    title_length = len(re.sub(r"\s+", "", document.title))
+    if title_length >= 70:
+        title_class = "title-extra-long"
+    elif title_length >= 38:
+        title_class = "title-long"
+    else:
+        title_class = ""
+
+    return {
+        "document_type_label": _NOTICE_DOCUMENT_TYPE_LABELS[document_type],
+        "title": document.title,
+        "title_class": title_class,
+        "agency_name": document.agency_name or "",
+        "blocks": ordered_blocks,
+        "signers": metadata_context["signers"],
+        "approval_manifest": metadata_context["approval_manifest"],
+        "administrative_events": metadata_context["administrative_events"],
+    }
+
+
 def render_generation_payload(
     payload: Mapping[str, Any],
     output_dir: Path,
@@ -1313,6 +1373,8 @@ def render_generation_payload(
         renderer_family = "status_report"
     elif document_type == "meeting_minutes":
         renderer_family = "meeting_minutes"
+    elif document_type in _NOTICE_DOCUMENT_TYPES:
+        renderer_family = "notice"
     else:
         renderer_family = "official_document"
     input_metadata = {
@@ -1420,6 +1482,21 @@ def render_generation_payload(
                 include_administrative_event_dates=True,
             ),
             max_pages=MEETING_MINUTES_MAX_PAGES,
+            input_metadata=input_metadata,
+        )
+    elif document_type in _NOTICE_DOCUMENT_TYPES:
+        context = build_notice_context(envelope, seed=seed)
+        manifest = render_notice_variations(
+            context,
+            output_dir,
+            per_template=per_template,
+            base_seed=seed,
+            template_slugs=template_slugs,
+            required_source_texts=source_text_atoms(
+                document,
+                include_administrative_event_dates=True,
+            ),
+            max_pages=10,
             input_metadata=input_metadata,
         )
     else:

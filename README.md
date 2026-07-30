@@ -46,8 +46,9 @@ python -m weasyprint --info             # WeasyPrint + Pango 로딩 확인
 `result.generated_document`에 `paragraph`, `key_value`, `bullet_list`,
 `table`, `attachment_reference` blocks가 들어 있는 계약 JSON은 문서 유형별
 템플릿으로 바로 렌더링할 수 있다. `research_report`는 연구보고서 3종,
-`press_release`는 보도자료 3종, 그 밖의 입력은 기존 공문 10종을 사용한다.
-JSON 배열과 JSONL 배치 입력도 지원한다.
+`press_release`는 보도자료 3종, `bid_notice`, `bid_renotice`,
+`pre_spec_notice`, `public_offering`, `notice`는 공고 계열 3종, 그 밖의
+입력은 기존 공문 10종을 사용한다. JSON 배열과 JSONL 배치 입력도 지원한다.
 
 단일 파일과 디렉터리 일괄 실행, 입력 규칙, 템플릿 선택 방법은
 [`docs/generated-document-pdf-pipeline.md`](./docs/generated-document-pdf-pipeline.md)에
@@ -61,10 +62,13 @@ python scripts/render_generated_documents.py input.json \
 
 기본값은 입력의 `result.source_classification.document_type`에 맞는 템플릿
 전체다. `research_report`는 연구보고서 3종, `press_release`는 보도자료
-3종으로 라우팅한다. `--template press_01_government_standard`처럼 같은
-문서 유형의 일부 템플릿만 반복 지정할 수도 있다. 입력의 `failure`가
-`null`이 아니면 렌더링하지 않는다. 실패 결과를 조사 목적으로 출력할 때만
-`--allow-failed-input`을 명시한다.
+3종, 공고 계열은 공고 서식 3종으로 라우팅한다.
+`--template press_01_government_standard`처럼 같은 문서 유형의 일부 템플릿만
+반복 지정할 수도 있다. `--per-template` 기본값은 1이므로 공고 계열은
+문서당 3개를 만들고, `--per-template 3`이면 3개 서식의 변주를 모두 만들어
+총 9개가 된다. 이 명령은 여러 후보를 생성하며 후보 중 하나를 무작위로
+선택하지 않는다. 입력의 `failure`가 `null`이 아니면 렌더링하지 않는다.
+실패 결과를 조사 목적으로 출력할 때만 `--allow-failed-input`을 명시한다.
 
 파이프라인은 `blocks`를 내용의 기준으로 사용하고, `body_text`가 함께 있으면
 blocks를 평탄화한 결과와 같은지 먼저 검사한다. 두 값이 다르거나 PDF에서 원문
@@ -87,6 +91,10 @@ blocks를 평탄화한 결과와 같은지 먼저 검사한다. 두 값이 다�
 담당자, 붙임, 행정 처리 문구는 입력 block이나 `document_metadata`에 있을 때만
 표시한다. 8열 이상 표는 별도 가로 페이지로 전환하며 전체 출력은 최대
 10페이지로 제한한다.
+
+공고 계열도 기관명이 없을 때 가상 기관명을 만들지 않는다. 공고 본문과 무관한
+기관·공고번호·담당 부서·공고일을 추측해서 추가하지 않으며, 입력 block 순서를
+보존하고 최대 10쪽을 넘으면 렌더링을 거부한다.
 
 결재선과 행정 처리 문구는 입력에 있을 때만 렌더링한다. 다음처럼
 `generated_document.document_metadata`에 명시하며, `pending` 슬롯에는

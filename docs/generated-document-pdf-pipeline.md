@@ -3,7 +3,7 @@
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
 `research_report` 전용 3종, `press_release` 전용 3종,
-`meeting_minutes` 전용 회의록 4종을 지원한다.
+`meeting_minutes` 전용 회의록 4종, 공고 계열 전용 3종을 지원한다.
 `directive`(훈령), `regulation`(예규), `notification`(고시)은
 행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
@@ -44,7 +44,8 @@ python scripts/render_generated_documents.py input.json \
 }
 ```
 
-분류값이 없거나 `press_release`가 아니면 현재 공문 계열 렌더러를 사용한다.
+문서 유형별 전용 렌더러가 있는 분류값은 해당 서식을 사용하고, 그 밖의
+분류값이나 분류값이 없는 입력은 공문 계열 렌더러를 사용한다.
 
 입력은 JSON 객체 하나, JSON 객체 배열, 또는 한 줄에 JSON 객체 하나가 들어 있는
 JSONL이다. 확장자가 `.txt`여도 내용 전체가 완전한 JSON 객체이면 그대로 전달할
@@ -155,6 +156,20 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+공고 계열 템플릿 slug:
+
+```text
+notice_01_classic_gazette
+notice_02_structured
+notice_03_record_rail
+```
+
+`bid_notice`, `bid_renotice`, `pre_spec_notice`, `public_offering`,
+`notice`는 위 `notice_*` 3종만 선택할 수 있다. 입력 block 순서와
+표·붙임을 보존하고 기관명이 없을 때 가상 기관명을 채우지 않는다.
+기관·공고번호·담당 부서·공고일도 입력에 없으면 추가하지 않는다. 최대
+10쪽을 넘으면 원문을 자르지 않고 해당 출력을 거부한다.
+
 회의록 템플릿 slug:
 
 ```text
@@ -244,6 +259,7 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`
+- `src/rd2/generators/notice_rendering.py`
 - `src/rd2/generators/administrative_rule_rendering.py`
 - `src/rd2/generators/interpretation_compilation_rendering.py`
 - `src/rd2/generators/guide_rendering.py`
@@ -253,6 +269,7 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
+- `src/rd2/generators/templates/notice/`
 - `src/rd2/generators/templates/administrative_rule/`
 - `src/rd2/generators/templates/interpretation_compilation/`
 - `src/rd2/generators/templates/guide/`

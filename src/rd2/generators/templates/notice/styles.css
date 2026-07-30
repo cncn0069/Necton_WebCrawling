@@ -1,0 +1,386 @@
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("../../assets/fonts/NotoSansKR-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+@page notice-content {
+  size: A4;
+  margin: 18mm 20mm 19mm;
+  @bottom-center {
+    color: #555;
+    content: "- " counter(page) " -";
+    font-family: "Noto Sans KR", sans-serif;
+    font-size: 7.5pt;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  color: #171717;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: calc(9.6pt * var(--notice-font-scale, 1));
+  line-height: var(--notice-line-height, 1.66);
+  page: notice-content;
+}
+.rail-marker { display: none; }
+.notice-header {
+  margin: 0 0 10mm;
+  position: relative;
+}
+.notice-meta {
+  display: flex;
+  font-size: 8pt;
+  justify-content: space-between;
+  margin-bottom: 5mm;
+}
+.document-type-label { font-weight: 700; }
+.notice-title {
+  font-size: 22pt;
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.notice-title.title-long { font-size: 19pt; }
+.notice-title.title-extra-long { font-size: 16.5pt; }
+.notice-content { display: block; }
+.content-block {
+  break-inside: auto;
+  margin: 0 0 var(--notice-block-gap, 5.5mm);
+}
+.content-block p {
+  margin: 0;
+  orphans: 3;
+  text-align: justify;
+  white-space: pre-line;
+  widows: 3;
+}
+.key-value-grid {
+  display: grid;
+  margin: 0;
+}
+.key-value-entry {
+  break-inside: auto;
+  min-width: 0;
+}
+.key-value-entry dt {
+  font-size: .82em;
+  font-weight: 700;
+  margin-bottom: .8mm;
+}
+.key-value-entry dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.kv-columns-1 .key-value-grid { grid-template-columns: 1fr; }
+.kv-columns-2 .key-value-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.kv-columns-3 .key-value-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.document-list {
+  margin: 0;
+  padding-left: 7mm;
+}
+.document-list li {
+  break-inside: auto;
+  margin: 0 0 1.5mm;
+  orphans: 2;
+  padding-left: 1mm;
+  widows: 2;
+}
+.list-columns-2 .document-list {
+  column-count: 2;
+  column-gap: 9mm;
+}
+.table-wrap {
+  overflow-wrap: anywhere;
+  width: 100%;
+}
+table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th, td {
+  line-height: 1.42;
+  padding: var(--notice-table-padding, 2.4mm) 1.8mm;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  font-size: .8em;
+  font-weight: 700;
+}
+td { font-size: .83em; }
+.columns-6 th, .columns-6 td,
+.columns-7 th, .columns-7 td,
+.columns-8 th, .columns-8 td {
+  font-size: .72em;
+  padding-left: 1mm;
+  padding-right: 1mm;
+}
+.attachment-reference {
+  break-inside: avoid;
+  display: block;
+}
+.attachment-reference strong,
+.attachment-reference span {
+  display: block;
+}
+.attachment-reference span {
+  font-size: .84em;
+  margin-top: 1mm;
+  overflow-wrap: anywhere;
+}
+.administrative-events {
+  break-inside: avoid;
+  margin: 7mm 0;
+  padding: 4mm 5mm;
+}
+.administrative-events p {
+  display: flex;
+  gap: 3mm;
+  margin: 0;
+}
+.administrative-events p + p { margin-top: 2mm; }
+.administrative-events time {
+  font-size: .82em;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.notice-approval {
+  break-inside: avoid;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-left: auto;
+  margin-top: 8mm;
+  max-width: 120mm;
+}
+.notice-approval.signer-count-1 { grid-template-columns: 1fr; max-width: 30mm; }
+.notice-approval.signer-count-2 { grid-template-columns: repeat(2, 1fr); max-width: 58mm; }
+.notice-approval.signer-count-3 { grid-template-columns: repeat(3, 1fr); max-width: 84mm; }
+.notice-approval.signer-count-4 { grid-template-columns: repeat(4, 1fr); max-width: 106mm; }
+.notice-signer {
+  align-items: center;
+  border: .2mm solid #888;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 24mm;
+  overflow: visible;
+  padding: 2mm 1mm;
+  position: relative;
+  text-align: center;
+}
+.notice-signer + .notice-signer { border-left: 0; }
+.notice-signer strong,
+.notice-signer span,
+.notice-signer small {
+  position: relative;
+  z-index: 1;
+}
+.notice-signer strong { font-size: .72em; }
+.notice-signer span { font-size: .82em; }
+.notice-signer small { font-size: .65em; }
+.approval-stamp {
+  display: block;
+  height: 14mm;
+  object-fit: contain;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 14mm;
+  z-index: 0;
+}
+.approval-stamp.stamp-shape-square { height: 13mm; width: 13mm; }
+.approval-stamp.stamp-shape-oval { height: 14mm; width: 18mm; }
+
+/* 1. 정석 관보형 */
+.notice-classic .notice-meta {
+  border-bottom: .25mm solid #888;
+  padding-bottom: 2mm;
+}
+.notice-classic .notice-title {
+  margin: 0 auto;
+  max-width: 165mm;
+  text-align: center;
+}
+.notice-classic .content-block.is-first {
+  border-top: .55mm solid #222;
+  padding-top: 4mm;
+}
+.notice-classic .key-value-grid {
+  border-bottom: .25mm solid #777;
+  border-top: .25mm solid #777;
+}
+.notice-classic .key-value-entry { padding: 3mm; }
+.notice-classic .key-value-entry + .key-value-entry {
+  border-top: .18mm solid #bbb;
+}
+.notice-classic.kv-columns-2 .key-value-entry:nth-child(odd),
+.notice-classic.kv-columns-3 .key-value-entry:not(:nth-child(3n)) {
+  border-right: .18mm solid #bbb;
+}
+.notice-classic .document-list {
+  border-bottom: .18mm solid #aaa;
+  border-top: .18mm solid #aaa;
+  padding-bottom: 3mm;
+  padding-top: 3mm;
+}
+.notice-classic th,
+.notice-classic td { border: .18mm solid #555; }
+.notice-classic th { background: #ededed; }
+.notice-classic .attachment-reference,
+.notice-classic .administrative-events {
+  border-bottom: .25mm solid #777;
+  border-top: .25mm solid #777;
+  padding: 3mm 0;
+}
+
+/* 2. 구획형 공고 */
+.notice-structured .notice-meta {
+  align-items: center;
+  border: .25mm solid #333;
+  display: inline-flex;
+  gap: 4mm;
+  padding: 1.5mm 3mm;
+}
+.notice-structured .notice-title {
+  border-bottom: .9mm double #222;
+  margin-top: 5mm;
+  padding-bottom: 5mm;
+}
+.notice-structured .content-block {
+  border-top: .45mm solid #222;
+  padding-top: 3mm;
+}
+.notice-structured .content-block p { padding: 0 2mm; }
+.notice-structured .key-value-grid {
+  border: .2mm solid #555;
+}
+.notice-structured .key-value-entry {
+  background: #f2f2f2;
+  border-bottom: .18mm solid #aaa;
+  padding: 3mm;
+}
+.notice-structured .key-value-entry dt {
+  border-left: .9mm solid #222;
+  padding-left: 2mm;
+}
+.notice-structured .document-list {
+  background: #f2f2f2;
+  padding-bottom: 3mm;
+  padding-top: 3mm;
+}
+.notice-structured th {
+  background: #2e2e2e;
+  color: #fff;
+}
+.notice-structured th,
+.notice-structured td { border: .18mm solid #666; }
+.notice-structured .attachment-reference,
+.notice-structured .administrative-events {
+  background: #f2f2f2;
+  border-left: 1mm solid #222;
+  padding: 4mm 5mm;
+}
+
+/* 3. 행정 장부형 */
+.notice-rail { padding-left: 15mm; }
+.notice-rail .rail-marker {
+  background: #ececec;
+  border-right: .2mm solid #aaa;
+  bottom: -19mm;
+  display: flex;
+  flex-direction: column;
+  font-size: 7.5pt;
+  gap: 7mm;
+  left: -20mm;
+  padding: 20mm 6mm;
+  position: fixed;
+  top: -18mm;
+  width: 31mm;
+}
+.notice-rail .rail-marker strong {
+  border-bottom: .3mm solid #333;
+  padding-bottom: 5mm;
+}
+.notice-rail .notice-meta {
+  justify-content: flex-end;
+}
+.notice-rail .document-type-label { display: none; }
+.notice-rail .notice-title {
+  border-bottom: .6mm solid #222;
+  padding-bottom: 4mm;
+}
+.notice-rail .content-block {
+  border-bottom: .18mm solid #aaa;
+  padding-bottom: 3mm;
+}
+.notice-rail .key-value-grid {
+  border-bottom: .35mm solid #444;
+  border-top: .35mm solid #444;
+}
+.notice-rail .key-value-entry {
+  border-bottom: .18mm solid #aaa;
+  padding: 2.5mm 2mm;
+}
+.notice-rail .document-list { padding-left: 5mm; }
+.notice-rail th {
+  background: #ededed;
+  border-bottom: .3mm solid #555;
+  border-top: .4mm solid #222;
+}
+.notice-rail td { border-bottom: .18mm solid #777; }
+.notice-rail .attachment-reference,
+.notice-rail .administrative-events {
+  border-left: .4mm solid #555;
+  padding: 3mm 0 3mm 4mm;
+}
+
+/* 구조 변주 */
+.density-compact .notice-header { margin-bottom: 6mm; }
+.density-compact .notice-title {
+  font-size: 19pt;
+  max-width: none;
+  text-align: left;
+}
+.density-compact .notice-title.title-long { font-size: 17pt; }
+.density-compact .notice-title.title-extra-long { font-size: 15pt; }
+.density-compact .notice-meta { margin-bottom: 3mm; }
+.density-compact.notice-classic .document-list,
+.density-compact.notice-structured .document-list {
+  column-gap: 7mm;
+}
+.density-compact.notice-rail { padding-left: 10mm; }
+.density-compact.notice-rail .rail-marker {
+  left: -17mm;
+  width: 25mm;
+}
+.density-airy .notice-header { margin-bottom: 14mm; }
+.density-airy .notice-title {
+  font-size: 23pt;
+  line-height: 1.45;
+}
+.density-airy .notice-title.title-long { font-size: 20pt; }
+.density-airy .notice-title.title-extra-long { font-size: 17pt; }
+.density-airy .key-value-entry { padding-bottom: 4mm; padding-top: 4mm; }
+.density-airy.notice-structured .key-value-grid {
+  border-left: 0;
+  border-right: 0;
+}
+.density-airy.notice-structured .key-value-entry dt {
+  border-left: 0;
+}
+.density-airy.notice-rail { padding-left: 20mm; }
+.density-airy.notice-rail .rail-marker {
+  left: -24mm;
+  width: 38mm;
+}
