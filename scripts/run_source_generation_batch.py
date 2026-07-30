@@ -399,9 +399,19 @@ def main() -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     records_path = args.out_dir / "batch_records.jsonl"
+    # ``batch_records.jsonl``은 사람이 읽는 요약본이라 block 구성 이름만 담고
+    # (``generated_blocks``: kind 목록) 실제 내용은 버린다. PDF 렌더러
+    # (``scripts/render_generated_documents.py``)는 GeneratedDocumentIR 전체가
+    # 필요하므로, 생성 단계까지 도달한 건은 DocumentPipelineResult 전체를 그대로
+    # 여기 남긴다. 필드 이름이 이미 렌더러의 ``_renderer_payload`` 투영과
+    # 일치하므로(``generation_plan``, ``generation_artifact``,
+    # ``generation_receipt``) 별도 변환 없이 그대로 입력으로 쓸 수 있다.
+    render_payloads_path = args.out_dir / "render_payloads.jsonl"
     records: list[dict] = []
 
-    with records_path.open("w", encoding="utf-8") as handle:
+    with records_path.open("w", encoding="utf-8") as handle, render_payloads_path.open(
+        "w", encoding="utf-8"
+    ) as render_handle:
         for index, row in enumerate(rows, 1):
             row_id, source, doc_type, title, body = row
             document_id = f"{source}-{row_id}"
@@ -435,6 +445,14 @@ def main() -> int:
             records.append(record)
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             handle.flush()
+            if result.generation_artifact is not None:
+                render_handle.write(
+                    json.dumps(
+                        result.model_dump(mode="json"), ensure_ascii=False
+                    )
+                    + "\n"
+                )
+                render_handle.flush()
 
     ok = sum(1 for record in records if record["succeeded"])
     summary = {
@@ -460,7 +478,13 @@ def main() -> int:
     (args.out_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    generated = sum(1 for record in records if record.get("generated_body"))
     print(f"\n완료 {ok}/{len(records)} -> {records_path}")
+    print(
+        f"생성 도달 {generated}건의 렌더링용 원본 -> {render_payloads_path}\n"
+        f"PDF로 뽑으려면: python scripts/render_generated_documents.py "
+        f"{render_payloads_path}"
+    )
     return 0
 
 

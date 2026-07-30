@@ -340,7 +340,7 @@ class GenerationEnvelope(BaseModel):
             )
         if not _CONTRACT_VERSION_RE.fullmatch(result_version):
             raise ValueError(
-                f"Unsupported contract_version {result_version!r}; expected 2.0.0"
+                f"Unsupported contract_version {result_version!r}; expected 2.x.x"
             )
         return self
 
