@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 import random
@@ -22,6 +22,7 @@ _MAX_TEXT_CHARACTERS_PER_PAGE = 4_000
 _MAX_BLOCKS = 240
 _MAX_COLLECTION_ITEMS = 1_200
 _MAX_TABLE_CELLS = 4_000
+_MAX_MULTICOLUMN_ITEM_CHARACTERS = 240
 INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS: tuple[dict[str, str], ...] = (
     {
         "slug": "interpretation_01_sequence",
@@ -66,6 +67,8 @@ class InterpretationVariationSpec:
     line_height: float
     horizontal_margin_mm: float
     block_gap_mm: float
+    key_value_columns: int
+    list_columns: int
 
     @property
     def slug(self) -> str:
@@ -103,6 +106,16 @@ def build_interpretation_variation_specs(
         seed = base_seed + template_number * 1000 + offset
         rng = random.Random(seed)
         font_range, line_range, margin_range, gap_range = ranges[density]
+        key_value_columns = {
+            "balanced": 2,
+            "compact": 3,
+            "airy": 1,
+        }[density]
+        list_columns = {
+            "balanced": 1,
+            "compact": 2,
+            "airy": 1,
+        }[density]
         specs.append(
             InterpretationVariationSpec(
                 template_slug=template_slug,
@@ -113,6 +126,8 @@ def build_interpretation_variation_specs(
                 line_height=round(rng.uniform(*line_range), 3),
                 horizontal_margin_mm=round(rng.uniform(*margin_range), 2),
                 block_gap_mm=round(rng.uniform(*gap_range), 2),
+                key_value_columns=key_value_columns,
+                list_columns=list_columns,
             )
         )
     return specs
@@ -147,7 +162,59 @@ def _variation_css(spec: InterpretationVariationSpec) -> str:
   --line-height: {spec.line_height};
   --block-gap: {spec.block_gap_mm}mm;
 }}
+.interpretation-document .block-key-value {{
+  grid-template-columns: repeat(
+    {spec.key_value_columns},
+    minmax(0, 1fr)
+  );
+  break-inside: auto;
+}}
+.interpretation-document .block-key-value > div {{
+  break-inside: auto;
+}}
+.interpretation-document .block-bullet-list {{
+  columns: {spec.list_columns};
+  column-gap: 8mm;
+  break-inside: auto;
+}}
+.interpretation-document .block-bullet-list li {{
+  break-inside: auto;
+  orphans: 2;
+  widows: 2;
+}}
 """
+
+
+def _adapt_columns_to_content(
+    spec: InterpretationVariationSpec,
+    base_context: Mapping[str, Any],
+) -> InterpretationVariationSpec:
+    key_value_columns = spec.key_value_columns
+    list_columns = spec.list_columns
+    for block in base_context.get("blocks") or ():
+        if not isinstance(block, Mapping):
+            continue
+        if block.get("kind") == "key_value":
+            entries = block.get("entries") or ()
+            if any(
+                len(str(entry.get("key") or ""))
+                + len(str(entry.get("value") or ""))
+                > _MAX_MULTICOLUMN_ITEM_CHARACTERS
+                for entry in entries
+                if isinstance(entry, Mapping)
+            ):
+                key_value_columns = 1
+        elif block.get("kind") == "bullet_list":
+            if any(
+                len(str(item)) > _MAX_MULTICOLUMN_ITEM_CHARACTERS
+                for item in block.get("items") or ()
+            ):
+                list_columns = 1
+    return replace(
+        spec,
+        key_value_columns=key_value_columns,
+        list_columns=list_columns,
+    )
 
 
 def _normalized(value: object) -> str:
@@ -326,11 +393,15 @@ def render_interpretation_compilation_variations(
                 count=per_template,
                 base_seed=base_seed,
             ):
+                effective_spec = _adapt_columns_to_content(
+                    spec,
+                    base_context,
+                )
                 html = template.render(
                     **base_context,
                     variant_class=variant["variant_class"],
                     density_class=f"density-{spec.density}",
-                    variation_css=_variation_css(spec),
+                    variation_css=_variation_css(effective_spec),
                 )
                 staged_html_path = staged_template_dir / f"{spec.slug}.html"
                 staged_pdf_path = staged_template_dir / f"{spec.slug}.pdf"
@@ -366,7 +437,7 @@ def render_interpretation_compilation_variations(
                         "max_pages": max_pages,
                         "actual_pages": page_count,
                         "source_text_present": not missing,
-                        "parameters": spec.to_dict(),
+                        "parameters": effective_spec.to_dict(),
                         "html": None,
                         "pdf": None,
                     }
