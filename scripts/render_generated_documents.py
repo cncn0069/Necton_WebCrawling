@@ -13,6 +13,13 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
     render_generation_payload,
 )
+from rd2.generators.guide_rendering import GUIDE_TEMPLATE_VARIANTS
+from rd2.generators.interpretation_compilation_rendering import (
+    INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+)
+from rd2.generators.administrative_rule_rendering import (
+    ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
+)
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
 )
@@ -132,6 +139,9 @@ def main() -> None:
             *OFFICIAL_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
             *PRESS_RELEASE_TEMPLATE_VARIANTS,
+            *ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
+            *INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+            *GUIDE_TEMPLATE_VARIANTS,
             *STATUS_REPORT_TEMPLATE_VARIANTS,
         )
     )

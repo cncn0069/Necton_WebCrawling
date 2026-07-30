@@ -3,6 +3,8 @@
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
 `research_report` 전용 3종, `press_release` 전용 3종을 지원한다.
+`directive`(훈령), `regulation`(예규), `notification`(고시)은
+행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
 ## 준비
 
@@ -166,6 +168,43 @@ status_04_chapter
 공문과 같은 5종 block을 입력 순서대로 렌더링한다. 7열 이상 표는 가로 A4
 페이지로 전환하며 전체 출력은 최대 10쪽까지만 허용한다.
 
+가이드·매뉴얼·지침 템플릿 slug:
+
+```text
+guide_01_classic
+guide_02_index
+guide_03_cards
+guide_04_field
+```
+
+`source_classification.document_type`이 `guide`이면 가이드·매뉴얼·지침
+4종으로 라우팅한다. 별도 장·절·절차 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. 입력에 없는 절차명이나 의미를
+추측해서 추가하지 않는다.
+
+질의회시집 템플릿 slug:
+
+```text
+interpretation_01_sequence
+interpretation_02_index
+interpretation_03_cards
+interpretation_04_margin
+```
+
+`source_classification.document_type`이 `interpretation_compilation`이면
+질의회시집 4종으로 라우팅한다. 별도 Q/A 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. `질의요지`, `회시요지` 같은 역할을
+추측하거나 입력에 없는 제목을 추가하지 않는다.
+
+행정규칙 템플릿 slug:
+
+```text
+rule_01_promulgation
+rule_02_article_rail
+rule_03_gazette_columns
+rule_04_notice_frame
+```
+
 ## 결과 확인
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
@@ -189,9 +228,15 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`
+- `src/rd2/generators/administrative_rule_rendering.py`
+- `src/rd2/generators/interpretation_compilation_rendering.py`
+- `src/rd2/generators/guide_rendering.py`
 - `src/rd2/generators/status_report_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
+- `src/rd2/generators/templates/administrative_rule/`
+- `src/rd2/generators/templates/interpretation_compilation/`
+- `src/rd2/generators/templates/guide/`
 - `src/rd2/generators/templates/status_report/`
