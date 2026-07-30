@@ -154,6 +154,20 @@ press_03_joint_modular
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
+질의회시집 템플릿 slug:
+
+```text
+interpretation_01_sequence
+interpretation_02_index
+interpretation_03_cards
+interpretation_04_margin
+```
+
+`source_classification.document_type`이 `interpretation_compilation`이면
+질의회시집 4종으로 라우팅한다. 별도 Q/A 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. `질의요지`, `회시요지` 같은 역할을
+추측하거나 입력에 없는 제목을 추가하지 않는다.
+
 행정규칙 템플릿 slug:
 
 ```text
@@ -187,8 +201,10 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`
 - `src/rd2/generators/administrative_rule_rendering.py`
+- `src/rd2/generators/interpretation_compilation_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
 - `src/rd2/generators/templates/research_report/`
 - `src/rd2/generators/templates/press_release/`
 - `src/rd2/generators/templates/administrative_rule/`
+- `src/rd2/generators/templates/interpretation_compilation/`

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="interpretation_compilation/styles.css">
+  <style>{{ variation_css|safe }}</style>
+</head>
+<body class="interpretation-document {{ variant_class }} {{ density_class }}">
+  <article class="interpretation-shell">
+    <aside class="side-label">{{ document_type_label }}</aside>
+    <header class="interpretation-header">
+      <div class="header-line">
+        <span>{{ document_type_label }}</span>
+        {% if agency_name %}<span>{{ agency_name }}</span>{% endif %}
+      </div>
+      <h1 class="{{ title_class }}">{{ title }}</h1>
+    </header>
+
+    <main class="interpretation-blocks">
+      {% set attachment = namespace(index=0) %}
+      {% for block in blocks %}
+        {% if block.kind == "paragraph" %}
+        <p
+          class="content-block block-paragraph{% if loop.first %} is-first{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >{{ block.text }}</p>
+        {% elif block.kind == "key_value" %}
+        <dl class="content-block block-key-value" data-block-id="{{ block.block_id }}">
+          {% for entry in block.entries %}
+          <div><dt>{{ entry.key }}</dt><dd>{{ entry.value }}</dd></div>
+          {% endfor %}
+        </dl>
+        {% elif block.kind == "bullet_list" %}
+        <ul class="content-block block-bullet-list" data-block-id="{{ block.block_id }}">
+          {% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+        {% elif block.kind == "table" %}
+        <section
+          class="content-block block-table{% if block.is_wide %} is-wide{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >
+          <table>
+            <thead><tr>{% for column in block.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+            <tbody>
+              {% for row in block.rows %}
+              <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        {% elif block.kind == "attachment_reference" %}
+        {% set attachment.index = attachment.index + 1 %}
+        <p
+          class="content-block block-attachment-reference"
+          data-block-id="{{ block.block_id }}"
+        >
+          <strong>붙임 {{ attachment.index }}.</strong>
+          <span>{{ block.label }} ({{ block.attachment_id }})</span>
+          {% if block.description %}<small>{{ block.description }}</small>{% endif %}
+        </p>
+        {% endif %}
+      {% endfor %}
+    </main>
+
+    {% if administrative_events %}
+    <section class="administrative-events">
+      {% for event in administrative_events %}
+      <p><time>{{ event.date }}</time><span>{{ event.text }}</span></p>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if signers %}
+    <section class="interpretation-approval">
+      {% for signer in signers %}
+      <div>
+        <strong>{{ signer.role }}</strong>
+        {% if signer.name %}<span>{{ signer.name }}</span>{% endif %}
+        {% if signer.date %}<time>{{ signer.date }}</time>{% endif %}
+        {% if signer.stamp_data_uri %}
+        <img src="{{ signer.stamp_data_uri }}" alt="{{ signer.stamp_alt }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </article>
+</body>
+</html>
