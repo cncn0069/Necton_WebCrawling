@@ -103,6 +103,17 @@ research_03_academic_flow
 2,500개이며 템플릿별 변주는 최대 10개다. 이 값은 텍스트 내용을 고정하는
 규칙이 아니라 렌더링 자원을 보호하는 상한이다.
 
+guide_01_classic
+guide_02_index
+guide_03_cards
+guide_04_field
+```
+
+`source_classification.document_type`이 `guide`이면 가이드·매뉴얼·지침
+4종으로 라우팅한다. 별도 장·절·절차 필드는 필요하지 않으며 공문과 같은
+5종 block을 입력 순서대로 렌더링한다. 입력에 없는 절차명이나 의미를
+추측해서 추가하지 않는다.
+
 ## 결과 확인
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
@@ -123,6 +134,7 @@ python scripts/render_generated_documents.py input.json \
 
 - `scripts/render_generated_documents.py`
 - `src/rd2/generators/generated_document_pipeline.py`
+- `src/rd2/generators/guide_rendering.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
