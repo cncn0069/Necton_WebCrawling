@@ -22,6 +22,9 @@ from rd2.generators.meeting_minutes_rendering import (
 from rd2.generators.research_report_rendering import (
     RESEARCH_REPORT_TEMPLATE_VARIANTS,
 )
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_TEMPLATE_VARIANTS,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -129,6 +132,7 @@ def main() -> None:
             *OFFICIAL_TEMPLATE_VARIANTS,
             *MEETING_MINUTES_TEMPLATE_VARIANTS,
             *RESEARCH_REPORT_TEMPLATE_VARIANTS,
+            *PRESS_RELEASE_TEMPLATE_VARIANTS,
         )
     )
     parser = argparse.ArgumentParser(description=__doc__)

@@ -1,9 +1,9 @@
 # 생성 문서 PDF 렌더링 사용법
 
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
-문서 유형별 템플릿으로 렌더링한다. 현재 `research_report`는 전용
-연구보고서 3종, `meeting_minutes`는 전용 회의록 4종을 사용하며 그 밖의
-입력은 기존 공문 10종을 사용한다.
+문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
+`research_report` 전용 3종, `press_release` 전용 3종,
+`meeting_minutes` 전용 회의록 4종을 지원한다.
 
 ## 준비
 
@@ -29,6 +29,20 @@ python scripts/render_generated_documents.py input.json \
   --output-dir output/pdf/generated_documents/sample \
   --template 01_classic_municipal
 ```
+
+보도자료는 입력에 다음 분류값이 있어야 전용 서식으로 라우팅된다.
+
+```json
+{
+  "result": {
+    "source_classification": {
+      "document_type": "press_release"
+    }
+  }
+}
+```
+
+분류값이 없거나 `press_release`가 아니면 현재 공문 계열 렌더러를 사용한다.
 
 입력은 JSON 객체 하나, JSON 객체 배열, 또는 한 줄에 JSON 객체 하나가 들어 있는
 JSONL이다. 확장자가 `.txt`여도 내용 전체가 완전한 JSON 객체이면 그대로 전달할
@@ -70,7 +84,7 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
   `generated_document.document_metadata`에 있을 때만 렌더링한다.
 - `pending`, `rejected`, `not_required` 결재 슬롯에는 도장이나 결재일을 넣지 않는다.
 
-사용 가능한 템플릿 slug:
+공문 계열 템플릿 slug:
 
 ```text
 01_classic_municipal
@@ -83,13 +97,14 @@ JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로
 08_table_first_report
 09_long_form
 10_checklist_form
+```
+
+연구보고서 템플릿 slug:
+
+```text
 research_01_classic_flow
 research_02_modular_policy
 research_03_academic_flow
-meeting_01_registry
-meeting_02_sequence
-meeting_03_columns
-meeting_04_docket
 ```
 
 `result.source_classification.document_type`이 `research_report`이면 위
@@ -102,17 +117,56 @@ meeting_04_docket
 맞추지 않으며, 10쪽을 넘으면 해당 출력을 거부하고 manifest에 실제 쪽수를
 남긴다.
 
-`result.source_classification.document_type`이 `meeting_minutes`이면 위
-`meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
-렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
-수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
-전환하고 전체 출력은 최대 10쪽까지만 허용한다.
-
 과대 입력이 PDF 생성 과정의 메모리와 CPU를 소진하지 않도록 렌더 시작 전에
 안전 한도를 검사한다. 연구보고서 1건의 한도는 제목 300자, block 160개,
 본문·메타데이터 합계 40,000자, 목록 항목 600개, 표 행 500개, 표 셀
 2,500개이며 템플릿별 변주는 최대 10개다. 이 값은 텍스트 내용을 고정하는
 규칙이 아니라 렌더링 자원을 보호하는 상한이다.
+
+보도자료 템플릿 slug:
+
+```text
+press_01_government_standard
+press_02_briefing_focus
+press_03_joint_modular
+```
+
+보도자료는 원문 block 순서를 유지하면서 다음 규칙으로 서식 역할만 정한다.
+
+- 맨 앞 block이 `key_value`이면 보도시점·배포일 등을 놓는 상단
+  정보띠가 된다.
+- 첫 번째 `paragraph`는 제목 아래 리드 문장이 된다.
+- 첫 번째 `bullet_list`는 핵심 요약 영역이 된다.
+- 나머지 연속 `paragraph`는 한 단락 그룹으로 묶여 1열 또는 2열로 변주된다.
+- 본문에 남은 마지막 `key_value`는 담당 부서·담당자 영역이 된다.
+- 8열 이상 `table`은 가독성을 위해 별도 가로 페이지로 렌더링된다.
+- `attachment_reference`와 `document_metadata.administrative_events`는
+  입력에 있을 때만 마지막 영역에 표시된다.
+
+위 역할 지정은 텍스트를 만들거나 바꾸지 않는다. 기관명도
+`generated_document.agency_name`이 있을 때만 표시한다. 서식이 자체적으로
+추가하는 문자열은 `보도자료`와 페이지 번호뿐이다.
+
+보도자료 변주는 템플릿별 최대 10개까지 만들 수 있으며, 기본 검증은 제목이
+첫 페이지에 있는지, 모든 원문 텍스트가 PDF에 남았는지, 전체가 10페이지
+이하인지 확인한다. 렌더 전에 입력 복잡도와 예상 페이지 비용도 검사한다.
+검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
+거부 상태를 남긴다.
+
+회의록 템플릿 slug:
+
+```text
+meeting_01_registry
+meeting_02_sequence
+meeting_03_columns
+meeting_04_docket
+```
+
+`result.source_classification.document_type`이 `meeting_minutes`이면 위
+`meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
+렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
+수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
+전환하고 전체 출력은 최대 10쪽까지만 허용한다.
 
 ## 결과 확인
 
@@ -137,7 +191,9 @@ python scripts/render_generated_documents.py input.json \
 - `src/rd2/generators/meeting_minutes_rendering.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
+- `src/rd2/generators/press_release_rendering.py`
 - `src/rd2/generators/synthetic_approval_stamps.py`
 - `src/rd2/generators/templates/official_variants/`
-- `src/rd2/generators/templates/meeting_minutes/`
 - `src/rd2/generators/templates/research_report/`
+- `src/rd2/generators/templates/press_release/`
+- `src/rd2/generators/templates/meeting_minutes/`

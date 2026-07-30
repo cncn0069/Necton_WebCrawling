@@ -42,6 +42,8 @@ testpaths = ["tests"]
     "templates/meeting_minutes/*.html",
     "templates/research_report/*.css",
     "templates/research_report/*.html",
+    "templates/press_release/*.css",
+    "templates/press_release/*.html",
     "templates/partials/*.html",
     "assets/fonts/*.ttf",
     "assets/fonts/LICENSE",

@@ -1,0 +1,140 @@
+{% from "partials/approval_stamp.html" import approval_stamp %}
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="press_release/styles.css">
+  <style id="document-variation">{{ variation_css|safe }}</style>
+</head>
+<body class="press-document {{ variant_class }}">
+  <article class="release-shell">
+    <header class="release-masthead">
+      {% if agency_name %}
+      <div class="release-agency">{{ agency_name }}</div>
+      {% endif %}
+      <div class="release-type">{{ document_type_label }}</div>
+    </header>
+
+    {% if header_meta %}
+    <dl class="release-meta">
+      {% for entry in header_meta.entries %}
+      <div class="release-meta-entry">
+        <dt>{{ entry.key }}</dt>
+        <dd>{{ entry.value }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+
+    <section class="release-title">
+      <h1 class="{{ title_class }}">{{ title }}</h1>
+    </section>
+
+    <main class="release-blocks">
+      {% for block in render_items %}
+        {% if block.kind == "paragraph_group" %}
+        <section class="paragraph-group">
+          {% for paragraph in block.blocks %}
+          <p
+            class="release-paragraph"
+            data-block-id="{{ paragraph.block_id }}"
+          >{{ paragraph.text }}</p>
+          {% endfor %}
+        </section>
+        {% elif block.kind == "paragraph" %}
+        <section
+          class="content-block block-paragraph{% if block.is_lead %} is-lead {{ block.lead_class }}{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >
+          <p>{{ block.text }}</p>
+        </section>
+        {% elif block.kind == "key_value" %}
+        <section
+          class="content-block block-key-value{% if block.is_footer_details %} is-footer-details{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >
+          <dl class="key-value-grid">
+            {% for entry in block.entries %}
+            <div class="key-value-entry">
+              <dt>{{ entry.key }}</dt>
+              <dd>{{ entry.value }}</dd>
+            </div>
+            {% endfor %}
+          </dl>
+        </section>
+        {% elif block.kind == "bullet_list" %}
+        <section
+          class="content-block block-bullet-list{% if block.is_summary %} is-summary{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >
+          <ul>
+            {% for item in block["items"] %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+        </section>
+        {% elif block.kind == "table" %}
+        <section
+          class="content-block block-table{% if block.is_wide %} is-wide{% endif %}"
+          data-block-id="{{ block.block_id }}"
+        >
+          <div class="table-wrap columns-{{ block.column_count }}">
+            <table>
+              <thead>
+                <tr>
+                  {% for column in block.columns %}
+                  <th>{{ column }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in block.rows %}
+                <tr>
+                  {% for cell in row %}
+                  <td>{{ cell }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        {% elif block.kind == "attachment_reference" %}
+        <section
+          class="content-block block-attachment-reference"
+          data-block-id="{{ block.block_id }}"
+        >
+          <strong>{{ block.label }}</strong>
+          <span>{{ block.attachment_id }}</span>
+          {% if block.description %}
+          <span>{{ block.description }}</span>
+          {% endif %}
+        </section>
+        {% endif %}
+      {% endfor %}
+    </main>
+
+    {% if administrative_events %}
+    <section class="administrative-events">
+      {% for event in administrative_events %}
+      <p><time>{{ event.date }}</time><span>{{ event.text }}</span></p>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if signers %}
+    <section class="press-approval signer-count-{{ signers|length }}">
+      {% for signer in signers %}
+      <div class="press-signer{% if signer.stamp_data_uri %} has-stamp{% endif %}">
+        <strong>{{ signer.role }}</strong>
+        {% if signer.name %}<span>{{ signer.name }}</span>{% endif %}
+        {% if signer.date %}<small>{{ signer.date }}</small>{% endif %}
+        {{ approval_stamp(signer) }}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </article>
+</body>
+</html>
