@@ -273,7 +273,71 @@ def test_variations_are_deterministic_and_change_density() -> None:
         "compact",
         "airy",
     ]
+    assert [spec.key_value_columns for spec in first] == [2, 3, 1]
+    assert [spec.list_columns for spec in first] == [1, 2, 1]
     assert len({spec.horizontal_margin_mm for spec in first}) == 3
+
+
+@pytest.mark.parametrize(
+    "text_scale",
+    [1, 4, 8],
+    ids=["short", "medium", "long"],
+)
+def test_variations_preserve_text_across_input_lengths(
+    tmp_path: Path,
+    text_scale: int,
+) -> None:
+    payload = _payload()
+    document = payload["result"]["generated_document"]
+    sentence = (
+        "담당자는 점검 결과와 후속 조치의 완료 여부를 확인하고 "
+        "관련 자료를 운영 기록과 함께 관리합니다. "
+    )
+    document["body_text"] = None
+    document["blocks"][0]["text"] = sentence * text_scale
+    document["blocks"][1]["entries"] = [
+        {
+            "key": f"점검항목 {index}",
+            "value": f"{index:02d} {sentence * text_scale}",
+        }
+        for index in range(1, 7)
+    ]
+    document["blocks"][2]["items"] = [
+        f"{index:02d} {sentence * text_scale}"
+        for index in range(1, 7)
+    ]
+
+    envelope = parse_generation_payload(payload)
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=3,
+        template_slugs={"guide_04_field"},
+    )
+
+    assert len(manifest) == 3
+    assert all(entry["status"] == "ok" for entry in manifest)
+    assert all(1 <= entry["actual_pages"] <= 10 for entry in manifest)
+    assert all(entry["source_text_present"] for entry in manifest)
+    if text_scale == 8:
+        assert all(
+            entry["parameters"]["key_value_columns"] == 1
+            and entry["parameters"]["list_columns"] == 1
+            for entry in manifest
+        )
+    # Long atoms may be interrupted by page metadata in PDF extraction.
+    if text_scale < 8:
+        required = source_text_atoms(envelope.result.generated_document)
+        for entry in manifest:
+            with fitz.open(str(entry["pdf"])) as pdf:
+                rendered_text = "".join(
+                    "".join(page.get_text().split())
+                    for page in pdf
+                )
+            assert all(
+                "".join(atom.split()) in rendered_text
+                for atom in required
+            )
 
 
 def test_input_text_is_html_escaped(tmp_path: Path) -> None:
