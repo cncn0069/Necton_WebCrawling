@@ -117,19 +117,19 @@ def test_common_draft_rule_only_blanks_fields_defined_by_the_locked_form():
     assert "초안이면 제목 끝에 \"(안)\"을 붙이고 문서번호·시행일자 칸" not in prompt
 
 
-def test_both_validators_share_one_evidence_sufficiency_source():
+def test_only_general_validator_carries_exact_evidence_sufficiency_rules():
     bundle = build_prompt_bundle()
     validator = bundle.definition("validator").system_prompt
     sensitive_validator = bundle.definition("sensitive_validator").system_prompt
 
-    for prompt in (validator, sensitive_validator):
-        assert prompt.count(VALIDATOR_EVIDENCE_SUFFICIENCY_GUIDANCE) == 1
-        assert "이름·부서·직위·업무 연락처만 있으면 O" in prompt
-        assert "개인별 평정·징계정보는 personnel_pii" in prompt
-        assert "구체적인 혐의·진술·\n  조사내용은 subject_pii" in prompt
+    assert validator.count(VALIDATOR_EVIDENCE_SUFFICIENCY_GUIDANCE) == 1
+    assert "이름·부서·직위·업무 연락처만 있으면 O" in validator
+    assert "개인별 평정·징계정보는 personnel_pii" in validator
+    assert "구체적인 혐의·진술·\n  조사내용은 subject_pii" in validator
+    assert VALIDATOR_EVIDENCE_SUFFICIENCY_GUIDANCE not in sensitive_validator
 
 
-def test_sensitive_validator_receives_clause_six_taxonomy_guidance():
+def test_sensitive_validator_does_not_choose_clause_six_subtypes():
     prompt = build_prompt_bundle().definition("sensitive_validator").system_prompt
 
     for key in (
@@ -138,21 +138,22 @@ def test_sensitive_validator_receives_clause_six_taxonomy_guidance():
         SubclauseKey.SUBJECT_PII,
         SubclauseKey.WELFARE_PII,
     ):
-        assert key.value in prompt
-    assert "personnel_pii" in prompt
-    assert "subject_pii" in prompt
+        assert key.value not in prompt
+    assert "세부유형" in prompt
+    assert "찾거나 반환하지 않는다" in prompt
 
 
-def test_both_validators_share_the_out_of_catalog_other_definition():
+def test_only_general_validator_carries_document_form_other_definition():
     bundle = build_prompt_bundle()
 
-    for role in ("validator", "sensitive_validator"):
-        prompt = bundle.definition(role).system_prompt
-        assert prompt.count(VALIDATOR_OTHER_FORM_GUIDANCE) == 1
-        assert "16개 전문 형식 중 어느 것에도 해당하지 않는다는 뜻" in prompt
-        assert "`형식 불명`" in prompt
-        assert "형식 단서가 본문에 전혀 없을 때만" not in prompt
+    validator = bundle.definition("validator").system_prompt
+    sensitive = bundle.definition("sensitive_validator").system_prompt
+    assert validator.count(VALIDATOR_OTHER_FORM_GUIDANCE) == 1
+    assert "16개 전문 형식 중 어느 것에도 해당하지 않는다는 뜻" in validator
+    assert "`형식 불명`" in validator
+    assert "형식 단서가 본문에 전혀 없을 때만" not in validator
+    assert VALIDATOR_OTHER_FORM_GUIDANCE not in sensitive
 
 
 def test_prompt_bundle_version_bumped_for_global_conflict_resolution():
-    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-01-v45"
+    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-02-v46"

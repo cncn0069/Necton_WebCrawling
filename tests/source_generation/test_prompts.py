@@ -55,21 +55,25 @@ def test_bundle_has_role_specific_definitions_and_schemas():
     )
 
 
-def test_sensitive_monitor_contract_contains_only_semantic_decisions():
+def test_sensitive_monitor_contract_contains_only_binary_decision_and_record():
     definition = build_prompt_bundle().definition("sensitive_validator")
     schema = definition.response_model.model_json_schema()
     properties = schema["properties"]
 
-    assert "verdict" in properties
-    assert "assertions" in properties
-    assert "classification" not in properties
-    assert "clause_no" not in properties
-    assert "evidence_spans" not in properties
-    assert "near_miss" not in properties
-    assert (
-        "classification, clause_no, evidence_spans, near_miss는 출력하지 않는다"
-        in definition.system_prompt
-    )
+    assert set(properties) == {"classification", "rationale"}
+    assert set(properties["classification"]["enum"]) == {"S", "O"}
+    for forbidden in (
+        "block_id",
+        "글자 그대로의 인용문",
+        "document_form",
+        "clause_no",
+        "subclause_key",
+        "assertions",
+        "hard_case_review",
+    ):
+        assert forbidden not in properties
+    assert "정확한 block_id" in definition.system_prompt
+    assert "찾거나 반환하지 않는다" in definition.system_prompt
 
 
 def test_each_prompt_has_an_independent_content_hash():
@@ -158,7 +162,7 @@ def test_classifier_is_not_offered_the_route_it_cannot_reach():
 
 def test_classifier_does_not_carry_the_source_label_policy():
     """S/O 관계 판정 정책은 S/O를 가릴 때만 쓴다 — 판별기는 더 이상 가리지 않는다.
-    민감 생성기·민감 채점자에는 남아 있어야 한다.
+    민감 생성기에는 남고, S/O만 판정하는 민감 검사기에서는 빠져야 한다.
     """
 
     bundle = build_prompt_bundle()
@@ -166,7 +170,7 @@ def test_classifier_does_not_carry_the_source_label_policy():
 
     assert section not in bundle.definition("classifier").system_prompt
     assert section in bundle.definition("sensitive_generator").system_prompt
-    assert section in bundle.definition("sensitive_validator").system_prompt
+    assert section not in bundle.definition("sensitive_validator").system_prompt
 
 
 def test_evidence_level_guidance_cannot_silently_drop_a_level(monkeypatch):
@@ -338,13 +342,11 @@ def test_validator_scope_is_narrowed_to_clauses_five_to_eight():
     # 프롬프트가 침묵하면 enum 이름의 낱말로 짐작한다 — ``direct_legal_evidence``를
     # 정의에서 빼면서 금지 한 줄만 남긴 것과 같은 처방이다
     # (``SOURCE_EVIDENCE_LEVEL_RULES``). 일반 검증기는 금지 문구가 필요하지만,
-    # 민감 감시자는 이제 classification 필드 자체가 없어 C를 낼 수 없다.
+    # 민감 검사기는 live 전용 S/O Literal이라 C를 낼 수 없다.
     assert "스키마에 C가 남아 있어도 고르지 않는다" in prompt
     sensitive_definition = build_prompt_bundle().definition("sensitive_validator")
-    assert (
-        "classification"
-        not in sensitive_definition.response_model.model_json_schema()["properties"]
-    )
+    sensitive_schema = sensitive_definition.response_model.model_json_schema()
+    assert set(sensitive_schema["properties"]["classification"]["enum"]) == {"S", "O"}
     assert "classification은 S 또는 O만 쓴다" in prompt
     assert "제5호 (S)" in prompt
     assert "제1호 (C)" not in prompt
@@ -457,9 +459,11 @@ def test_validator_rejects_field_names_as_evidence():
     assert "제출해 주시기 바랍니다" in validator
     assert "글자 그대로 있을 때만 evidence로 인정" in validator
 
-    # 제6호 전용 검증기의 기존 규칙은 그대로 남아 있어야 한다.
+    # 제6호 전용 검사기는 정확한 위치·인용을 통과 조건으로 삼지 않는다.
     sensitive = bundle.definition("sensitive_validator").system_prompt
-    assert "필드 이름을 열거한 문장은 value가 아니다" in sensitive
+    assert "정확한 block_id" in sensitive
+    assert "글자 그대로의 인용문" in sensitive
+    assert "찾거나 반환하지 않는다" in sensitive
 
 
 def test_prompt_constants_keep_roles_separate():
@@ -469,7 +473,7 @@ def test_prompt_constants_keep_roles_separate():
     assert "한 건을 작성한다" in GENERATOR_SYSTEM_PROMPT
 
 
-def test_relevance_classifier_and_validator_still_see_every_document_form():
+def test_relevance_classifier_and_general_validator_still_see_every_document_form():
     """critical gap (2026-07-31 plan-eng-review): generator만 잠긴
     document_form 하나로 필터링해야 한다. relevance·classifier·validator는
     형식을 스스로 판별해야 하므로 필터 파라미터가 추가된 뒤에도 여전히 17개
@@ -481,6 +485,7 @@ def test_relevance_classifier_and_validator_still_see_every_document_form():
     relevance = bundle.definition("relevance").system_prompt
     classifier = bundle.definition("classifier").system_prompt
     validator = bundle.definition("validator").system_prompt
+    sensitive_validator = bundle.definition("sensitive_validator").system_prompt
 
     for form in DocumentForm:
         assert f"- {form.value} (" in relevance, form
@@ -489,6 +494,8 @@ def test_relevance_classifier_and_validator_still_see_every_document_form():
     assert "[문서 형식 경계 규칙]" in relevance
     assert "[문서 형식 경계 규칙]" in classifier
     assert "[문서 형식 경계 규칙]" in validator
+    assert "[문서 형식 경계 규칙]" not in sensitive_validator
+    assert "document_form" not in sensitive_validator
 
 
 def test_generator_definition_for_form_is_filtered_to_one_form():
@@ -813,12 +820,12 @@ def test_validator_is_an_inspector_not_a_writer():
     """
 
     bundle = build_prompt_bundle()
-    for role in ("validator", "sensitive_validator"):
-        prompt = bundle.definition(role).system_prompt
-        assert "당신은 법무부 내부 감찰관이다" in prompt, role
-        # 생성기 페르소나가 채점자 쪽으로 새지 않는다.
-        assert "지금 실제 업무로" not in prompt, role
-
     validator = bundle.definition("validator").system_prompt
+    sensitive = bundle.definition("sensitive_validator").system_prompt
+    assert "당신은 법무부 내부 감찰관이다" in validator
+    assert "S/O 검사기다" in sensitive
+    assert "지금 실제 업무로" not in validator
+    assert "지금 실제 업무로" not in sensitive
+
     assert "적혀 있다고 주장된 것이 아니라 실제로 있는 것만" in validator
     assert "위반을 찾아내는 것이 목적이 아니므로" in validator

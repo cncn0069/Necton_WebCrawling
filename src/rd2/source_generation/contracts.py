@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Callable, Literal
+from typing import Annotated, Callable, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -463,6 +463,8 @@ class LegalClassification(ContractModel):
     ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
     """
 
+    _requires_evidence_spans: ClassVar[bool] = True
+
     document_form: DocumentForm
     other_document_form: NonEmptyText | None = None
     classification: CsoClassification
@@ -496,7 +498,7 @@ class LegalClassification(ContractModel):
                 f"subclause {self.subclause_key.value!r} does not belong to "
                 f"clause {self.clause_no.value}"
             )
-        if not self.evidence_spans:
+        if self._requires_evidence_spans and not self.evidence_spans:
             raise ValueError("C/S classification requires at least one evidence span")
         return self
 
@@ -1127,20 +1129,15 @@ class SensitiveMonitorAssertion(ContractModel):
 
 
 class SensitiveMonitorDecision(ContractModel):
-    """LLM이 반환하는 제6호 감시자의 최소 의미 판정.
+    """실시간 제6호 검사기가 반환하는 비차단 S/O 판정 기록.
 
-    ``classification``·``clause_no``·``evidence_spans``·``near_miss``는 verdict와
-    assertion에서 기계적으로 결정할 수 있으므로 이 계약에 두지 않는다. 이 모델은
-    의도적으로 교차 필드 validator도 갖지 않는다. 의미 조합의 검증과 정규화는
-    모델 응답을 받은 뒤 파이프라인이 한 번만 수행한다.
+    문서 형식·조항·세부유형은 잠긴 계획에서 가져오며, 정확한 block/quote와
+    assertion은 검사기 계약에 넣지 않는다. ``rationale``은 감사용 기록일 뿐
+    비어 있어도 S/O 판정 자체를 무효화하지 않는다.
     """
 
-    document_form: DocumentForm
-    other_document_form: NonEmptyText | None = None
-    assertions: tuple[SensitiveMonitorAssertion, ...] = ()
-    rationale: NonEmptyText
-    verdict: SensitiveVerdict
-    subclause_key: SensitiveClause6Subclause | None = None
+    classification: Literal[CsoClassification.S, CsoClassification.O]
+    rationale: str = ""
 
 
 class SensitiveAssertion(ContractModel):
@@ -1177,6 +1174,8 @@ class SensitiveAssertion(ContractModel):
 class SensitiveConsistencyAssessment(ConsistencyAssessment):
     """원문 참고 S 생성 경로의 blind S/O 관계 판정."""
 
+    _requires_evidence_spans: ClassVar[bool] = False
+
     sensitivity_verdict: SensitiveVerdict
     assertions: tuple[SensitiveAssertion, ...] = ()
 
@@ -1193,9 +1192,7 @@ class SensitiveConsistencyAssessment(ConsistencyAssessment):
                 raise ValueError("accepted_s requires classification S")
             if self.clause_no != ClauseNumber.CLAUSE_6:
                 raise ValueError("accepted_s requires clause 6")
-            if not self.assertions:
-                raise ValueError("accepted_s requires at least one sensitive assertion")
-            if any(
+            if self.assertions and any(
                 item.identification_strength != IdentificationStrength.DIRECT
                 for item in self.assertions
             ):

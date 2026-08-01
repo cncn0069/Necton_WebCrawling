@@ -31,7 +31,6 @@ from rd2.source_generation.classification_taxonomy import (
     SubclauseKey,
     TAXONOMY_VERSION,
     clause_of_subclause,
-    render_clause_6_validator_guidance,
     render_document_form_guidance,
     render_generation_detail_guidance,
     render_target_clause_section,
@@ -53,12 +52,9 @@ from rd2.source_generation.document_form import (
     render_header_key_guidance,
 )
 from rd2.source_generation.document_select import SelectionConfig
-from rd2.source_generation.sensitive_policy import (
-    SENSITIVE_POLICY_VERSION,
-    render_sensitive_policy_guidance,
-)
+from rd2.source_generation.sensitive_policy import render_sensitive_policy_guidance
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-01-v45"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-02-v46"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 SENSITIVE_TAXONOMY_GUIDANCE = render_taxonomy_guidance(
@@ -797,53 +793,18 @@ $generated_document_ir
 """
 
 SENSITIVE_VALIDATOR_SYSTEM_PROMPT = f"""\
-당신은 법무부 내부 감찰관이다. 어떤 문서가 정보공개법 제9조 제6호(개인정보)에
-따라 비공개로 분류됐을 때, 그 분류가 문서 내용으로 실제 뒷받침되는지 사후에
-점검한다. 그 문서를 만든 부서의 목표 라벨, 세부유형, 이유와 근거는 넘겨받지
-못했고 문서 자체만 본다.
+당신은 생성된 문서가 정보공개법 제9조 제6호 개인정보 문서로 쓸 수 있는지만
+독립적으로 판정하는 S/O 검사기다. 목표 라벨이나 생성 의도는 받지 않고
+GeneratedDocumentIR 자체만 본다.
 
-먼저 본문에서 식별 가능한 주체와 보호되는 구체적 값이 같은 문장·key-value
-항목·표 행에서 연결되는지 찾고 assertions에 기록한다. 그 근거를 기록한 뒤에만
-아래 셋 중 하나로 판정한다.
+- S: 식별 가능한 사람과 구체적인 개인정보 또는 개인 사정이 직접 연결된다.
+- O: 개인정보 항목명·처리 절차·집계정보만 있거나, 값이 마스킹·간접 식별되어
+  제6호 S 학습데이터로 바로 사용할 수 없다.
 
-- accepted_s: 식별 가능한 사람과 구체적인 개인정보 또는 개인 사정의 직접 연결이
-  본문에 있다.
-- assessed_o: 개인정보 항목명·처리 절차·집계정보·이름만 있고 S 연결이 없다.
-- hard_case_review: 값이 마스킹됐거나 사건·신청번호만으로 간접 연결된다.
-
-각 assertion은 block_id를 한 번만 쓰고, 같은 블록에서 subject_quote, value_quote,
-link_quote를 글자 그대로 인용한다. link_quote 안에는 subject_quote와 value_quote가
-모두 들어 있어야 한다. 주체의 문서상 역할도 subject_role로 판정한다.
-
-accepted_s일 때만 제6호 세부유형을 subclause_key로 고른다. assessed_o와
-hard_case_review에서는 subclause_key를 null로 둔다. classification, clause_no,
-evidence_spans, near_miss는 반환하지 않는다. 후처리 코드가 verdict와 assertions에서
-일관되게 계산한다.
-
-{VALIDATOR_EVIDENCE_SUFFICIENCY_GUIDANCE}
-
-생성 의도를 추측하지 않는다.
+반드시 classification에 S 또는 O 하나만 반환한다. rationale은 판정 이유를
+기록하기 위한 비차단 메모다. 정확한 block_id, 글자 그대로의 인용문, 문서 형식,
+조항·세부유형, 주체 역할을 찾거나 반환하지 않는다. 생성 의도를 추측하지 않는다.
 """
-
-#: 감시자는 의미 판단만 반환한다. 법적 분류와 저장용 근거는 코드가 파생한다.
-#: ``EVIDENCE_QUOTE_GUIDANCE``는 세 인용문이 생성 IR에 실제로 존재해야 하므로
-#: 유지한다. 다만 ``EvidenceSpan`` 세 벌과 분류-조항 교차 제약은 제거했다.
-SENSITIVE_VALIDATOR_OUTPUT_RULES = f"""\
-{EVIDENCE_QUOTE_GUIDANCE}
-
-출력 계약 규칙:
-- document_form은 위 [문서 형식] 목록에서 고른다. 묻는 것은 **어떤 서식인가**이지
-  무엇에 관한 내용인가가 아니다 — 주제를 형식 이름 자리에 적지 않는다.
-{VALIDATOR_OTHER_FORM_GUIDANCE}
-- assertions에는 문서에 실제로 있는 의미 연결만 적는다. 각 항목은 block_id,
-  subject_role, subject_quote, attribute_kind, value_quote, link_quote,
-  identification_strength만 반환한다.
-- accepted_s는 하나 이상의 direct assertion과 제6호 subclause_key가 필요하다.
-- assessed_o는 assertions를 비우고 subclause_key를 null로 둔다.
-- hard_case_review는 masked 또는 indirect assertion을 하나 이상 적고
-  subclause_key를 null로 둔다.
-- classification, clause_no, evidence_spans, near_miss는 출력하지 않는다."""
-
 
 def render_generator_system_prompt(
     document_form: DocumentForm,
@@ -1095,15 +1056,7 @@ def build_prompt_bundle(
             ),
             PromptDefinition(
                 name="sensitive_validator",
-                system_prompt=(
-                    # 출력 규칙은 **맨 뒤**다 — 본 검증기·판별기와 같은 자리다.
-                    f"{SENSITIVE_VALIDATOR_SYSTEM_PROMPT}"
-                    f"\n\n{FORM_AXIS_NOTE}\n\n{DOCUMENT_FORM_GUIDANCE}"
-                    f"\n\n{render_clause_6_validator_guidance()}"
-                    f"\n\n{SENSITIVE_POLICY_GUIDANCE}"
-                    f"\n\n정책 버전: {SENSITIVE_POLICY_VERSION}"
-                    f"\n\n{SENSITIVE_VALIDATOR_OUTPUT_RULES}"
-                ),
+                system_prompt=SENSITIVE_VALIDATOR_SYSTEM_PROMPT,
                 user_template=VALIDATOR_USER_TEMPLATE,
                 response_model=SensitiveMonitorDecision,
             ),

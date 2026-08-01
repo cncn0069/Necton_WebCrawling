@@ -51,12 +51,9 @@ from rd2.source_generation.contracts import (
     GenerationProvenance,
     GenerationRoute,
     GenerationTarget,
-    IdentificationStrength,
     PLANNER_POLICY_VERSION,
     RepairCode,
-    SensitiveAssertion,
     SensitiveConsistencyAssessment,
-    SensitiveMonitorAssertion,
     SensitiveMonitorDecision,
     SensitivePipelineStatus,
     SensitiveVerdict,
@@ -66,7 +63,6 @@ from rd2.source_generation.contracts import (
     StageFailure,
     TargetClassification,
     TokenUsage,
-    condense_whitespace,
     document_form_matches,
     effective_classification,
 )
@@ -1330,125 +1326,30 @@ def _canonicalize_consistency_assessment(
     return canonicalized
 
 
-def _literal_sensitive_link_quote(
-    item: SensitiveMonitorAssertion,
-    *,
-    document: GeneratedDocumentIR,
-) -> str:
-    """Return a literal same-line link, repairing an abbreviated model quote."""
-
-    block_text = document.block_text(item.block_id)
-    subject = condense_whitespace(item.subject_quote)
-    value = condense_whitespace(item.value_quote)
-    proposed = EvidenceSpan(block_id=item.block_id, quote=item.link_quote)
-    proposed_text = condense_whitespace(item.link_quote)
-    proposed_is_literal = False
-    if subject in proposed_text and value in proposed_text:
-        try:
-            proposed.locate_in(block_text)
-        except ValueError:
-            pass
-        else:
-            proposed_is_literal = True
-
-    candidates = tuple(
-        line
-        for line in block_text.splitlines()
-        if subject in condense_whitespace(line)
-        and value in condense_whitespace(line)
-    )
-    if len(candidates) == 1:
-        return candidates[0]
-    if proposed_is_literal:
-        return item.link_quote
-    raise ValueError(
-        "sensitive assertion subject and value must share one unique literal "
-        f"line in block {item.block_id!r}; found {len(candidates)}"
-    )
-
-
 def _materialize_sensitive_monitor_decision(
     decision: SensitiveMonitorDecision,
     *,
-    document: GeneratedDocumentIR,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
 ) -> SensitiveConsistencyAssessment:
-    """감시자의 의미 판정을 저장·비교용 법적 판정으로 한 번만 변환한다."""
+    """S/O를 저장 계약으로 감싸되 판정 외 메타데이터는 잠긴 입력에서 가져온다."""
 
-    assertions = tuple(
-        SensitiveAssertion(
-            subject_role=item.subject_role,
-            subject_span=EvidenceSpan(
-                block_id=item.block_id,
-                quote=item.subject_quote,
-            ),
-            attribute_kind=item.attribute_kind,
-            value_span=EvidenceSpan(
-                block_id=item.block_id,
-                quote=item.value_quote,
-            ),
-            link_span=EvidenceSpan(
-                block_id=item.block_id,
-                quote=_literal_sensitive_link_quote(item, document=document),
-            ),
-            identification_strength=item.identification_strength,
-        )
-        for item in decision.assertions
-    )
-
-    common = {
-        "document_form": decision.document_form,
-        "other_document_form": decision.other_document_form,
-        "rationale": decision.rationale,
-        "sensitivity_verdict": decision.verdict,
-    }
-    if decision.verdict == SensitiveVerdict.ACCEPTED_S:
-        if decision.subclause_key is None:
-            raise ValueError("accepted_s requires a clause 6 subclause")
-        if not assertions:
-            raise ValueError("accepted_s requires at least one sensitive assertion")
-        if any(
-            item.identification_strength != IdentificationStrength.DIRECT
-            for item in assertions
-        ):
-            raise ValueError("accepted_s assertions must be directly identifying")
-        evidence_spans = tuple(
-            {
-                (item.link_span.block_id, item.link_span.quote): item.link_span
-                for item in assertions
-            }.values()
-        )
-        return SensitiveConsistencyAssessment(
-            **common,
-            classification=CsoClassification.S,
-            clause_no=ClauseNumber.CLAUSE_6,
-            subclause_key=decision.subclause_key,
-            evidence_spans=evidence_spans,
-            assertions=assertions,
-        )
-
-    if decision.subclause_key is not None:
-        raise ValueError(
-            f"{decision.verdict.value} requires subclause_key=null"
-        )
-    if decision.verdict == SensitiveVerdict.ASSESSED_O:
-        if assertions:
-            raise ValueError("assessed_o cannot include sensitive assertions")
-        return SensitiveConsistencyAssessment(
-            **common,
-            classification=CsoClassification.O,
-        )
-
-    if not assertions:
-        raise ValueError("hard_case_review requires at least one assertion")
-    if all(
-        item.identification_strength == IdentificationStrength.DIRECT
-        for item in assertions
-    ):
-        raise ValueError("hard_case_review requires a masked or indirect assertion")
+    source_form = assessment.source_classification
+    target = plan.final_target
+    is_sensitive = decision.classification == CsoClassification.S
     return SensitiveConsistencyAssessment(
-        **common,
-        classification=CsoClassification.O,
-        assertions=assertions,
+        document_form=source_form.document_form,
+        other_document_form=source_form.other_document_form,
+        classification=decision.classification,
+        clause_no=target.clause_no if is_sensitive else None,
+        subclause_key=target.subclause_key if is_sensitive else None,
+        evidence_spans=(),
+        rationale=decision.rationale.strip() or "부가 근거 기록 없음",
+        sensitivity_verdict=(
+            SensitiveVerdict.ACCEPTED_S
+            if is_sensitive
+            else SensitiveVerdict.ASSESSED_O
+        ),
     )
 
 
@@ -1495,6 +1396,11 @@ def _repair_codes_for_validation(
     artifact: GenerationArtifact,
     assessment: ConsistencyAssessment,
 ) -> tuple[RepairCode, ...]:
+    if isinstance(assessment, SensitiveConsistencyAssessment):
+        if assessment.sensitivity_verdict == SensitiveVerdict.ASSESSED_O:
+            return (RepairCode.DIRECT_VALUE_MISSING,)
+        return ()
+
     codes: list[RepairCode] = []
     if not comparison.document_form_match:
         codes.append(RepairCode.FORM_MISMATCH)
@@ -1508,12 +1414,6 @@ def _repair_codes_for_validation(
         codes.append(RepairCode.ROLE_INCOMPATIBLE)
     if _MASK_PATTERN.search(artifact.generated_document.body_text):
         codes.append(RepairCode.MASK_REMAINS)
-    if (
-        plan.final_target.clause_no == ClauseNumber.CLAUSE_6
-        and isinstance(assessment, SensitiveConsistencyAssessment)
-        and assessment.sensitivity_verdict == SensitiveVerdict.ASSESSED_O
-    ):
-        codes.append(RepairCode.DIRECT_VALUE_MISSING)
     return tuple(dict.fromkeys(codes))
 
 
@@ -1621,7 +1521,8 @@ def execute_consistency_validation(
         if isinstance(call.parsed, SensitiveMonitorDecision):
             consistency = _materialize_sensitive_monitor_decision(
                 call.parsed,
-                document=artifact.generated_document,
+                assessment=assessment,
+                plan=plan,
             )
         else:
             consistency = cast(ConsistencyAssessment, call.parsed)
@@ -1629,7 +1530,10 @@ def execute_consistency_validation(
             consistency,
             document=artifact.generated_document,
         )
-        if isinstance(consistency, SensitiveConsistencyAssessment):
+        if (
+            isinstance(consistency, SensitiveConsistencyAssessment)
+            and consistency.assertions
+        ):
             validate_sensitive_assessment(consistency)
     except ValueError as exc:
         code = (
@@ -1937,13 +1841,6 @@ def run_source_sensitive_pipeline(
                     failure=validation.failure,
                 )
             )
-            if (
-                attempt_index < max_generation_attempts
-                and validation.repair_codes
-            ):
-                parent_generation_sha256 = model_sha256(generation.artifact)
-                next_repair_codes = validation.repair_codes
-                continue
             return _source_sensitive_terminal_run(
                 status=SensitivePipelineStatus.PIPELINE_FAILED,
                 attempts=attempts,
@@ -1969,10 +1866,7 @@ def run_source_sensitive_pipeline(
         attempts.append(result)
 
         verdict = validation.assessment.sensitivity_verdict
-        if (
-            verdict == SensitiveVerdict.ACCEPTED_S
-            and not validation.comparison.requires_review
-        ):
+        if verdict == SensitiveVerdict.ACCEPTED_S:
             return _source_sensitive_terminal_run(
                 status=SensitivePipelineStatus.ACCEPTED_S,
                 attempts=attempts,

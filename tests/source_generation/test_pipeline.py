@@ -22,15 +22,11 @@ from rd2.source_generation.contracts import (
     GenerationMode,
     GenerationRoute,
     GenerationTarget,
-    IdentificationStrength,
     ParagraphBlock,
     RepairCode,
     RelevanceSelectionResponse,
-    SensitiveAttributeKind,
-    SensitiveMonitorAssertion,
     SensitiveMonitorDecision,
     SensitivePipelineStatus,
-    SensitiveSubjectRole,
     SensitiveVerdict,
     SourceActorRole,
     SourceAssessment,
@@ -42,7 +38,6 @@ from rd2.source_generation.contracts import (
     SourceSlotKind,
     SourceSuitability,
     SourceTextBlock,
-    TableBlock,
     TargetClassification,
 )
 from rd2.source_generation.document_select import (
@@ -165,35 +160,18 @@ def test_pipeline_call_order_models_and_blind_validator_input():
 
 
 def _accepted_sensitive_decision(
-    text: str = "신청인 김민서의 개인 연락처는 010-1234-5678이다.",
-    *,
-    value_quote: str = "010-1234-5678",
-    subject_role: SensitiveSubjectRole = SensitiveSubjectRole.APPLICANT,
+    rationale: str = "신청인과 개인 연락처가 직접 연결된다.",
 ) -> SensitiveMonitorDecision:
     return SensitiveMonitorDecision(
-        document_form=DocumentForm.OFFICIAL_LETTER,
-        assertions=(
-            SensitiveMonitorAssertion(
-                block_id="generated:b0",
-                subject_role=subject_role,
-                subject_quote="신청인 김민서",
-                attribute_kind=SensitiveAttributeKind.PHONE,
-                value_quote=value_quote,
-                link_quote=text,
-                identification_strength=IdentificationStrength.DIRECT,
-            ),
-        ),
-        rationale="신청인과 개인 연락처가 직접 연결된다.",
-        verdict=SensitiveVerdict.ACCEPTED_S,
-        subclause_key=SubclauseKey.PETITIONER_PII,
+        classification=CsoClassification.S,
+        rationale=rationale,
     )
 
 
 def _open_sensitive_decision() -> SensitiveMonitorDecision:
     return SensitiveMonitorDecision(
-        document_form=DocumentForm.OFFICIAL_LETTER,
+        classification=CsoClassification.O,
         rationale="구체적인 개인정보 값이 없다.",
-        verdict=SensitiveVerdict.ASSESSED_O,
     )
 
 
@@ -653,104 +631,57 @@ def test_source_sensitive_retry_reuses_classification_and_plan():
     assert final_assessment is not None
     assert final_assessment.classification == CsoClassification.S
     assert final_assessment.clause_no == ClauseNumber.CLAUSE_6
-    assert final_assessment.evidence_spans[0].quote == concrete.body_text
+    assert final_assessment.evidence_spans == ()
+    assert final_assessment.assertions == ()
+    assert final_assessment.rationale == "신청인과 개인 연락처가 직접 연결된다."
 
 
-def test_sensitive_monitor_derives_literal_table_row_from_abbreviated_link():
-    document = GeneratedDocumentIR(
-        title="복지급여 수급자 정보",
-        blocks=(
-            TableBlock(
-                block_id="applicant_info",
-                columns=("이름", "주민등록번호", "주소", "연락처"),
-                rows=(
-                    (
-                        "김민서",
-                        "910101-1234567",
-                        "서울시 종로구 종로1",
-                        "010-1234-5678",
-                    ),
-                ),
-            ),
-        ),
-    )
-    assessment, plan, artifact = _clause6_generated_artifact(document)
-    decision = SensitiveMonitorDecision(
-        document_form=DocumentForm.OFFICIAL_LETTER,
-        assertions=(
-            SensitiveMonitorAssertion(
-                block_id="applicant_info",
-                subject_role=SensitiveSubjectRole.APPLICANT,
-                subject_quote="김민서",
-                attribute_kind=SensitiveAttributeKind.PHONE,
-                value_quote="010-1234-5678",
-                link_quote="김민서 010-1234-5678",
-                identification_strength=IdentificationStrength.DIRECT,
-            ),
-            SensitiveMonitorAssertion(
-                block_id="applicant_info",
-                subject_role=SensitiveSubjectRole.APPLICANT,
-                subject_quote="김민서",
-                attribute_kind=SensitiveAttributeKind.NATIONAL_ID,
-                value_quote="910101-1234567",
-                link_quote="김민서 910101-1234567",
-                identification_strength=IdentificationStrength.DIRECT,
-            ),
-        ),
-        rationale="이름과 전화번호가 같은 표 행에 있다.",
-        verdict=SensitiveVerdict.ACCEPTED_S,
-        subclause_key=SubclauseKey.PETITIONER_PII,
-    )
+def test_sensitive_monitor_uses_locked_metadata_and_allows_blank_rationale():
+    assessment, plan, artifact = _clause6_generated_artifact(generated_document())
 
     checked = execute_consistency_validation(
         assessment=assessment,
         plan=plan,
         artifact=artifact,
-        gateway=FakeGateway([decision]),
+        gateway=FakeGateway([_accepted_sensitive_decision("")]),
         config=_config(sensitive=True),
     )
 
     assert checked.succeeded
     assert checked.assessment is not None
-    assert len(checked.assessment.assertions) == 2
-    assert len(checked.assessment.evidence_spans) == 1
-    assert checked.assessment.evidence_spans[0].quote == (
-        "김민서\t910101-1234567\t서울시 종로구 종로1\t010-1234-5678"
+    assert checked.assessment.classification == CsoClassification.S
+    assert checked.assessment.document_form == (
+        assessment.source_classification.document_form
     )
+    assert checked.assessment.clause_no == plan.final_target.clause_no
+    assert checked.assessment.subclause_key == plan.final_target.subclause_key
+    assert checked.assessment.evidence_spans == ()
+    assert checked.assessment.assertions == ()
+    assert checked.assessment.rationale == "부가 근거 기록 없음"
 
 
-def test_invalid_sensitive_monitor_decision_returns_failure_without_crashing():
-    assessment, plan, artifact = _clause6_generated_artifact(generated_document())
-    inconsistent = _accepted_sensitive_decision().model_copy(
-        update={
-            "verdict": SensitiveVerdict.ASSESSED_O,
-            "subclause_key": None,
-        }
-    )
-
-    checked = execute_consistency_validation(
-        assessment=assessment,
-        plan=plan,
-        artifact=artifact,
-        gateway=FakeGateway([inconsistent]),
-        config=_config(sensitive=True),
-    )
-
-    assert not checked.succeeded
-    assert checked.failure is not None
-    assert checked.failure.code == FailureCode.SENSITIVE_ASSERTION_INVALID
-    assert checked.assessment is None
-    assert checked.receipt is None
+def test_general_consistency_still_requires_exact_evidence_for_s():
+    with pytest.raises(
+        ValueError,
+        match="C/S classification requires at least one evidence span",
+    ):
+        ConsistencyAssessment(
+            document_form=DocumentForm.OFFICIAL_LETTER,
+            classification=CsoClassification.S,
+            clause_no=ClauseNumber.CLAUSE_5,
+            subclause_key=SubclauseKey.BID_CONTRACT,
+            rationale="일반 검증 계약은 기존 근거 의무를 유지한다.",
+        )
 
 
-def test_sensitive_role_mismatch_is_not_accepted():
+def test_source_sensitive_o_is_excluded_after_one_generation_retry():
     gateway = FakeGateway(
         [
-            source_assessment(role=SourceActorRole.EMPLOYEE),
+            source_assessment(),
             generated_document(),
-            _accepted_sensitive_decision(),
+            _open_sensitive_decision(),
             generated_document(),
-            _accepted_sensitive_decision(),
+            _open_sensitive_decision(),
         ]
     )
 
@@ -764,26 +695,23 @@ def test_sensitive_role_mismatch_is_not_accepted():
     )
 
     assert run.status == SensitivePipelineStatus.EXCLUDED_AFTER_RETRY
-    assert run.attempts[-1].comparison is not None
-    assert not run.attempts[-1].comparison.subject_role_match
+    assert len(run.attempts) == 2
+    assert all(
+        attempt.consistency_assessment is not None
+        and attempt.consistency_assessment.classification == CsoClassification.O
+        for attempt in run.attempts
+    )
     second = run.attempts[-1].generation_artifact
     assert second is not None
-    assert RepairCode.ROLE_INCOMPATIBLE in second.repair_codes
+    assert second.repair_codes == (RepairCode.DIRECT_VALUE_MISSING,)
 
 
-def test_invalid_sensitive_assertion_retries_generation_only():
-    text = "신청인 김민서의 전화번호 항목을 확인한다."
-    invalid = _accepted_sensitive_decision(
-        text,
-        value_quote="전화번호 항목",
-    )
+def test_sensitive_validator_failure_does_not_regenerate_document():
     gateway = FakeGateway(
         [
             source_assessment(),
-            generated_document(text),
-            invalid,
             generated_document(),
-            _accepted_sensitive_decision(),
+            _general_consistency(),
         ]
     )
 
@@ -796,19 +724,11 @@ def test_invalid_sensitive_assertion_retries_generation_only():
         sensitive_seed="seed",
     )
 
-    assert run.status == SensitivePipelineStatus.ACCEPTED_S
+    assert run.status == SensitivePipelineStatus.PIPELINE_FAILED
+    assert len(run.attempts) == 1
     assert run.attempts[0].failure is not None
-    assert (
-        run.attempts[0].failure.code
-        == FailureCode.SENSITIVE_ASSERTION_INVALID
-    )
-    assert len(
-        [
-            call
-            for call in gateway.calls
-            if call["response_model"].__name__ == "SourceAssessment"
-        ]
-    ) == 1
+    assert run.attempts[0].failure.code == FailureCode.STRUCTURED_OUTPUT_INVALID
+    assert len(gateway.calls) == 3
 
 
 def test_retrying_gateway_retries_only_selected_typed_failures():

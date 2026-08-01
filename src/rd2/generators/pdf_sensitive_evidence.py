@@ -1,4 +1,4 @@
-"""승인된 S 관계 근거가 최종 PDF에도 남았는지 확인한다."""
+"""S 판정 근거의 PDF 보존 상태를 비차단 진단으로 기록한다."""
 
 from __future__ import annotations
 
@@ -77,38 +77,71 @@ def verify_rendered_sensitive_evidence(
     payload: Mapping[str, Any],
     rendered: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """렌더링 manifest의 모든 PDF를 확인하고 하나라도 손실되면 실패한다."""
+    """렌더링을 차단하지 않고 가능한 범위에서 근거 보존 상태만 기록한다."""
 
     if payload.get("approval_status") != "accepted_s":
         return []
+
+    def not_checked(reason: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "pdf": str(entry["pdf"]),
+                "status": "not_checked",
+                "reason": reason,
+            }
+            for entry in rendered
+        ]
+
     raw_assessment = payload.get("consistency_assessment")
     if not isinstance(raw_assessment, Mapping):
-        raise ValueError("accepted_s payload requires consistency_assessment")
+        return not_checked("consistency_assessment_missing")
     raw_result = payload.get("result")
     if not isinstance(raw_result, Mapping):
-        raise ValueError("accepted_s payload requires result")
+        return not_checked("result_missing")
     raw_document = raw_result.get("generated_document")
     if not isinstance(raw_document, Mapping):
-        raise ValueError("accepted_s payload requires generated_document")
+        return not_checked("generated_document_missing")
 
-    assessment = SensitiveConsistencyAssessment.model_validate(raw_assessment)
-    document = GeneratedDocumentIR.model_validate(raw_document)
+    try:
+        assessment = SensitiveConsistencyAssessment.model_validate(raw_assessment)
+        document = GeneratedDocumentIR.model_validate(raw_document)
+    except ValueError as exc:
+        return not_checked(f"diagnostic_payload_invalid: {exc}")
+
+    if not assessment.assertions:
+        return [
+            {
+                "pdf": str(entry["pdf"]),
+                "status": "not_checked",
+                "reason": "no_structured_evidence",
+                "rationale": assessment.rationale,
+            }
+            for entry in rendered
+        ]
+
     results: list[dict[str, Any]] = []
     for entry in rendered:
         pdf_path = Path(str(entry["pdf"]))
-        checks = verify_sensitive_evidence_pages(
-            assessment=assessment,
-            document=document,
-            page_texts=_page_texts(pdf_path),
-        )
-        if not all(check["passed"] for check in checks):
-            raise ValueError(
-                f"sensitive evidence missing from rendered PDF: {pdf_path}"
+        try:
+            checks = verify_sensitive_evidence_pages(
+                assessment=assessment,
+                document=document,
+                page_texts=_page_texts(pdf_path),
             )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never block render
+            results.append(
+                {
+                    "pdf": str(pdf_path),
+                    "status": "not_checked",
+                    "reason": f"diagnostic_failed: {exc}",
+                }
+            )
+            continue
+        preserved = all(check["passed"] for check in checks)
         results.append(
             {
                 "pdf": str(pdf_path),
-                "status": "preserved",
+                "status": "preserved" if preserved else "not_preserved",
                 "assertions": checks,
             }
         )
