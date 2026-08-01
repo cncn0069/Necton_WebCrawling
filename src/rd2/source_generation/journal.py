@@ -14,7 +14,11 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
-from rd2.source_generation.classification_taxonomy import ClauseNumber
+from rd2.source_generation.classification_taxonomy import (
+    ClauseNumber,
+    DocumentForm,
+    SubclauseKey,
+)
 from rd2.source_generation.contracts import (
     CONTRACT_SCHEMA_VERSION,
     AuditStageArtifact,
@@ -80,13 +84,21 @@ def _validate_sha256(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class JournalIdentity:
-    """Inputs that independently invalidate each persisted stage."""
+    """Inputs that independently invalidate each persisted stage.
+
+    ``generator_prompt_sha256``/``sensitive_generator_prompt_sha256``는 더
+    이상 고정 필드가 아니다 — generator 프롬프트는 이제 classifier가 잠근
+    ``document_form``으로 필터링되므로(``prompts.render_generator_system_prompt``),
+    이 identity가 만들어지는 시점(``from_pipeline``, classification 실행
+    *전*)에는 아직 계산할 수 없다. 대신 ``prompt_bundle``을 들고 있다가,
+    ``document_form``을 아는 호출자가 ``generation_prompt_for``로 그때그때
+    계산한다 — classifier/validator 프롬프트는 형식과 무관하게 고정이라
+    지금처럼 즉시 계산해도 된다.
+    """
 
     source_sha256: str
     selection_sha256: str
     classifier_prompt_sha256: str
-    generator_prompt_sha256: str
-    sensitive_generator_prompt_sha256: str
     validator_prompt_sha256: str
     sensitive_validator_prompt_sha256: str
     planner_policy_sha256: str
@@ -95,14 +107,13 @@ class JournalIdentity:
     generator_model: str
     validator_model: str
     audit_config_sha256: str
+    prompt_bundle: PromptBundle
 
     def __post_init__(self) -> None:
         for name in (
             "source_sha256",
             "selection_sha256",
             "classifier_prompt_sha256",
-            "generator_prompt_sha256",
-            "sensitive_generator_prompt_sha256",
             "validator_prompt_sha256",
             "sensitive_validator_prompt_sha256",
             "planner_policy_sha256",
@@ -140,10 +151,6 @@ class JournalIdentity:
             source_sha256=snapshot.source_sha256,
             selection_sha256=selection.selection_sha256,
             classifier_prompt_sha256=prompt_bundle.definition("classifier").sha256,
-            generator_prompt_sha256=prompt_bundle.definition("generator").sha256,
-            sensitive_generator_prompt_sha256=prompt_bundle.definition(
-                "sensitive_generator"
-            ).sha256,
             validator_prompt_sha256=prompt_bundle.definition("validator").sha256,
             sensitive_validator_prompt_sha256=prompt_bundle.definition(
                 "sensitive_validator"
@@ -154,6 +161,7 @@ class JournalIdentity:
             generator_model=config.generator_model,
             validator_model=config.validator_model,
             audit_config_sha256=audit_config_sha256,
+            prompt_bundle=prompt_bundle,
         )
 
     @property
@@ -166,10 +174,18 @@ class JournalIdentity:
             normalization_version=NORMALIZATION_VERSION,
         )
 
-    def generation_prompt_for_clause(self, clause: ClauseNumber | None) -> str:
-        if clause == ClauseNumber.CLAUSE_6:
-            return self.sensitive_generator_prompt_sha256
-        return self.generator_prompt_sha256
+    def generation_prompt_for(
+        self,
+        *,
+        document_form: DocumentForm,
+        clause_no: ClauseNumber | None,
+        subclause_key: SubclauseKey | None,
+    ) -> str:
+        return self.prompt_bundle.generator_definition_for_form(
+            document_form,
+            sensitive=(clause_no == ClauseNumber.CLAUSE_6),
+            subclause_key=subclause_key,
+        ).sha256
 
     def validation_prompt_for_clause(self, clause: ClauseNumber | None) -> str:
         if clause == ClauseNumber.CLAUSE_6:
@@ -617,7 +633,14 @@ def _load_verified_chain(
     expected_generation_prompt = (
         None
         if source_free
-        else identity.generation_prompt_for_clause(plan.final_target.clause_no)
+        else identity.generation_prompt_for(
+            document_form=(
+                classified_artifact.source_assessment
+                .source_classification.document_form
+            ),
+            clause_no=plan.final_target.clause_no,
+            subclause_key=plan.final_target.subclause_key,
+        )
     )
     expected_generation_model = None if source_free else identity.generator_model
     generated = _latest_success(
@@ -1063,8 +1086,13 @@ def run_three_stage_with_journal(
             generation_prompt_sha256 = (
                 None
                 if source_free
-                else identity.generation_prompt_for_clause(
-                    locked_plan.final_target.clause_no
+                else identity.generation_prompt_for(
+                    document_form=(
+                        classified_artifact.source_assessment
+                        .source_classification.document_form
+                    ),
+                    clause_no=locked_plan.final_target.clause_no,
+                    subclause_key=locked_plan.final_target.subclause_key,
                 )
             )
             generation_model = None if source_free else identity.generator_model

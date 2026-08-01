@@ -19,7 +19,7 @@ from rd2.source_generation.audit_bridge import (
     run_source_generation_audit,
     summarize_classification_artifacts,
 )
-from rd2.source_generation.classification_taxonomy import DocumentForm
+from rd2.source_generation.classification_taxonomy import ClauseNumber, DocumentForm
 from rd2.source_generation.contracts import (
     RunManifest,
     SecurityMode,
@@ -107,8 +107,24 @@ def _pipeline_config() -> PipelineConfig:
     )
 
 
-def _pipeline_result(*, mismatch: bool = False):
-    consistency = accepted_sensitive_assessment()
+def _pipeline_result(
+    *,
+    mismatch: bool = False,
+    document_form: DocumentForm = DocumentForm.OFFICIAL_LETTER,
+    other_form_clash: bool = False,
+):
+    # 양쪽 다 ``other``인데 자유텍스트만 다른 경우. enum만 보면 일치,
+    # ``other_document_form``까지 보면 불일치다 — 두 계산이 갈라졌던 자리다.
+    source_other_form = None
+    consistency_other_form = None
+    if other_form_clash:
+        document_form = DocumentForm.OTHER
+        source_other_form = "보도자료"
+        consistency_other_form = "설명자료"
+    consistency = accepted_sensitive_assessment(
+        document_form=document_form,
+        other_document_form=consistency_other_form,
+    )
     if mismatch:
         consistency = SensitiveConsistencyAssessment.model_validate(
             {
@@ -126,7 +142,10 @@ def _pipeline_result(*, mismatch: bool = False):
         counterfactual_target=target(),
         gateway=FakeGateway(
             [
-                source_assessment(),
+                source_assessment(
+                    document_form=document_form,
+                    other_document_form=source_other_form,
+                ),
                 generated_document(),
                 consistency,
             ]
@@ -166,14 +185,31 @@ def _bridge_document(
     *,
     mismatch: bool = False,
     classifier_prompt_sha256: str | None = None,
+    document_form: DocumentForm = DocumentForm.OFFICIAL_LETTER,
+    other_form_clash: bool = False,
 ) -> AuditBridgeDocument:
     manifest = _run_manifest()
-    result = _pipeline_result(mismatch=mismatch)
+    result = _pipeline_result(
+        mismatch=mismatch,
+        document_form=document_form,
+        other_form_clash=other_form_clash,
+    )
     selection = _selection()
     assert result.source_assessment is not None
     assert result.generation_plan is not None
     assert result.generation_artifact is not None
     assert result.consistency_assessment is not None
+    # generator 프롬프트는 이제 잠긴 document_form으로 필터링되므로, 실제
+    # 파이프라인(pipeline.py execute_generation)이 계산한 것과 같은 방식으로
+    # 다시 계산해야 bridge_document_to_audit의 재계산 검증을 통과한다.
+    expected_generator_prompt_sha256 = build_prompt_bundle().generator_definition_for_form(
+        result.source_assessment.source_classification.document_form,
+        sensitive=(
+            result.generation_plan.final_target.clause_no
+            == ClauseNumber.CLAUSE_6
+        ),
+        subclause_key=result.generation_plan.final_target.subclause_key,
+    ).sha256
     return AuditBridgeDocument(
         source_document_id=snapshot().source_document_id,
         source_manifest_key=snapshot().manifest_key,
@@ -185,7 +221,7 @@ def _bridge_document(
             classifier_prompt_sha256
             or manifest.classifier_prompt_sha256
         ),
-        generator_prompt_sha256=manifest.generator_prompt_sha256,
+        generator_prompt_sha256=expected_generator_prompt_sha256,
         validator_prompt_sha256=manifest.validator_prompt_sha256,
         classification_artifact_sha256=model_sha256(
             result.source_assessment
@@ -207,6 +243,40 @@ def _bridge_document(
     )
 
 
+def test_mixed_document_form_batch_passes_audit_without_hash_mismatch():
+    """D3 fix (2026-07-31 plan-eng-review): 배치 안에서 서로 다른
+    document_form을 가진 문서들이 섞여 있어도, 각자 정당하게 다른
+    generator_prompt_sha256을 갖는 것만으로 AuditContractError가 나면
+    안 된다. 이전에는 run_manifest의 고정 generator_prompt_sha256 하나와
+    비교해서 형식이 다르면 항상 실패했다(audit_bridge.py의
+    prompt_pairs 체크). 두 문서는 classifier·validator 모두 같은
+    document_form에 합의한, 완전히 정합적인 별도 파이프라인 실행 결과다.
+    """
+
+    plan = _coverage_plan()
+    cell = _target_cell(plan)
+    bundle = build_prompt_bundle()
+
+    official_letter_doc = _bridge_document(cell)
+    audit_material_doc = _bridge_document(
+        cell, document_form=DocumentForm.AUDIT_MATERIAL
+    )
+    assert (
+        official_letter_doc.generator_prompt_sha256
+        != audit_material_doc.generator_prompt_sha256
+    )
+
+    for document in (official_letter_doc, audit_material_doc):
+        row, artifact = bridge_document_to_audit(
+            run_manifest=_run_manifest(),
+            plan=plan,
+            document=document,
+            prompt_bundle=bundle,
+        )
+        assert row is not None
+        assert artifact is not None
+
+
 def test_bridge_emits_target_only_row_and_separate_classification_artifact():
     plan = _coverage_plan()
     cell = _target_cell(plan)
@@ -215,6 +285,7 @@ def test_bridge_emits_target_only_row_and_separate_classification_artifact():
         run_manifest=_run_manifest(),
         plan=plan,
         document=_bridge_document(cell),
+        prompt_bundle=build_prompt_bundle(),
     )
 
     assert set(row.to_csv_dict()) == set(REQUIRED_COLUMNS)
@@ -229,12 +300,44 @@ def test_bridge_emits_target_only_row_and_separate_classification_artifact():
     assert artifact.requires_review is False
 
 
+def test_other_document_form_clash_still_reaches_the_audit_bundle():
+    """``other`` 자유텍스트만 다를 때 두 계산이 갈라져 **건이 통째로 사라졌다.**
+
+    ``pipeline._compare_consistency``는 둘 다 ``other``면
+    ``other_document_form``까지 비교해 ``document_form_match=False``를 냈는데,
+    ``ClassificationAuditArtifact``는 같은 값을 enum 동등성만으로 다시 계산해
+    ``True``로 봤다. 그 둘이 어긋나면 아티팩트 검증이
+    ``comparison does not match source/target/validation labels``로 거부하므로,
+    감사 번들에 담기지 못하고 조용히 빠졌다.
+
+    이제 양쪽이 ``contracts.document_form_matches`` 하나를 쓴다. 이 건은
+    "불일치"로 **기록되면서** 사람 검토로 라우팅되어야 한다 — 사라지는 것이
+    아니다.
+    """
+
+    plan = _coverage_plan()
+
+    row, artifact = bridge_document_to_audit(
+        run_manifest=_run_manifest(),
+        plan=plan,
+        document=_bridge_document(_target_cell(plan), other_form_clash=True),
+        prompt_bundle=build_prompt_bundle(),
+    )
+
+    assert row is not None
+    assert artifact is not None
+    assert artifact.comparison.document_form_match is False
+    assert artifact.review_reasons == ("document_type_mismatch",)
+    assert artifact.requires_review
+
+
 def test_document_form_mismatch_is_preserved_as_review_reason():
     plan = _coverage_plan()
     _, artifact = bridge_document_to_audit(
         run_manifest=_run_manifest(),
         plan=plan,
         document=_bridge_document(_target_cell(plan), mismatch=True),
+        prompt_bundle=build_prompt_bundle(),
     )
 
     assert artifact.requires_review
@@ -255,6 +358,7 @@ def test_prompt_hash_mismatch_is_rejected_before_audit():
                 _target_cell(plan),
                 classifier_prompt_sha256=HASH_B,
             ),
+            prompt_bundle=build_prompt_bundle(),
         )
 
 
@@ -277,6 +381,7 @@ def test_coverage_cell_must_match_locked_generation_target():
             run_manifest=_run_manifest(),
             plan=plan,
             document=_bridge_document(wrong_cell),
+            prompt_bundle=build_prompt_bundle(),
         )
 
 
@@ -290,6 +395,7 @@ def test_full_audit_publishes_v2_sidecar_and_common_manifest(tmp_path):
         documents=(_bridge_document(_target_cell(plan)),),
         sample_count=1,
         output_dir=output_dir,
+        prompt_bundle=build_prompt_bundle(),
     )
 
     with (output_dir / "source_generation_audit_input.csv").open(
@@ -305,7 +411,7 @@ def test_full_audit_publishes_v2_sidecar_and_common_manifest(tmp_path):
         output_dir / CLASSIFICATION_ARTIFACTS_FILENAME
     )
     assert loaded.metrics["document_count"] == 1
-    assert loaded.artifacts[0].contract_version == "2.1.0"
+    assert loaded.artifacts[0].contract_version == "2.2.0"
     assert result.common_manifest_sha256 == (
         __import__("hashlib")
         .sha256(result.common_manifest_path.read_bytes())
@@ -324,6 +430,7 @@ def test_sidecar_rejects_tampered_review_decision(tmp_path):
         ),
         sample_count=1,
         output_dir=output_dir,
+        prompt_bundle=build_prompt_bundle(),
     )
     path = output_dir / CLASSIFICATION_ARTIFACTS_FILENAME
     payload = json.loads(path.read_text(encoding="utf-8").strip())

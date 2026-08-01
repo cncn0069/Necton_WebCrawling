@@ -84,6 +84,8 @@ def source_assessment(
     primary_subclause: SubclauseKey | None = None,
     compatible_subclauses: tuple[SubclauseKey, ...] = (),
     role: SourceActorRole = SourceActorRole.APPLICANT,
+    document_form: DocumentForm = DocumentForm.OFFICIAL_LETTER,
+    other_document_form: str | None = None,
 ) -> SourceAssessment:
     span = EvidenceSpan(
         block_id="source:b0",
@@ -91,7 +93,8 @@ def source_assessment(
     )
     if classification == CsoClassification.S:
         source_label = SourceClassification(
-            document_form=DocumentForm.OFFICIAL_LETTER,
+            document_form=document_form,
+            other_document_form=other_document_form,
             classification=classification,
             clause_no=clause,
             subclause_key=subclause,
@@ -101,7 +104,8 @@ def source_assessment(
         evidence_level = SourceEvidenceLevel.DIRECT_LEGAL_EVIDENCE
     else:
         source_label = SourceClassification(
-            document_form=DocumentForm.OFFICIAL_LETTER,
+            document_form=document_form,
+            other_document_form=other_document_form,
             classification=CsoClassification.O,
             rationale="공개 양식만 확인된다.",
         )
@@ -164,10 +168,14 @@ def consistency_assessment(
 
 def accepted_sensitive_assessment(
     text: str = "신청인 김민서의 개인 연락처는 010-1234-5678이다.",
+    *,
+    document_form: DocumentForm = DocumentForm.OFFICIAL_LETTER,
+    other_document_form: str | None = None,
 ) -> SensitiveConsistencyAssessment:
     link = EvidenceSpan(block_id="generated:b0", quote=text)
     return SensitiveConsistencyAssessment(
-        document_form=DocumentForm.OFFICIAL_LETTER,
+        document_form=document_form,
+        other_document_form=other_document_form,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_6,
         subclause_key=SubclauseKey.PETITIONER_PII,

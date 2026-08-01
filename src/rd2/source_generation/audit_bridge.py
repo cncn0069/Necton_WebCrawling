@@ -17,6 +17,7 @@ from rd2.audit.row_contract import AuditContractError, REQUIRED_COLUMNS
 from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.generators.agency_categories import get_agency_category
 from rd2.generators.generation_plan_schema import GenerationPlan
+from rd2.source_generation.classification_taxonomy import ClauseNumber
 from rd2.source_generation.contracts import (
     CONTRACT_SCHEMA_VERSION,
     AuditStageArtifact,
@@ -35,6 +36,7 @@ from rd2.source_generation.contracts import (
     SourceAssessment,
     StageFailure,
     TargetClassification,
+    document_form_matches,
     effective_classification,
 )
 from rd2.source_generation.journal import (
@@ -42,6 +44,7 @@ from rd2.source_generation.journal import (
     record_audit_failure,
     record_audit_success,
 )
+from rd2.source_generation.prompts import PromptBundle
 
 AUDIT_BRIDGE_VERSION = "source-generation-audit-bridge-v3"
 
@@ -67,7 +70,7 @@ class AuditCoverageAssignment(ContractModel):
 
 
 class AuditBridgeDocument(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_manifest_key: NonEmptyText
     source_sha256: Sha256Hex
@@ -102,7 +105,7 @@ class AuditBridgeDocument(ContractModel):
 class ClassificationAuditArtifact(ContractModel):
     """Separate source/target/validation labels; generated body is absent."""
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     bridge_version: Literal["source-generation-audit-bridge-v3"] = (
         AUDIT_BRIDGE_VERSION
     )
@@ -146,9 +149,9 @@ class ClassificationAuditArtifact(ContractModel):
                 for assertion in self.consistency_assessment.assertions
             )
         expected_comparison = ConsistencyComparison(
-            document_form_match=(
-                self.consistency_assessment.document_form
-                == source_classification.document_form
+            document_form_match=document_form_matches(
+                self.consistency_assessment,
+                source_classification,
             ),
             classification_match=(
                 effective_classification(
@@ -338,6 +341,7 @@ def bridge_document_to_audit(
     run_manifest: RunManifest,
     plan: GenerationPlan,
     document: AuditBridgeDocument,
+    prompt_bundle: PromptBundle,
 ) -> tuple[GenerationAuditBridgeRow, ClassificationAuditArtifact]:
     """Validate all cross-contract links and produce target-only + classification views."""
 
@@ -346,11 +350,24 @@ def bridge_document_to_audit(
             f"run manifest에 없는 source document: {document.source_document_id!r}"
         )
     result = document.pipeline_result
+    assert result.source_assessment is not None
     assert result.generation_plan is not None
     assert result.generation_artifact is not None
     assert result.classification_receipt is not None
     assert result.validation_receipt is not None
     target = result.generation_plan.final_target
+
+    # generator 프롬프트는 이제 문서마다 잠긴 document_form으로 필터링되므로
+    # run_manifest.generator_prompt_sha256(번들 버전 표시용 고정값) 하나와
+    # 비교할 수 없다 — 같은 배치 안에서 회의록 문서와 감사자료 문서가 서로
+    # 다른(둘 다 정당한) 해시를 갖는 게 정상이다. 대신 이 문서의
+    # source_assessment.document_form으로 pipeline.py가 실제로 썼던 것과
+    # 같은 계산을 다시 실행해 기대값을 구한다.
+    expected_generator_prompt_sha256 = prompt_bundle.generator_definition_for_form(
+        result.source_assessment.source_classification.document_form,
+        sensitive=(target.clause_no == ClauseNumber.CLAUSE_6),
+        subclause_key=target.subclause_key,
+    ).sha256
 
     prompt_pairs = (
         (
@@ -360,7 +377,7 @@ def bridge_document_to_audit(
         ),
         (
             document.generator_prompt_sha256,
-            run_manifest.generator_prompt_sha256,
+            expected_generator_prompt_sha256,
             "generator",
         ),
         (
@@ -703,6 +720,7 @@ def run_source_generation_audit(
     documents: Sequence[AuditBridgeDocument],
     sample_count: int,
     output_dir: Path | str,
+    prompt_bundle: PromptBundle,
     pdf_dir: Path | None = None,
 ) -> AuditBridgeRunResult:
     """Publish bridge inputs, run the existing audit, then publish one common marker."""
@@ -725,6 +743,7 @@ def run_source_generation_audit(
             run_manifest=run_manifest,
             plan=plan,
             document=document,
+            prompt_bundle=prompt_bundle,
         )
         rows.append(row)
         artifacts.append(artifact)

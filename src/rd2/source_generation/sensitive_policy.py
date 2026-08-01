@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from rd2.source_generation.classification_taxonomy import SubclauseKey
 from rd2.source_generation.contracts import (
     IdentificationStrength,
     SensitiveAssertion,
@@ -13,21 +14,30 @@ from rd2.source_generation.contracts import (
     SensitiveVerdict,
 )
 
-SENSITIVE_POLICY_VERSION = "source-sensitive-policy-2026-07-29-v1"
+SENSITIVE_POLICY_VERSION = "source-sensitive-policy-2026-08-01-v3"
 
-_EMPLOYEE_O_ATTRIBUTES = frozenset(
-    {
-        SensitiveAttributeKind.BUSINESS_IDENTITY,
-        SensitiveAttributeKind.BUSINESS_CONTACT,
-        SensitiveAttributeKind.PERSONNEL_EVALUATION,
-        SensitiveAttributeKind.DISCIPLINE,
-    }
-)
 _ALWAYS_O_ATTRIBUTES = frozenset(
     {
         SensitiveAttributeKind.BUSINESS_IDENTITY,
         SensitiveAttributeKind.BUSINESS_CONTACT,
     }
+)
+_ATTRIBUTE_SUBCLAUSE = {
+    SensitiveAttributeKind.PERSONNEL_EVALUATION: SubclauseKey.PERSONNEL_PII,
+    SensitiveAttributeKind.DISCIPLINE: SubclauseKey.PERSONNEL_PII,
+    SensitiveAttributeKind.WELFARE_CIRCUMSTANCE: SubclauseKey.WELFARE_PII,
+    SensitiveAttributeKind.APPLICATION_CIRCUMSTANCE: SubclauseKey.PETITIONER_PII,
+}
+_ROLE_SUBCLAUSE = {
+    SensitiveSubjectRole.PETITIONER: SubclauseKey.PETITIONER_PII,
+    SensitiveSubjectRole.JOB_APPLICANT: SubclauseKey.PERSONNEL_PII,
+    SensitiveSubjectRole.BENEFICIARY: SubclauseKey.WELFARE_PII,
+    SensitiveSubjectRole.EMPLOYEE: SubclauseKey.PERSONNEL_PII,
+    SensitiveSubjectRole.INVESTIGATION_SUBJECT: SubclauseKey.SUBJECT_PII,
+}
+_INVESTIGATION_FACT_PATTERN = re.compile(
+    r"(?:구체적\s*)?(?:위반\s*(?:혐의|사실|행위)|혐의|진술|조사\s*(?:내용|경위|결과)|"
+    r"확보\s*증거|신문\s*내용)"
 )
 _GENERIC_SUBJECTS = frozenset(
     {
@@ -85,7 +95,13 @@ def render_sensitive_policy_guidance() -> str:
 - 사람 이름만 있으면 O다.
 - 신청인·민원인·지원자 등 외부인의 구체적인 가상 개인정보 또는 개인 사정이
   식별 가능한 주체와 같은 문장·key-value 항목·표 행에서 연결되면 S다.
-- 직원의 이름·부서·직위·업무 연락처, 인사평가, 징계내역은 이 연구 정책에서 O다.
+- 직원의 이름·부서·직위·업무 연락처만 있으면 O다.
+- 식별 가능한 직원과 개인별 근무평정 또는 징계처분이 같은 문장·key-value 항목·
+  표 행에서 직접 연결되면 인사·채용 개인정보의 S다.
+- 식별 가능한 조사대상자와 구체적인 위반 혐의·진술·조사내용이 직접 연결되면
+  조사대상자 개인정보의 S다. 그 사람이 직원이라는 이유만으로 O로 바꾸지 않는다.
+- 위 근거를 구조화할 때 subject_role은 employee가 아니라 investigation_subject
+  또는 case_subject로 두고 조사대상자 개인정보 세부유형으로 판정한다.
 - 직원의 주민·외국인등록번호, 여권·운전면허번호, 개인 연락처·주소, 계좌·급여,
   건강·장애정보는 특정 직원과 연결되면 S다.
 - 개인별 행이나 식별자가 없는 집계·통계는 O다.
@@ -148,13 +164,6 @@ def validate_sensitive_assertion(assertion: SensitiveAssertion) -> None:
         raise ValueError(
             f"{assertion.attribute_kind.value} is O under the source-sensitive policy"
         )
-    if (
-        assertion.subject_role == SensitiveSubjectRole.EMPLOYEE
-        and assertion.attribute_kind in _EMPLOYEE_O_ATTRIBUTES
-    ):
-        raise ValueError(
-            f"employee {assertion.attribute_kind.value} is O under the research policy"
-        )
     if assertion.identification_strength == IdentificationStrength.MASKED:
         if not (
             _MASK_PATTERN.search(assertion.subject_span.quote)
@@ -170,12 +179,43 @@ def validate_sensitive_assertion(assertion: SensitiveAssertion) -> None:
         )
 
 
+def _expected_subclause(assertion: SensitiveAssertion) -> SubclauseKey | None:
+    """Return the subtype that can be decided from structured assertion facts.
+
+    Attribute semantics take priority over a person's incidental role.  In
+    particular, an employee linked to a concrete allegation remains
+    ``subject_pii``; merely labelling the person ``employee`` must not turn the
+    same fact into ``personnel_pii``.
+    """
+
+    attribute_subclause = _ATTRIBUTE_SUBCLAUSE.get(assertion.attribute_kind)
+    if attribute_subclause is not None:
+        return attribute_subclause
+    if assertion.attribute_kind is SensitiveAttributeKind.OTHER_PERSONAL_FACT:
+        investigation_text = (
+            assertion.value_span.quote + " " + assertion.link_span.quote
+        )
+        if _INVESTIGATION_FACT_PATTERN.search(investigation_text):
+            return SubclauseKey.SUBJECT_PII
+    return _ROLE_SUBCLAUSE.get(assertion.subject_role)
+
+
 def validate_sensitive_assessment(
     assessment: SensitiveConsistencyAssessment,
 ) -> None:
     for assertion in assessment.assertions:
         validate_sensitive_assertion(assertion)
     if assessment.sensitivity_verdict == SensitiveVerdict.ACCEPTED_S:
+        assert assessment.subclause_key is not None
+        for assertion in assessment.assertions:
+            expected_subclause = _expected_subclause(assertion)
+            if expected_subclause is not None:
+                if assessment.subclause_key is not expected_subclause:
+                    raise ValueError(
+                        f"{assertion.attribute_kind.value}/{assertion.subject_role.value} "
+                        f"requires subclause {expected_subclause.value}, not "
+                        f"{assessment.subclause_key.value}"
+                    )
         if not any(
             assertion.identification_strength == IdentificationStrength.DIRECT
             for assertion in assessment.assertions

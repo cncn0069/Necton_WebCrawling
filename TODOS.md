@@ -578,3 +578,28 @@
 **Effort:** M
 **Priority:** P1
 **Depends on:** 3단계 source-generation v2 파이프라인 및 journal·audit migration 완료
+
+### journal/RunManifest 기존 실행 기록과 document_form별 fingerprint 호환
+
+**What:** generator 프롬프트를 locked document_form별로 필터링하도록 바꾸면
+`JournalIdentity.generator_prompt_sha256`(journal.py)과
+`RunManifest.generator_prompt_sha256`(audit_bridge.py)의 의미가 "번들 전체의
+고정 해시 하나"에서 "문서형식별로 달라지는 해시"로 바뀐다. 이 변경 이전에 이미
+저장된 journal 기록·RunManifest가 새 비교 로직에서도 재개(resume) 가능한지는
+다루지 않았다.
+
+**Why:** 안 다루면 기존 실행 도중 배치를 새 코드로 재개할 때 예상치 못하게
+전체 재실행되거나(캐시 무효화), 반대로 다른 문서형식인데도 같은 것으로
+오인해 재개할 위험이 있다.
+
+**Context:** 2026-07-31 plan-eng-review에서 generator 프롬프트 document_form
+필터링 설계를 확정하면서(관련 논의: `src/rd2/source_generation/prompts.py`의
+`GENERATOR_SYSTEM_PROMPT`, `journal.py`의 `JournalIdentity.from_pipeline`,
+`audit_bridge.py`의 `bridge_document_to_audit` 내 `prompt_pairs` 비교) 실제로
+재개해야 할 대규모 기존 배치가 있는지 불확실해 이번 스코프에서는 제외했다.
+운영 규모 배치가 생기면 재검토.
+
+**Effort:** S~M
+**Priority:** P3
+**Depends on:** generator 프롬프트 document_form 필터링(journal/audit_bridge
+fingerprint 재구조화) 구현 완료

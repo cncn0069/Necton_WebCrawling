@@ -47,12 +47,16 @@ def _assertion(
     )
 
 
-def _accepted(assertion: SensitiveAssertion) -> SensitiveConsistencyAssessment:
+def _accepted(
+    assertion: SensitiveAssertion,
+    *,
+    subclause: SubclauseKey = SubclauseKey.PETITIONER_PII,
+) -> SensitiveConsistencyAssessment:
     return SensitiveConsistencyAssessment(
         document_form=DocumentForm.REPLY_NOTICE,
         classification=CsoClassification.S,
         clause_no=ClauseNumber.CLAUSE_6,
-        subclause_key=SubclauseKey.PETITIONER_PII,
+        subclause_key=subclause,
         evidence_spans=(assertion.link_span,),
         rationale="식별 가능한 외부인과 구체 개인정보가 연결된다.",
         sensitivity_verdict=SensitiveVerdict.ACCEPTED_S,
@@ -112,28 +116,46 @@ def test_external_person_linked_to_health_or_welfare_fact_is_s():
         role=SensitiveSubjectRole.BENEFICIARY,
         attribute=SensitiveAttributeKind.WELFARE_CIRCUMSTANCE,
     )
-    validate_sensitive_assessment(_accepted(assertion))
+    validate_sensitive_assessment(
+        _accepted(assertion, subclause=SubclauseKey.WELFARE_PII)
+    )
+
+
+def test_employee_business_contact_is_o():
+    assertion = _assertion(
+        subject="담당자 김민서",
+        value="02-2133-1234",
+        link="담당자 김민서의 업무 연락처는 02-2133-1234이다.",
+        role=SensitiveSubjectRole.EMPLOYEE,
+        attribute=SensitiveAttributeKind.BUSINESS_CONTACT,
+    )
+
+    with pytest.raises(ValueError, match="is O"):
+        validate_sensitive_assessment(_accepted(assertion))
 
 
 @pytest.mark.parametrize(
     "attribute,value",
     [
-        (SensitiveAttributeKind.BUSINESS_CONTACT, "02-2133-1234"),
         (SensitiveAttributeKind.PERSONNEL_EVALUATION, "근무평정 A등급"),
         (SensitiveAttributeKind.DISCIPLINE, "감봉 1개월"),
     ],
 )
-def test_employee_business_and_personnel_policy_fields_are_o(attribute, value):
+def test_identified_employee_personnel_evaluation_and_discipline_are_s(
+    attribute,
+    value,
+):
     assertion = _assertion(
-        subject="담당자 김민서",
+        subject="직원 김민서",
         value=value,
-        link=f"담당자 김민서의 정보는 {value}이다.",
+        link=f"직원 김민서의 개인별 인사정보는 {value}이다.",
         role=SensitiveSubjectRole.EMPLOYEE,
         attribute=attribute,
     )
 
-    with pytest.raises(ValueError, match="is O"):
-        validate_sensitive_assessment(_accepted(assertion))
+    validate_sensitive_assessment(
+        _accepted(assertion, subclause=SubclauseKey.PERSONNEL_PII)
+    )
 
 
 def test_employee_national_id_is_s():
@@ -144,7 +166,9 @@ def test_employee_national_id_is_s():
         role=SensitiveSubjectRole.EMPLOYEE,
         attribute=SensitiveAttributeKind.NATIONAL_ID,
     )
-    validate_sensitive_assessment(_accepted(assertion))
+    validate_sensitive_assessment(
+        _accepted(assertion, subclause=SubclauseKey.PERSONNEL_PII)
+    )
 
 
 def test_aggregate_without_person_rows_is_o():

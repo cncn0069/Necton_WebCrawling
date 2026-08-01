@@ -32,6 +32,7 @@ from rd2.source_generation.classification_taxonomy import (
     DocumentForm,
 )
 from rd2.source_generation.contracts import (
+    DRAFT_BLANK_HEADER_KEYS,
     GeneratedDocumentIR,
     GenerationTarget,
 )
@@ -73,7 +74,10 @@ HEADER_KEYS_BY_FORM: Mapping[DocumentForm, tuple[str, ...]] = MappingProxyType(
         DocumentForm.INVESTIGATION_REPORT: ("사건번호", "작성일자", "조사대상자", "소속"),
         DocumentForm.PRESS_RELEASE: ("배포일시", "담당부서", "담당자", "연락처"),
         DocumentForm.ADMINISTRATIVE_RULE: ("고시번호", "시행일자", "소관부서"),
-        DocumentForm.OTHER: HEADER_KEYS,
+        # ``other``는 시행문 폴백이 아니라 정의된 16개 형식 **밖**의 형식이다.
+        # 빈 tuple은 "원문에서 식별된 형식의 표제부를 동적으로 사용"한다는
+        # sentinel이며, 아래 렌더러와 검사기가 별도로 처리한다.
+        DocumentForm.OTHER: (),
     }
 )
 
@@ -89,19 +93,91 @@ def header_keys_for(document_form: DocumentForm | None) -> tuple[str, ...]:
     return HEADER_KEYS_BY_FORM[document_form]
 
 
-def render_header_key_guidance() -> str:
-    """문서형식별 표제부를 프롬프트 섹션으로 렌더링한다."""
+def render_header_key_guidance(
+    document_form: DocumentForm | None = None,
+) -> str:
+    """문서형식별 표제부를 프롬프트 섹션으로 렌더링한다.
+
+    ``document_form``을 주면 그 형식 하나의 표제부만 보여준다 —
+    ``header_keys_for``를 그대로 재사용한다. generator는 이미 잠긴 형식
+    하나만 알면 되므로 17개 형식을 전부 나열할 이유가 없다. ``None``이면
+    기존처럼 전체 형식을 나열한다.
+    """
 
     lines = ["[문서형식별 표제부]"]
-    for form in DocumentForm:
+    forms = (document_form,) if document_form is not None else tuple(DocumentForm)
+    for form in forms:
         label = DOCUMENT_FORM_DEFINITIONS[form].label
-        keys = " / ".join(HEADER_KEYS_BY_FORM[form])
+        if form is DocumentForm.OTHER:
+            keys = "원문에서 식별되는 목록 밖 형식의 표제부 항목"
+        else:
+            keys = " / ".join(header_keys_for(form))
         lines.append(f"- {form.value} ({label}): {keys}")
     lines.append("")
     lines.append(
-        f"위 항목 중 원문에 실제로 있는 것을 그대로 쓰고 최소 {MIN_HEADER_KEYS}개를 "
-        "채운다. 원문 표제부에 목록에 없는 항목이 더 있으면 함께 유지한다."
+        f"위 항목 중 원문에 실제로 있는 것을 그대로 쓰고 최소 {MIN_HEADER_KEYS}개 "
+        "항목을 둔다. 해당 형식의 표제부에 문서번호·시행일자가 있고 초안이면 "
+        "그 항목은 남기되 값을 비운다. "
+        "원문 표제부에 목록에 없는 항목이 더 있으면 함께 유지한다."
     )
+    return "\n".join(lines)
+
+
+def render_generator_form_section(document_form: DocumentForm) -> str:
+    """생성기가 받는 **문서형식 절 하나**. 정의·표제부·본문 구성이 한 덩어리다.
+
+    이전에는 같은 문서형식 얘기가 세 절로 흩어져 있었다 — 판별용 정의
+    (``render_document_form_guidance``), 생성 상세
+    (``render_generation_detail_guidance``), 표제부
+    (``render_header_key_guidance``). 세 함수에서 왔다는 것이 유일한 이유였고,
+    생성기 입장에서는 전부 "지금 쓸 이 형식 하나"에 대한 지시라 나눌 근거가
+    없었다. 게다가 판별용 ``포함:``은 "이런 게 있으면 이 형식이다"라는 **증거**
+    목록인데 생성기에게는 "이런 걸 넣어라"로 읽혀야 해서, 같은 데이터를 그대로
+    붙이면 뜻이 어긋난다.
+
+    데이터 출처는 그대로 둔다 — ``HEADER_KEYS_BY_FORM``은 ``check_document_form``
+    이 검사에 쓰는 바로 그 표이고, 정의·생성 상세·필수요소·변형 목록은
+    ``DOCUMENT_FORM_DEFINITIONS``다. 판별용 ``includes``는 사용하지 않는다.
+    """
+
+    definition = DOCUMENT_FORM_DEFINITIONS[document_form]
+    keys = header_keys_for(document_form)
+    if document_form is DocumentForm.OTHER:
+        header_lines = (
+            "표제부 항목: 원문에서 식별되는 목록 밖 형식의 항목",
+            f"- 첫 block은 그 형식의 실제 표제부를 담은 key_value로 시작하고 최소 "
+            f"{MIN_HEADER_KEYS}개 항목을 둔다. 신청서·접수대장·확인서에 공문 전용 "
+            "문서번호·수신·시행일자를 새로 강제하지 않는다.",
+            "- 형식 자체를 식별할 수 없으면 자료명·작성일처럼 중립적인 항목으로 "
+            "최소 표제부를 구성한다.",
+        )
+    else:
+        header_lines = (
+            f"표제부 항목: {' / '.join(keys)}",
+            f"- 첫 block은 위 항목을 담은 key_value로 시작하고, 최소 {MIN_HEADER_KEYS}개 "
+            "항목을 둔다. 위 표제부에 문서번호·시행일자가 있고 초안이면 그 항목은 "
+            "남기되 값을 비운다. 원문 표제부에 다른 항목이 더 있으면 함께 유지한다.",
+            '- 문서번호를 쓰는 형식이면 "부서명-일련번호" 형식으로 적는다.',
+        )
+    lines = [
+        f"[이 문서의 형식: {document_form.value} ({definition.label})]",
+        definition.definition,
+        "",
+        *header_lines,
+        "",
+        f"본문 구성: {definition.generation_detail}",
+        "",
+        "이 형식이면 항상 필요한 요소:",
+    ]
+    lines.extend(f"- {item}" for item in definition.required_elements)
+    lines.extend(
+        (
+            "",
+            "원문 업무와 목표 조항에 맞는 변형을 아래에서 하나만 선택한다. "
+            "서로 다른 변형을 한 문서에 섞지 않는다:",
+        )
+    )
+    lines.extend(f"- {item}" for item in definition.variant_patterns)
     return "\n".join(lines)
 
 #: 결재란을 나타내는 ``table`` block의 열 이름 후보.
@@ -130,12 +206,13 @@ class DocumentFormReport:
         return not self.missing
 
 
-def _key_value_keys(document: GeneratedDocumentIR) -> set[str]:
-    keys: set[str] = set()
+def _key_value_values(document: GeneratedDocumentIR) -> dict[str, tuple[str, ...]]:
+    values: dict[str, list[str]] = {}
     for block in document.blocks:
         if block.kind == "key_value":
-            keys.update(entry.key for entry in block.entries)
-    return keys
+            for entry in block.entries:
+                values.setdefault(entry.key, []).append(entry.value)
+    return {key: tuple(items) for key, items in values.items()}
 
 
 def _has_approval_table(document: GeneratedDocumentIR) -> bool:
@@ -165,9 +242,43 @@ def check_document_form(
     """
 
     expected_header = header_keys_for(document_form)
-    keys = _key_value_keys(document)
-    present_header = [name for name in expected_header if name in keys]
-    has_header = len(present_header) >= min(MIN_HEADER_KEYS, len(expected_header))
+    values_by_key = _key_value_values(document)
+    present_header = [name for name in expected_header if name in values_by_key]
+    if document_form is DocumentForm.OTHER:
+        first_block = document.blocks[0]
+        has_header = (
+            first_block.kind == "key_value"
+            and len(first_block.entries) >= MIN_HEADER_KEYS
+        )
+    else:
+        has_header = len(present_header) >= min(
+            MIN_HEADER_KEYS, len(expected_header)
+        )
+
+    is_draft = AdminStatus.DRAFT in target.administrative_statuses
+    if document_form is DocumentForm.OTHER:
+        # ``other``의 표제부 키는 원문 형식에서 동적으로 온다. 그 형식이 실제로
+        # 문서번호·시행일자를 쓰는 경우에만 공란 규칙을 적용하고, 신청서 등에
+        # 존재하지 않는 시행문 키를 새로 요구하지 않는다.
+        blankable_header_keys = tuple(
+            key for key in DRAFT_BLANK_HEADER_KEYS if key in values_by_key
+        )
+    else:
+        blankable_header_keys = tuple(
+            key for key in expected_header if key in DRAFT_BLANK_HEADER_KEYS
+        )
+    header_value_errors: list[str] = []
+    if is_draft:
+        for key in blankable_header_keys:
+            values = values_by_key.get(key)
+            if values is None:
+                header_value_errors.append(f"초안 표제부 {key} 항목 없음")
+            elif any(value for value in values):
+                header_value_errors.append(f"초안 표제부 {key} 값은 공란이어야 함")
+    else:
+        for key in DRAFT_BLANK_HEADER_KEYS:
+            if any(not value for value in values_by_key.get(key, ())):
+                header_value_errors.append(f"확정 문서 표제부 {key} 값이 비어 있음")
 
     has_approval = _has_approval_table(document)
     has_attachment = any(
@@ -176,8 +287,12 @@ def check_document_form(
 
     missing: list[str] = []
     if not has_header:
-        absent = [name for name in expected_header if name not in keys]
-        missing.append("문서 머리 정보 부족: " + ", ".join(absent))
+        if document_form is DocumentForm.OTHER:
+            missing.append("목록 밖 형식의 첫 key_value 표제부 항목 2개 미만")
+        else:
+            absent = [name for name in expected_header if name not in values_by_key]
+            missing.append("문서 머리 정보 부족: " + ", ".join(absent))
+    missing.extend(header_value_errors)
     if not has_approval and any(
         status in STATUS_REQUIRES_APPROVAL_BLOCK
         for status in target.administrative_statuses

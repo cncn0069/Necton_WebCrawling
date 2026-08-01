@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 from html import escape
 import json
 import os
@@ -26,6 +25,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from dotenv import load_dotenv  # noqa: E402
@@ -123,41 +123,6 @@ def _targets() -> list[GenerationTarget]:
             )
         )
     return targets
-
-
-def _sensitive_seed(source_document_id: str, target: GenerationTarget) -> str:
-    """원문 값과 무관한 자연스러운 형식의 결정론적 가상 개인정보 seed."""
-
-    digest = hashlib.sha256(
-        f"{source_document_id}:{target.subclause_key.value}".encode("utf-8")
-    ).digest()
-    names = ("김민서", "박서윤", "이도윤", "최하린", "정시우", "한유진")
-    name = names[digest[0] % len(names)]
-    middle = 2000 + int.from_bytes(digest[1:3], "big") % 7000
-    last = 1000 + int.from_bytes(digest[3:5], "big") % 9000
-    phone = f"010-{middle:04d}-{last:04d}"
-    subclause = target.subclause_key
-    if subclause is None:
-        raise ValueError("source-sensitive target requires a subclause")
-    scenarios = {
-        "petitioner_pii": (
-            f"민원인 {name}, 휴대전화 {phone}, 공동주택 야간소음 피해로 "
-            "수면장애 상담을 요청함"
-        ),
-        "personnel_pii": (
-            f"채용 지원자 {name}, 개인 휴대전화 {phone}, 사회복지사 1급 자격과 "
-            "지역복지관 근무경력 4년"
-        ),
-        "welfare_pii": (
-            f"복지급여 신청인 {name}, 휴대전화 {phone}, 장애인연금 신청 및 "
-            "진단등급 3급"
-        ),
-        "subject_pii": (
-            f"조사대상자 {name}, 개인 휴대전화 {phone}, 현장점검 당시 제출한 "
-            "개인 진술 내용"
-        ),
-    }
-    return scenarios[subclause.value]
 
 
 def _receipt_json(receipt) -> dict | None:
@@ -421,10 +386,6 @@ def main() -> int:
                 config=config,
                 selection_config=selection_config,
                 prompt_bundle=prompt_bundle,
-                sensitive_seed=_sensitive_seed(
-                    snapshot.source_document_id,
-                    target,
-                ),
             )
             result = sensitive_run.final_result
 

@@ -129,3 +129,49 @@ def test_byte_length_offsets_no_longer_break_valid_evidence():
     assert validate_evidence_quotes((span,), lambda block_id: text) == (span,)
     assert "start" not in EvidenceSpan.model_fields
     assert "end" not in EvidenceSpan.model_fields
+
+
+def test_error_names_the_quote_that_failed():
+    """실측(2026-08-01): 오류가 block ID만 말해서 원인을 추측만 했다.
+
+    같은 ``not found``라도 문장을 지어낸 것과 block 경계를 넘어 인용한 것은
+    고치는 방법이 다르다. 인용문과 어디까지 맞았는지를 오류에 남겨야 다음
+    실행에서 구분할 수 있다.
+    """
+
+    with pytest.raises(EvidenceResolutionError, match="점검을 실시하고"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="점검을 실시하고 그 결과를 제출한다"),),
+            lambda block_id: "점검을 실시하고 그 결과를 붙임과 같이 알려드립니다.",
+        )
+
+
+def test_error_tells_a_boundary_overrun_apart_from_a_fabrication():
+    """앞부분이 맞으면 경계를 넘긴 것, 앞부분조차 없으면 다른 block이거나 지어낸 것."""
+
+    block = "광운대역 물류부지 개발사업-상업용지 현장에 대해 점검을 실시하고 그 결과를 알려드립니다."
+
+    with pytest.raises(EvidenceResolutionError, match="앞 24자는 이 block에 있다"):
+        validate_evidence_quotes(
+            (
+                EvidenceSpan(
+                    block_id="b1",
+                    quote="광운대역 물류부지 개발사업-상업용지 현장에 대해 점검을 실시하고 인·허가청에 제출하고",
+                ),
+            ),
+            lambda block_id: block,
+        )
+
+    with pytest.raises(EvidenceResolutionError, match="앞부분도 이 block에 없다"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="시공사는 조속히 시정하여 그 결과를"),),
+            lambda block_id: block,
+        )
+
+
+def test_ambiguous_error_also_names_the_quote():
+    with pytest.raises(EvidenceResolutionError, match="반복 구간"):
+        validate_evidence_quotes(
+            (EvidenceSpan(block_id="b1", quote="반복 구간"),),
+            lambda block_id: "반복 구간 그리고 반복 구간",
+        )

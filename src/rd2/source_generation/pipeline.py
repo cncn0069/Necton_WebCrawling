@@ -41,6 +41,7 @@ from rd2.source_generation.contracts import (
     ConsistencyComparison,
     DocumentPipelineResult,
     DocumentSelection,
+    EvidenceSpan,
     FailureCode,
     FailureStage,
     GeneratedDocumentIR,
@@ -50,9 +51,13 @@ from rd2.source_generation.contracts import (
     GenerationProvenance,
     GenerationRoute,
     GenerationTarget,
+    IdentificationStrength,
     PLANNER_POLICY_VERSION,
     RepairCode,
+    SensitiveAssertion,
     SensitiveConsistencyAssessment,
+    SensitiveMonitorAssertion,
+    SensitiveMonitorDecision,
     SensitivePipelineStatus,
     SensitiveVerdict,
     SourceAssessment,
@@ -61,6 +66,8 @@ from rd2.source_generation.contracts import (
     StageFailure,
     TargetClassification,
     TokenUsage,
+    condense_whitespace,
+    document_form_matches,
     effective_classification,
 )
 from rd2.source_generation.document_select import (
@@ -68,6 +75,11 @@ from rd2.source_generation.document_select import (
     SelectionConfig,
     render_full_source,
     render_selected_source,
+)
+from rd2.source_generation.document_form_compatibility import (
+    FORM_SUBCLAUSE_COMPATIBILITY_VERSION,
+    FormSubclauseCompatibility,
+    form_subclause_compatibility,
 )
 from rd2.source_generation.evidence import validate_evidence_quotes
 from rd2.source_generation.legacy_synthetic import (
@@ -612,11 +624,15 @@ _PLANNER_POLICY_PAYLOAD = {
     },
     "admin_only": GenerationRoute.ADMINISTRATIVE_AUGMENTED.value,
     "compatible_subclause_required": True,
-    # 요청 목표가 호환되지 않을 때 문서를 버리지 않고 판별기가 낸
-    # ``primary_subclause``로 대체한다. 이 동작이 계획의 일부이므로 policy hash에
-    # 실어 과거 계획을 무효화한다 — 이전 값은 목록 첫 값을 쓰는
-    # ``substitute_first_compatible``이었다.
-    "incompatible_request": "substitute_primary_subclause",
+    # ``primary_subclause``는 원문에 가장 가까운 세부유형이지 생성 목표가 아니다.
+    # 반사실 생성은 원문 판별 결과와 다른 목표를 의도적으로 구현하므로, 두 값이
+    # 달라도 요청 목표를 그대로 유지한다.
+    "incompatible_request": "preserve_requested_target",
+    "form_subclause_compatibility": {
+        "version": FORM_SUBCLAUSE_COMPATIBILITY_VERSION,
+        "conflict": "substitute_first_non_conflicting_source_candidate",
+        "no_candidate": FailureCode.SOURCE_INCOMPATIBLE.value,
+    },
     "seed_assembly": SEED_ASSEMBLY_VERSION,
 }
 
@@ -647,6 +663,66 @@ def _source_aligned_target(
     )
 
 
+def _resolve_form_subclause_conflict(
+    *,
+    assessment: SourceAssessment,
+    target: GenerationTarget,
+) -> GenerationTarget:
+    """Keep an impossible form/target pair out of the generator prompt.
+
+    For an O-source counterfactual route, the classifier has already ranked the
+    subclauses that fit the source context.  Choose the first candidate that is
+    not a hard form conflict.  For an S-source route the source subclause is the
+    legal evidence itself, so silently changing it would falsify provenance;
+    reject that source instead.
+    """
+
+    subclause_key = target.subclause_key
+    if subclause_key is None:
+        return target
+
+    document_form = assessment.source_classification.document_form
+    if (
+        form_subclause_compatibility(document_form, subclause_key)
+        is not FormSubclauseCompatibility.CONFLICT
+    ):
+        return target
+
+    if assessment.source_classification.classification == CsoClassification.S:
+        raise GenerationPlanningError(
+            FailureCode.SOURCE_INCOMPATIBLE,
+            (
+                "source legal target conflicts with its locked document form: "
+                f"{document_form.value} × {subclause_key.value}"
+            ),
+        )
+
+    for candidate in assessment.candidate_subclauses:
+        if (
+            form_subclause_compatibility(document_form, candidate)
+            is FormSubclauseCompatibility.CONFLICT
+        ):
+            continue
+        candidate_clause = clause_of_subclause(candidate)
+        return GenerationTarget(
+            classification=TargetClassification(
+                expected_classification(candidate_clause).value
+            ),
+            clause_no=candidate_clause,
+            subclause_key=candidate,
+            administrative_statuses=target.administrative_statuses,
+            generation_mode=target.generation_mode,
+        )
+
+    raise GenerationPlanningError(
+        FailureCode.SOURCE_INCOMPATIBLE,
+        (
+            "no source-compatible subclause can preserve locked document form "
+            f"{document_form.value}; rejected target={subclause_key.value}"
+        ),
+    )
+
+
 def build_generation_plan(
     *,
     assessment: SourceAssessment,
@@ -674,41 +750,18 @@ def build_generation_plan(
     if source.classification == CsoClassification.S:
         route = GenerationRoute.SOURCE_ALIGNED
         final_target = _source_aligned_target(assessment, requested_target)
+        final_target = _resolve_form_subclause_conflict(
+            assessment=assessment,
+            target=final_target,
+        )
     else:
         final_target = requested_target
         admin_only = requested_target.clause_no is None
-        if (
-            not admin_only
-            and requested_target.subclause_key
-            not in assessment.candidate_subclauses
-        ):
-            # 요청 목표가 원문과 맞지 않으면 문서를 버리지 않고, 판별기가
-            # 이 원문에 가장 가깝다고 답한 ``primary_subclause``로 **대체**한다.
-            #
-            # 이전에는 여기서 문서를 폐기했다. 그런데 판별기는 바로 앞에서
-            # "이 원문엔 어떤 세부유형이 맞는지"를 이미 답해놓은 상태다 —
-            # 그 답을 읽고도 요청과 다르다는 이유로 버리면, 지불한 판별
-            # 호출과 쓸 수 있었던 근거를 함께 폐기하는 셈이다. 무엇보다
-            # 라운드로빈으로 배정된 요청 목표에는 "이 조항이어야 하는 이유"가
-            # 없고, 판별기의 답에는 원문 문맥이라는 이유가 있다
-            # (``primary_rationale``에 기록된다).
-            #
-            # ``requested_target``은 계획에 그대로 보존되므로 무엇을
-            # 요청했고 무엇으로 바뀌었는지 provenance에 남는다.
-            #
-            # "후보가 없어 대체 불가"라는 실패는 사라졌다 —
-            # ``primary_subclause``가 필수이므로 항상 하나가 있다.
-            substituted = assessment.primary_subclause
-            substituted_clause = clause_of_subclause(substituted)
-            final_target = GenerationTarget(
-                classification=TargetClassification(
-                    expected_classification(substituted_clause).value
-                ),
-                clause_no=substituted_clause,
-                subclause_key=substituted,
-                administrative_statuses=requested_target.administrative_statuses,
-                generation_mode=GenerationMode.COUNTERFACTUAL,
-            )
+
+        final_target = _resolve_form_subclause_conflict(
+            assessment=assessment,
+            target=final_target,
+        )
 
         if admin_only:
             if (
@@ -1144,12 +1197,16 @@ def execute_generation(
                 )
             )
     else:
-        definition_name = (
-            "sensitive_generator"
-            if plan.final_target.clause_no == ClauseNumber.CLAUSE_6
-            else "generator"
+        sensitive = plan.final_target.clause_no == ClauseNumber.CLAUSE_6
+        # document_form은 classifier가 이미 잠갔다(assessment.document_form).
+        # 17개 형식을 전부 담은 정적 definition("generator") 대신, 그 하나로
+        # 필터링된 정의를 매 호출마다 만든다 — fingerprint가 실제로 보낸
+        # 프롬프트와 항상 일치하도록.
+        definition = resolved_prompt_bundle.generator_definition_for_form(
+            assessment.source_classification.document_form,
+            sensitive=sensitive,
+            subclause_key=plan.final_target.subclause_key,
         )
-        definition = resolved_prompt_bundle.definition(definition_name)
         # 호출자가 seed를 주지 않으면 잠긴 판별 결과와 최종 목표만으로 조립한다.
         # 계획 hash가 그 두 입력을 이미 고정하므로 조립 결과도 재현 가능하다.
         if sensitive_seed is None or not sensitive_seed.strip():
@@ -1273,6 +1330,128 @@ def _canonicalize_consistency_assessment(
     return canonicalized
 
 
+def _literal_sensitive_link_quote(
+    item: SensitiveMonitorAssertion,
+    *,
+    document: GeneratedDocumentIR,
+) -> str:
+    """Return a literal same-line link, repairing an abbreviated model quote."""
+
+    block_text = document.block_text(item.block_id)
+    subject = condense_whitespace(item.subject_quote)
+    value = condense_whitespace(item.value_quote)
+    proposed = EvidenceSpan(block_id=item.block_id, quote=item.link_quote)
+    proposed_text = condense_whitespace(item.link_quote)
+    proposed_is_literal = False
+    if subject in proposed_text and value in proposed_text:
+        try:
+            proposed.locate_in(block_text)
+        except ValueError:
+            pass
+        else:
+            proposed_is_literal = True
+
+    candidates = tuple(
+        line
+        for line in block_text.splitlines()
+        if subject in condense_whitespace(line)
+        and value in condense_whitespace(line)
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if proposed_is_literal:
+        return item.link_quote
+    raise ValueError(
+        "sensitive assertion subject and value must share one unique literal "
+        f"line in block {item.block_id!r}; found {len(candidates)}"
+    )
+
+
+def _materialize_sensitive_monitor_decision(
+    decision: SensitiveMonitorDecision,
+    *,
+    document: GeneratedDocumentIR,
+) -> SensitiveConsistencyAssessment:
+    """감시자의 의미 판정을 저장·비교용 법적 판정으로 한 번만 변환한다."""
+
+    assertions = tuple(
+        SensitiveAssertion(
+            subject_role=item.subject_role,
+            subject_span=EvidenceSpan(
+                block_id=item.block_id,
+                quote=item.subject_quote,
+            ),
+            attribute_kind=item.attribute_kind,
+            value_span=EvidenceSpan(
+                block_id=item.block_id,
+                quote=item.value_quote,
+            ),
+            link_span=EvidenceSpan(
+                block_id=item.block_id,
+                quote=_literal_sensitive_link_quote(item, document=document),
+            ),
+            identification_strength=item.identification_strength,
+        )
+        for item in decision.assertions
+    )
+
+    common = {
+        "document_form": decision.document_form,
+        "other_document_form": decision.other_document_form,
+        "rationale": decision.rationale,
+        "sensitivity_verdict": decision.verdict,
+    }
+    if decision.verdict == SensitiveVerdict.ACCEPTED_S:
+        if decision.subclause_key is None:
+            raise ValueError("accepted_s requires a clause 6 subclause")
+        if not assertions:
+            raise ValueError("accepted_s requires at least one sensitive assertion")
+        if any(
+            item.identification_strength != IdentificationStrength.DIRECT
+            for item in assertions
+        ):
+            raise ValueError("accepted_s assertions must be directly identifying")
+        evidence_spans = tuple(
+            {
+                (item.link_span.block_id, item.link_span.quote): item.link_span
+                for item in assertions
+            }.values()
+        )
+        return SensitiveConsistencyAssessment(
+            **common,
+            classification=CsoClassification.S,
+            clause_no=ClauseNumber.CLAUSE_6,
+            subclause_key=decision.subclause_key,
+            evidence_spans=evidence_spans,
+            assertions=assertions,
+        )
+
+    if decision.subclause_key is not None:
+        raise ValueError(
+            f"{decision.verdict.value} requires subclause_key=null"
+        )
+    if decision.verdict == SensitiveVerdict.ASSESSED_O:
+        if assertions:
+            raise ValueError("assessed_o cannot include sensitive assertions")
+        return SensitiveConsistencyAssessment(
+            **common,
+            classification=CsoClassification.O,
+        )
+
+    if not assertions:
+        raise ValueError("hard_case_review requires at least one assertion")
+    if all(
+        item.identification_strength == IdentificationStrength.DIRECT
+        for item in assertions
+    ):
+        raise ValueError("hard_case_review requires a masked or indirect assertion")
+    return SensitiveConsistencyAssessment(
+        **common,
+        classification=CsoClassification.O,
+        assertions=assertions,
+    )
+
+
 def _compare_consistency(
     *,
     assessment: SourceAssessment,
@@ -1280,13 +1459,7 @@ def _compare_consistency(
     consistency: ConsistencyAssessment,
 ) -> ConsistencyComparison:
     source_form = assessment.source_classification
-    document_form_match = consistency.document_form == source_form.document_form
-    if (
-        document_form_match
-        and consistency.document_form.value == "other"
-        and consistency.other_document_form != source_form.other_document_form
-    ):
-        document_form_match = False
+    document_form_match = document_form_matches(consistency, source_form)
 
     subject_role_match = True
     if isinstance(consistency, SensitiveConsistencyAssessment):
@@ -1388,11 +1561,7 @@ def execute_consistency_validation(
     definition = resolved_prompt_bundle.definition(
         "sensitive_validator" if sensitive_contract else "validator"
     )
-    response_model: type[ConsistencyAssessment]
-    if sensitive_contract:
-        response_model = SensitiveConsistencyAssessment
-    else:
-        response_model = ConsistencyAssessment
+    response_model = definition.response_model
 
     try:
         call = gateway.parse(
@@ -1426,7 +1595,14 @@ def execute_consistency_validation(
             ),
         )
 
-    if not isinstance(call.parsed, response_model):
+    # ``SensitiveConsistencyAssessment`` 허용은 새 입력 계약 이전의 테스트·내부
+    # gateway와 저장된 호출을 위한 읽기 호환성이다. 실제 OpenAI 호출은 위의
+    # ``SensitiveMonitorDecision`` JSON schema만 받을 수 있다.
+    legacy_sensitive_result = sensitive_contract and isinstance(
+        call.parsed,
+        SensitiveConsistencyAssessment,
+    )
+    if not isinstance(call.parsed, response_model) and not legacy_sensitive_result:
         return ConsistencyValidationExecution(
             repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
@@ -1435,13 +1611,20 @@ def execute_consistency_validation(
                 message="validator gateway returned the wrong contract type",
             ),
         )
-    consistency = cast(ConsistencyAssessment, call.parsed)
     receipt = _receipt(
         stage=FailureStage.VALIDATION,
         model_id=config.validator_model,
         call=call,
     )
+    consistency: ConsistencyAssessment | None = None
     try:
+        if isinstance(call.parsed, SensitiveMonitorDecision):
+            consistency = _materialize_sensitive_monitor_decision(
+                call.parsed,
+                document=artifact.generated_document,
+            )
+        else:
+            consistency = cast(ConsistencyAssessment, call.parsed)
         consistency = _canonicalize_consistency_assessment(
             consistency,
             document=artifact.generated_document,
@@ -1451,12 +1634,12 @@ def execute_consistency_validation(
     except ValueError as exc:
         code = (
             FailureCode.SENSITIVE_ASSERTION_INVALID
-            if isinstance(consistency, SensitiveConsistencyAssessment)
+            if sensitive_contract
             else FailureCode.EVIDENCE_INVALID
         )
         return ConsistencyValidationExecution(
             assessment=consistency,
-            receipt=receipt,
+            receipt=receipt if consistency is not None else None,
             repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
                 stage=FailureStage.VALIDATION,

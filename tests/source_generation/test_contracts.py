@@ -106,7 +106,7 @@ def _generation_artifact() -> GenerationArtifact:
 
 
 def test_contract_version_is_v2_and_models_forbid_extra_fields():
-    assert CONTRACT_SCHEMA_VERSION == "2.1.0"
+    assert CONTRACT_SCHEMA_VERSION == "2.2.0"
     with pytest.raises(ValidationError):
         GeneratedDocumentIR(
             title="문서",

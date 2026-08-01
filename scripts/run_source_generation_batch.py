@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -144,10 +145,73 @@ def _connect() -> pymysql.connections.Connection:
     )
 
 
+#: 개행 없는 본문을 자를 자리. 공문에서 실제로 문단이 갈리는 지점이다 —
+#: 번호 항목("1. ", "2. ") 앞, 경어체 종결("~니다.") 뒤, 붙임·끝 표지 앞.
+_RUN_ON_SPLIT = re.compile(
+    r"(?<=니다\.)\s+"      # 문장 종결 뒤
+    r"|(?=\s\d+\.\s)"      # 번호 항목 앞
+    r"|(?=\s붙임)"          # 붙임 앞
+    r"|(?=\s끝\.)"          # 끝 표지 앞
+)
+
+#: 위 경계로도 안 갈리는 덩어리를 강제로 자르는 상한.
+MAX_BLOCK_CHARS = 300
+
+#: 이보다 짧은 조각은 앞 block에 도로 붙인다.
+#:
+#: 경계 규칙이 문맥을 못 보기 때문에 필요하다 — 날짜 "2026. 7. 20."의 " 7. "이
+#: 번호 항목으로, 문장 중간의 "붙임과 같이"가 붙임 표지로 잘못 걸린다. 규칙을
+#: 더 정교하게 만드는 대신 결과를 정리한다: 홀로 서지 못하는 조각은 근거로
+#: 인용할 수도 없으므로 block으로 남길 이유가 없다.
+MIN_BLOCK_CHARS = 20
+
+
+def _split_run_on_text(text: str) -> list[str]:
+    """개행이 하나도 없는 본문을 문단 단위로 나눈다.
+
+    실측(2026-08-01, seoul_opengov-18752): 본문 797자에 개행이 0개라 문서 전체가
+    ``p1:b0`` 한 덩어리가 됐다. evidence 인용은 **그 block 안에서 유일해야**
+    하는데(``EvidenceSpan.locate_in``), 한 덩어리 안에 "광운대역 물류부지
+    개발사업"이 3번, "품질지도과"가 3번 나와 어떤 인용을 골라도 ambiguous가
+    되기 쉬웠다. 실제로 5회 실행 중 2회가 이 문서의 판별 단계에서
+    ``evidence_invalid``로 죽었다.
+
+    개행이 있는 본문은 기존 두 분기가 그대로 처리하므로 이 경로를 타지 않는다.
+    """
+
+    chunks = [chunk.strip() for chunk in _RUN_ON_SPLIT.split(text) if chunk.strip()]
+    blocks: list[str] = []
+    for chunk in chunks:
+        # 경계가 없는 긴 덩어리는 상한으로 자른다. 자르는 자리를 공백으로 맞춰
+        # 낱말이 두 block에 걸치지 않게 한다.
+        while len(chunk) > MAX_BLOCK_CHARS:
+            cut = chunk.rfind(" ", 0, MAX_BLOCK_CHARS)
+            if cut <= 0:
+                cut = MAX_BLOCK_CHARS
+            blocks.append(chunk[:cut].strip())
+            chunk = chunk[cut:].strip()
+        if chunk:
+            blocks.append(chunk)
+
+    merged: list[str] = []
+    for block in blocks:
+        if merged and len(block) < MIN_BLOCK_CHARS:
+            merged[-1] = f"{merged[-1]} {block}"
+        else:
+            merged.append(block)
+    # 첫 조각이 짧으면 앞이 없으므로 뒤와 합친다.
+    if len(merged) > 1 and len(merged[0]) < MIN_BLOCK_CHARS:
+        merged[1] = f"{merged[0]} {merged[1]}"
+        merged.pop(0)
+    return merged
+
+
 def _snapshot_from_body(document_id: str, source: str, body: str) -> SourceDocumentSnapshot | None:
     blocks = [chunk.strip() for chunk in body.split("\n\n") if chunk.strip()]
     if len(blocks) <= 1:
         blocks = [line.strip() for line in body.splitlines() if line.strip()]
+    if len(blocks) <= 1:
+        blocks = _split_run_on_text(body)
     if not blocks:
         return None
     pages = []
@@ -215,17 +279,31 @@ def _target_cycle() -> list[GenerationTarget]:
     return targets
 
 
-def _fetch_documents(cursor, *, count: int, min_chars: int, max_chars: int) -> list[tuple]:
+def _fetch_documents(
+    cursor,
+    *,
+    count: int,
+    min_chars: int,
+    max_chars: int,
+    source: str | None = None,
+) -> list[tuple]:
+    where = [
+        "cso_classification = 'O'",
+        "body_text IS NOT NULL",
+        "CHAR_LENGTH(body_text) BETWEEN %s AND %s",
+    ]
+    params: list = [min_chars, max_chars]
+    if source is not None:
+        where.append("source = %s")
+        params.append(source)
     cursor.execute(
-        """
+        f"""
         SELECT id, source, doc_type, title, body_text
         FROM documents
-        WHERE cso_classification = 'O'
-          AND body_text IS NOT NULL
-          AND CHAR_LENGTH(body_text) BETWEEN %s AND %s
+        WHERE {' AND '.join(where)}
         ORDER BY id
         """,
-        (min_chars, max_chars),
+        params,
     )
     known = {item.value for item in SemanticDocumentType}
     rows, per_type = [], {}
@@ -233,11 +311,16 @@ def _fetch_documents(cursor, *, count: int, min_chars: int, max_chars: int) -> l
         doc_type = row[2]
         if doc_type not in known:
             continue
-        # 한 유형이 표본을 독식하지 않게 고르게 뽑는다.
-        cap = max(1, count // 6)
-        if per_type.get(doc_type, 0) >= cap:
-            continue
-        per_type[doc_type] = per_type.get(doc_type, 0) + 1
+        # 한 유형이 표본을 독식하지 않게 고르게 뽑는다 — 특정 source로 좁힌
+        # 경우는 그 source가 doc_type 한둘뿐일 수 있어(예: seoul_opengov는
+        # official_document 하나뿐) 이 cap을 그대로 적용하면 count를 채우지
+        # 못하고 조용히 적게 반환한다. source를 지정했다면 다양성보다
+        # 요청한 건수를 우선한다.
+        if source is None:
+            cap = max(1, count // 6)
+            if per_type.get(doc_type, 0) >= cap:
+                continue
+            per_type[doc_type] = per_type.get(doc_type, 0) + 1
         rows.append(row)
         if len(rows) >= count:
             break
@@ -354,6 +437,17 @@ def _record(row, target, result, snapshot) -> dict:
                     span.quote for span in validation.evidence_spans
                 ],
                 "validation_rationale": validation.rationale,
+                # O로 끝난 건이 무엇 때문에 미끄러졌는지. 세부유형별로 모아
+                # 생성 규칙을 어디부터 고칠지 정하는 데 쓴다(진단 전용 —
+                # 재생성 입력으로 되먹이지 않는다).
+                "validation_near_miss": [
+                    {
+                        "subclause_key": note.subclause_key.value,
+                        "missing": note.missing,
+                        "block_id": note.block_id,
+                    }
+                    for note in getattr(validation, "near_miss", ())
+                ],
             }
         )
     if result.comparison is not None:
@@ -367,6 +461,11 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=50)
     parser.add_argument("--min-chars", type=int, default=800)
     parser.add_argument("--max-chars", type=int, default=6_000)
+    parser.add_argument(
+        "--source",
+        default=None,
+        help="documents.source로 필터링한다(예: seoul_opengov). 지정하지 않으면 전체 출처.",
+    )
     parser.add_argument("--classifier-model", default="gpt-4o")
     parser.add_argument("--generator-model", default="gpt-4o")
     parser.add_argument("--validator-model", default="gpt-4o-mini")
@@ -379,6 +478,7 @@ def main() -> int:
         count=args.count,
         min_chars=args.min_chars,
         max_chars=args.max_chars,
+        source=args.source,
     )
     print(f"원문 {len(rows)}건 확보")
 

@@ -28,11 +28,12 @@ from rd2.source_generation.classification_taxonomy import (
     ClauseNumber,
     DocumentForm,
     SubclauseKey,
+    clause_of_subclause,
     expected_classification,
     subclause_belongs_to_clause,
 )
 
-CONTRACT_SCHEMA_VERSION = "2.1.0"
+CONTRACT_SCHEMA_VERSION = "2.2.0"
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256Hex = Annotated[
@@ -70,6 +71,32 @@ def _condense_with_offsets(value: str) -> tuple[str, tuple[int, ...]]:
             chars.append(char)
             offsets.append(index)
     return "".join(chars), tuple(offsets)
+
+
+def _truncate(value: str, limit: int = 80) -> str:
+    """오류 메시지에 넣을 인용문. 길면 앞부분만 남긴다."""
+
+    collapsed = " ".join(value.split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+
+
+def _prefix_hint(needle: str, haystack: str) -> str:
+    """인용문이 어디까지 맞았는지 알려주는 한 마디.
+
+    앞부분은 맞는데 뒤가 안 맞으면 block 경계를 넘어 인용했거나 뒤를 지어낸
+    것이고, 앞부분조차 없으면 아예 다른 block을 가리킨 것이다. 이 둘은
+    고치는 방법이 다르므로 오류에서 구분되어야 한다.
+    """
+
+    for length in (24, 16, 10):
+        if len(needle) <= length:
+            continue
+        if needle[:length] in haystack:
+            return (
+                f" (앞 {length}자는 이 block에 있다 — 그 뒤가 어긋난다. "
+                "block 경계를 넘겼거나 뒷부분을 바꿔 썼을 수 있다)"
+            )
+    return " (앞부분도 이 block에 없다 — 다른 block이거나 지어낸 문장이다)"
 
 
 class EvidenceSpan(ContractModel):
@@ -114,13 +141,19 @@ class EvidenceSpan(ContractModel):
         haystack, offsets = _condense_with_offsets(text)
         start = haystack.find(needle)
         if start < 0:
+            # 실측(2026-08-01): 오류가 block ID만 말해서 모델이 무엇을 인용했는지
+            # 알 수 없었다. 문장을 지어낸 것인지, block 경계를 넘어 인용한 것인지,
+            # 다른 block을 가리킨 것인지 구분이 안 돼 원인을 추측만 했다.
+            # 인용문과, 앞부분이라도 걸리는 지점을 함께 남긴다.
             raise ValueError(
-                f"evidence quote not found in block {self.block_id!r}"
+                f"evidence quote not found in block {self.block_id!r}: "
+                f"{_truncate(self.quote)!r}"
+                f"{_prefix_hint(needle, haystack)}"
             )
         if haystack.find(needle, start + 1) >= 0:
             raise ValueError(
                 f"evidence quote is ambiguous in block {self.block_id!r}; "
-                "return a longer unique quote"
+                f"return a longer unique quote: {_truncate(self.quote)!r}"
             )
         return offsets[start]
 
@@ -143,9 +176,28 @@ class BulletListBlock(ContractModel):
         return "\n".join(f"- {item}" for item in self.items)
 
 
+DRAFT_BLANK_HEADER_KEYS: frozenset[str] = frozenset({"문서번호", "시행일자"})
+
+
 class KeyValueEntry(ContractModel):
     key: NonEmptyText
-    value: NonEmptyText
+    value: str
+
+    @model_validator(mode="after")
+    def _blank_value_is_only_for_draft_header_fields(self) -> "KeyValueEntry":
+        """공란은 초안 표제부의 문서번호·시행일자에서만 표현한다.
+
+        ``KeyValueEntry`` 자체는 생성 목표를 알 수 없으므로 두 표제부 키의
+        공란만 구조적으로 표현 가능하게 둔다. 실제로 초안인지, 반대로 확정
+        문서인데 공란이 남았는지는 target-aware ``check_document_form``이
+        판정한다. 그 밖의 key-value 값은 종전처럼 비어 있을 수 없다.
+        """
+
+        if not self.value and self.key not in DRAFT_BLANK_HEADER_KEYS:
+            raise ValueError(
+                "blank key-value is only allowed for draft document number/date"
+            )
+        return self
 
 
 class KeyValueBlock(ContractModel):
@@ -216,7 +268,7 @@ DocumentBlock = (
 
 
 class GeneratedDocumentIR(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     title: NonEmptyText
     blocks: tuple[DocumentBlock, ...] = Field(min_length=1)
 
@@ -225,6 +277,19 @@ class GeneratedDocumentIR(ContractModel):
         block_ids = [block.block_id for block in self.blocks]
         if len(block_ids) != len(set(block_ids)):
             raise ValueError("generated document block IDs must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def _blank_key_values_must_be_in_the_header(self) -> "GeneratedDocumentIR":
+        """공란 표제부 값을 일반 본문 key-value로 오용하지 못하게 한다."""
+
+        for index, block in enumerate(self.blocks):
+            if block.kind != "key_value":
+                continue
+            if any(not entry.value for entry in block.entries) and index != 0:
+                raise ValueError(
+                    "blank draft header values are only allowed in the first block"
+                )
         return self
 
     def block_text(self, block_id: str) -> str:
@@ -259,7 +324,7 @@ class SourcePage(ContractModel):
 
 
 class SourceDocumentSnapshot(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source: NonEmptyText
     manifest_key: NonEmptyText
@@ -301,7 +366,7 @@ class RelevanceCandidateBlock(ContractModel):
 
 
 class RelevanceSelectionRequest(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
@@ -322,7 +387,7 @@ class RelevanceSelectionRequest(ContractModel):
 
 
 class RelevanceSelectionResponse(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     selected_block_ids: tuple[NonEmptyText, ...] = Field(min_length=1)
     rationale: NonEmptyText
 
@@ -334,7 +399,7 @@ class RelevanceSelectionResponse(ContractModel):
 
 
 class DocumentSelection(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: NonEmptyText
     method: SelectionMethod
     source_sha256: Sha256Hex
@@ -442,6 +507,33 @@ class LegalClassification(ContractModel):
             span.locate_in(block_text(span.block_id))
 
 
+def document_form_matches(
+    left: LegalClassification,
+    right: LegalClassification,
+) -> bool:
+    """문서형식이 같은가. ``other``면 자유텍스트까지 같아야 한다.
+
+    **두 곳이 각자 계산하던 것을 하나로 합친 자리다.**
+    ``pipeline._compare_consistency``는 ``other``일 때
+    ``other_document_form``까지 비교했고, ``audit_bridge``의
+    ``ClassificationAuditArtifact``는 같은 값을 enum 동등성만으로 다시 계산했다.
+    양쪽이 ``other``인데 자유텍스트가 다르면 파이프라인은 불일치, 감사는
+    일치로 봤고 — 감사 아티팩트는 그 둘이 어긋나면
+    ``comparison does not match source/target/validation labels``로 거부하므로
+    **그 건이 감사 번들에서 통째로 빠졌다.**
+
+    같은 판정을 두 곳에서 재현하는 한 또 갈라진다. 그래서 계약 쪽에 한 번만
+    둔다 — ``expected_classification``·``subclause_belongs_to_clause``와 같은
+    자리다.
+    """
+
+    if left.document_form != right.document_form:
+        return False
+    if left.document_form is DocumentForm.OTHER:
+        return left.other_document_form == right.other_document_form
+    return True
+
+
 class SourceClassification(LegalClassification):
     def validate_against_snapshot(self, snapshot: SourceDocumentSnapshot) -> None:
         self.validate_evidence_against(snapshot.block_text)
@@ -547,7 +639,7 @@ class SourceAssessment(ContractModel):
     결정론적 계획기가 ``GenerationPlan``을 만든다.
     """
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_classification: SourceClassification
     source_suitability: SourceSuitability
     business_context: NonEmptyText
@@ -655,20 +747,20 @@ class GenerationTarget(ContractModel):
         return self
 
 
-PLANNER_POLICY_VERSION = "source-generation-planner-v2"
+PLANNER_POLICY_VERSION = "source-generation-planner-v3"
 
 
 class GenerationPlan(ContractModel):
     """판별 결과와 요청 target을 결합해 코드가 만드는 잠긴 생성 계획."""
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     requested_target: GenerationTarget
     final_target: GenerationTarget
     generation_route: GenerationRoute
     source_assessment_sha256: Sha256Hex
     source_sha256: Sha256Hex
     selection_sha256: Sha256Hex
-    planner_policy_version: Literal["source-generation-planner-v2"] = (
+    planner_policy_version: Literal["source-generation-planner-v3"] = (
         PLANNER_POLICY_VERSION
     )
     planner_policy_sha256: Sha256Hex
@@ -798,7 +890,7 @@ class GenerationProvenance(ContractModel):
 class GenerationArtifact(ContractModel):
     """한 번의 생성 시도와 그 lineage를 보존하는 산출물."""
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     plan_sha256: Sha256Hex
     generated_document: GeneratedDocumentIR
     attempt_index: int = Field(ge=1)
@@ -845,13 +937,114 @@ def effective_classification(
     return CsoClassification.O
 
 
+class NearMissNote(ContractModel):
+    """O 판정 시 감찰관이 남기는 지적 — 무엇이 더 있었으면 S였는지.
+
+    생성기가 어디서 미끄러지는지는 지금까지 자유 문장 ``rationale``에만 남아
+    사람이 매번 읽어야 했고, 여러 건을 모아 패턴을 보기 어려웠다. 실측
+    (2026-08-01)에서 반복된 실패가 그런 종류였다 — 항목명만 쓰고 값을 안 쓴다,
+    자료를 요청만 한다, 진행 상태만 서술한다. 세부유형별로 모으면 어느 생성
+    규칙을 고쳐야 하는지가 드러난다.
+
+    **진단 전용이다.** 재생성 입력으로 되먹이지 않는다 — 채점자가 생성기에게
+    답을 알려주는 경로가 되면 두 판정이 더 이상 독립이 아니게 된다.
+    """
+
+    #: 이 문서가 가장 근접했던 세부유형. 판정이 아니라 "굳이 고르자면"이다.
+    subclause_key: SubclauseKey
+    #: 그 세부유형이 성립하려면 본문에 더 있어야 할 것. 항목명이 아니라
+    #: 무슨 값이 없는지를 적는다.
+    missing: NonEmptyText
+    #: 그 자리를 짚을 수 있으면 block ID. 없으면 null이다.
+    block_id: NonEmptyText | None = None
+
+    @field_validator("block_id", mode="before")
+    @classmethod
+    def _blank_block_id_is_none(cls, value: object) -> object:
+        """빈 문자열을 null과 같이 본다.
+
+        프롬프트는 "짚을 수 없으면 null"이라고 말하지만 모델은 빈 문자열을
+        낸다. ``NonEmptyText``가 그걸 거부하면 **판정 전체가 버려진다** —
+        gateway의 ``ValidationError`` 경로는 재시도가 없다
+        (``pipeline.SdkStructuredGateway.parse``). 진단용 칸 하나가 멀쩡한
+        O 판정을 죽이는 값은 치를 수 없다.
+        """
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+def _usable_near_miss(
+    notes: object,
+    classification: object,
+) -> object:
+    """판정을 죽이지 않고 쓸 수 없는 지적만 걸러 낸다.
+
+    ``near_miss``는 진단 전용이므로(``NearMissNote``) 계약 위반으로 응답을
+    버릴 권한이 없다. 버려야 할 것은 지적 하나이지 판정이 아니다. 걸러 내는
+    경우는 둘이다.
+
+    1. S 판정에 붙은 지적. "S다"와 "무엇이 부족했다"는 함께 참일 수 없고,
+       둘 중 판정이 본체다.
+    2. 제5~8호 밖 세부유형. 검증기는 제5~8호 taxonomy만 보지만 스키마의
+       ``SubclauseKey`` enum에는 제1~4호가 그대로 남아 있어(같은 이유로
+       ``classification=C`` 금지를 프롬프트에 한 줄 남겼다) 고를 수 있다.
+       그런 값이 섞이면 세부유형별 집계가 조용히 오염된다.
+    """
+
+    if not notes or not isinstance(notes, (list, tuple)):
+        return notes
+    try:
+        if CsoClassification(classification) is not CsoClassification.O:
+            return ()
+    except ValueError:
+        # 판정 값 자체가 이상하면 그건 이쪽이 아니라 분류 검증이 말할 몫이다.
+        return notes
+
+    usable = []
+    for note in notes:
+        if isinstance(note, NearMissNote):
+            key: object = note.subclause_key
+        elif isinstance(note, dict):
+            key = note.get("subclause_key")
+            missing = note.get("missing")
+            if not isinstance(missing, str) or not missing.strip():
+                continue
+        else:
+            usable.append(note)
+            continue
+        try:
+            clause = clause_of_subclause(SubclauseKey(key))
+        except ValueError:
+            continue
+        if expected_classification(clause) is CsoClassification.S:
+            usable.append(note)
+    return tuple(usable)
+
+
 class ConsistencyAssessment(LegalClassification):
     """생성물의 **법적** 분류만 독립 판정한다.
 
     행정상태는 채점 대상이 아니다 — ``effective_classification()`` 참고.
     """
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    #: O로 판정했을 때만 채운다. 기본값이 비어 있으므로 과거 산출물도 그대로
+    #: 읽힌다 — 계약 버전을 올리지 않는 이유다.
+    near_miss: tuple[NearMissNote, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unusable_near_miss(cls, data: object) -> object:
+        """쓸 수 없는 지적은 **버리되 판정은 살린다**(``_usable_near_miss``)."""
+
+        if not isinstance(data, dict) or "near_miss" not in data:
+            return data
+        usable = _usable_near_miss(data["near_miss"], data.get("classification"))
+        if usable is data["near_miss"]:
+            return data
+        return {**data, "near_miss": usable}
 
     def validate_against_document(self, document: GeneratedDocumentIR) -> None:
         self.validate_evidence_against(document.block_text)
@@ -906,6 +1099,48 @@ class IdentificationStrength(str, Enum):
     DIRECT = "direct"
     INDIRECT = "indirect"
     MASKED = "masked"
+
+
+SensitiveClause6Subclause = Literal[
+    SubclauseKey.PETITIONER_PII,
+    SubclauseKey.PERSONNEL_PII,
+    SubclauseKey.WELFARE_PII,
+    SubclauseKey.SUBJECT_PII,
+]
+
+
+class SensitiveMonitorAssertion(ContractModel):
+    """제6호 감시자가 찾은 하나의 의미상 주체-값 연결.
+
+    모델에게 ``EvidenceSpan`` 세 개를 각각 만들게 하면 같은 ``block_id``를 세 번
+    반복하면서 서로 일치시켜야 한다. 감시자 응답에서는 블록 ID를 한 번만 받고,
+    저장용 ``SensitiveAssertion``은 파이프라인 코드가 조립한다.
+    """
+
+    block_id: NonEmptyText
+    subject_role: SensitiveSubjectRole
+    subject_quote: NonEmptyText
+    attribute_kind: SensitiveAttributeKind
+    value_quote: NonEmptyText
+    link_quote: NonEmptyText
+    identification_strength: IdentificationStrength
+
+
+class SensitiveMonitorDecision(ContractModel):
+    """LLM이 반환하는 제6호 감시자의 최소 의미 판정.
+
+    ``classification``·``clause_no``·``evidence_spans``·``near_miss``는 verdict와
+    assertion에서 기계적으로 결정할 수 있으므로 이 계약에 두지 않는다. 이 모델은
+    의도적으로 교차 필드 validator도 갖지 않는다. 의미 조합의 검증과 정규화는
+    모델 응답을 받은 뒤 파이프라인이 한 번만 수행한다.
+    """
+
+    document_form: DocumentForm
+    other_document_form: NonEmptyText | None = None
+    assertions: tuple[SensitiveMonitorAssertion, ...] = ()
+    rationale: NonEmptyText
+    verdict: SensitiveVerdict
+    subclause_key: SensitiveClause6Subclause | None = None
 
 
 class SensitiveAssertion(ContractModel):
@@ -1094,7 +1329,7 @@ class ConsistencyComparison(ContractModel):
 
 
 class DocumentPipelineResult(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_assessment: SourceAssessment | None = None
     generation_plan: GenerationPlan | None = None
@@ -1165,7 +1400,7 @@ class DocumentPipelineResult(ContractModel):
 
 
 class ClassificationStageArtifact(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_assessment: SourceAssessment
     receipt: CallReceipt
 
@@ -1181,12 +1416,12 @@ class ClassificationStageArtifact(ContractModel):
 
 
 class PlanningStageArtifact(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     generation_plan: GenerationPlan
 
 
 class GenerationStageArtifact(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     generation_artifact: GenerationArtifact
     receipt: CallReceipt | None = None
 
@@ -1208,7 +1443,7 @@ class GenerationStageArtifact(ContractModel):
 
 
 class ValidationStageArtifact(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     generated_document_sha256: Sha256Hex
     consistency_assessment: SensitiveConsistencyAssessment | ConsistencyAssessment
     receipt: CallReceipt
@@ -1227,7 +1462,7 @@ class ValidationStageArtifact(ContractModel):
 class AuditStageArtifact(ContractModel):
     """정식 audit 산출물을 가리키는 작고 비민감한 journal artifact."""
 
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     audit_artifact_path: NonEmptyText
     audit_artifact_sha256: Sha256Hex
 
@@ -1237,7 +1472,7 @@ class JournalRecord(ContractModel):
     # classified -> planned -> generated -> validated -> audited
     # 실패 record는 마지막 성공 artifact를 지우지 않으며, resume은 그 다음
     # stage부터 시작한다.
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     run_id: NonEmptyText
     sequence: int = Field(ge=1)
     source_document_id: NonEmptyText
@@ -1335,8 +1570,8 @@ class SecurityMode(str, Enum):
 
 
 class RunManifest(ContractModel):
-    contract_version: Literal["2.1.0"] = CONTRACT_SCHEMA_VERSION
-    taxonomy_version: Literal["source-generation-taxonomy-v2"] = TAXONOMY_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    taxonomy_version: Literal["source-generation-taxonomy-v3"] = TAXONOMY_VERSION
     run_id: NonEmptyText
     created_at: datetime
     classifier_model: NonEmptyText

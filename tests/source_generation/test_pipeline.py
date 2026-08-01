@@ -26,9 +26,9 @@ from rd2.source_generation.contracts import (
     ParagraphBlock,
     RepairCode,
     RelevanceSelectionResponse,
-    SensitiveAssertion,
     SensitiveAttributeKind,
-    SensitiveConsistencyAssessment,
+    SensitiveMonitorAssertion,
+    SensitiveMonitorDecision,
     SensitivePipelineStatus,
     SensitiveSubjectRole,
     SensitiveVerdict,
@@ -42,6 +42,7 @@ from rd2.source_generation.contracts import (
     SourceSlotKind,
     SourceSuitability,
     SourceTextBlock,
+    TableBlock,
     TargetClassification,
 )
 from rd2.source_generation.document_select import (
@@ -66,9 +67,7 @@ from rd2.source_generation.pipeline import (
 
 from .v2_fixtures import (
     FakeGateway,
-    accepted_sensitive_assessment,
     generated_document,
-    open_sensitive_assessment,
     snapshot,
     source_assessment,
     target,
@@ -159,7 +158,64 @@ def test_pipeline_call_order_models_and_blind_validator_input():
         "GeneratedDocumentIR",
         "ConsistencyAssessment",
     ]
-    assert "[LOCKED SOURCE ASSESSMENT]" in gateway.calls[1]["user_prompt"]
+    assert (
+        "[SOURCE CONTEXT — 분류를 복사하지 않음]"
+        in gateway.calls[1]["user_prompt"]
+    )
+
+
+def _accepted_sensitive_decision(
+    text: str = "신청인 김민서의 개인 연락처는 010-1234-5678이다.",
+    *,
+    value_quote: str = "010-1234-5678",
+    subject_role: SensitiveSubjectRole = SensitiveSubjectRole.APPLICANT,
+) -> SensitiveMonitorDecision:
+    return SensitiveMonitorDecision(
+        document_form=DocumentForm.OFFICIAL_LETTER,
+        assertions=(
+            SensitiveMonitorAssertion(
+                block_id="generated:b0",
+                subject_role=subject_role,
+                subject_quote="신청인 김민서",
+                attribute_kind=SensitiveAttributeKind.PHONE,
+                value_quote=value_quote,
+                link_quote=text,
+                identification_strength=IdentificationStrength.DIRECT,
+            ),
+        ),
+        rationale="신청인과 개인 연락처가 직접 연결된다.",
+        verdict=SensitiveVerdict.ACCEPTED_S,
+        subclause_key=SubclauseKey.PETITIONER_PII,
+    )
+
+
+def _open_sensitive_decision() -> SensitiveMonitorDecision:
+    return SensitiveMonitorDecision(
+        document_form=DocumentForm.OFFICIAL_LETTER,
+        rationale="구체적인 개인정보 값이 없다.",
+        verdict=SensitiveVerdict.ASSESSED_O,
+    )
+
+
+def _clause6_generated_artifact(document: GeneratedDocumentIR):
+    assessment = source_assessment()
+    plan = build_generation_plan(
+        assessment=assessment,
+        requested_target=target(),
+        snapshot=snapshot(),
+        selection=_selection(),
+    )
+    execution = execute_generation(
+        snapshot=snapshot(),
+        selection=_selection(),
+        assessment=assessment,
+        plan=plan,
+        gateway=FakeGateway([document]),
+        config=_config(sensitive=True),
+    )
+    assert execution.artifact is not None
+    return assessment, plan, execution.artifact
+    assert "[AUTHORITATIVE OUTPUT TARGET]" in gateway.calls[1]["user_prompt"]
     validator_input = gateway.calls[2]["user_prompt"]
     assert "source_assessment" not in validator_input
     assert "generation_plan" not in validator_input
@@ -305,14 +361,8 @@ def test_admin_only_target_uses_administrative_augmented_route():
     assert plan.final_target == requested
 
 
-def test_incompatible_request_is_substituted_with_the_primary_subclause():
-    """요청 목표가 원문과 맞지 않으면 버리지 않고 ``primary_subclause``로 대체한다.
-
-    라운드로빈으로 배정된 요청 목표에는 "이 조항이어야 하는 이유"가 없고,
-    판별기가 낸 ``primary_subclause``에는 원문 문맥이라는 이유가 있다
-    (``primary_rationale``). 무엇을 요청했는지는 ``requested_target``에 그대로
-    남아야 한다.
-    """
+def test_counterfactual_request_is_preserved_when_source_primary_differs():
+    """판별 결과는 원문 설명이고 배정 목표는 생성 명령이므로 서로 달라도 된다."""
 
     assessment = source_assessment(primary_subclause=SubclauseKey.PETITIONER_PII)
     requested = _clause5_target()
@@ -325,33 +375,61 @@ def test_incompatible_request_is_substituted_with_the_primary_subclause():
     )
 
     assert plan.requested_target == requested
-    assert plan.final_target.subclause_key == SubclauseKey.PETITIONER_PII
-    assert plan.final_target.clause_no == ClauseNumber.CLAUSE_6
+    assert plan.final_target == requested
+    assert plan.final_target.subclause_key == SubclauseKey.BID_CONTRACT
+    assert plan.final_target.clause_no == ClauseNumber.CLAUSE_5
     assert plan.final_target.generation_mode == GenerationMode.COUNTERFACTUAL
 
 
-def test_planning_still_fails_when_no_subclause_is_compatible():
-    """추가 후보가 없어도 문서를 포기하지 않는다.
-
-    회귀: ``compatible_subclauses``가 유일한 후보 목록이던 때는 빈 목록이면
-    ``SOURCE_INCOMPATIBLE``로 폐기했고, 실측 10건 중 3건이 그렇게 버려졌다.
-    ``primary_subclause``가 필수가 된 뒤로는 항상 대체 대상이 하나 있다.
-    """
+def test_clause_six_request_does_not_require_a_matching_source_candidate():
+    """제6호 전용 배치는 판별 후보가 달라도 배정한 제6호 목표를 유지한다."""
 
     assessment = source_assessment(
-        primary_subclause=SubclauseKey.PETITIONER_PII,
+        primary_subclause=SubclauseKey.BID_CONTRACT,
         compatible_subclauses=(),
+    )
+    requested = target(
+        clause=ClauseNumber.CLAUSE_6,
+        subclause=SubclauseKey.PETITIONER_PII,
     )
 
     plan = build_generation_plan(
         assessment=assessment,
-        requested_target=_clause5_target(),
+        requested_target=requested,
         snapshot=snapshot(),
         selection=_selection(),
-        sensitive_seed="seed",
     )
 
-    assert plan.final_target.subclause_key == SubclauseKey.PETITIONER_PII
+    assert plan.final_target == requested
+
+
+def test_source_sensitive_pipeline_generates_when_source_primary_differs():
+    """회귀: primary가 제5호면 제6호 목표를 교체한 뒤 생성 전에 막혔다."""
+
+    assessment = source_assessment(
+        primary_subclause=SubclauseKey.BID_CONTRACT,
+        compatible_subclauses=(),
+    )
+    gateway = FakeGateway(
+        [assessment, generated_document(), _accepted_sensitive_decision()]
+    )
+
+    run = run_source_sensitive_pipeline(
+        snapshot=snapshot(),
+        selection=_selection(),
+        counterfactual_target=target(),
+        gateway=gateway,
+        config=_config(sensitive=True),
+    )
+
+    assert run.status == SensitivePipelineStatus.ACCEPTED_S
+    assert run.final_result.generation_plan is not None
+    assert run.final_result.generation_plan.final_target == target()
+    assert [call["response_model"].__name__ for call in gateway.calls] == [
+        "SourceAssessment",
+        "GeneratedDocumentIR",
+        "SensitiveMonitorDecision",
+    ]
 
 
 def test_generator_sees_full_source_even_when_classifier_view_is_truncated():
@@ -535,9 +613,9 @@ def test_source_sensitive_retry_reuses_classification_and_plan():
         [
             source_assessment(),
             generic,
-            open_sensitive_assessment(),
+            _open_sensitive_decision(),
             concrete,
-            accepted_sensitive_assessment(),
+            _accepted_sensitive_decision(),
         ]
     )
 
@@ -555,9 +633,9 @@ def test_source_sensitive_retry_reuses_classification_and_plan():
     assert [call["response_model"].__name__ for call in gateway.calls] == [
         "SourceAssessment",
         "GeneratedDocumentIR",
-        "SensitiveConsistencyAssessment",
+        "SensitiveMonitorDecision",
         "GeneratedDocumentIR",
-        "SensitiveConsistencyAssessment",
+        "SensitiveMonitorDecision",
     ]
     first = run.attempts[0].generation_artifact
     second = run.attempts[1].generation_artifact
@@ -566,6 +644,103 @@ def test_source_sensitive_retry_reuses_classification_and_plan():
     assert second.parent_generation_sha256 == model_sha256(first)
     assert RepairCode.DIRECT_VALUE_MISSING in second.repair_codes
     assert "direct_value_missing" in gateway.calls[3]["user_prompt"]
+    first_assessment = run.attempts[0].consistency_assessment
+    final_assessment = run.attempts[-1].consistency_assessment
+    assert first_assessment is not None
+    assert first_assessment.classification == CsoClassification.O
+    assert first_assessment.clause_no is None
+    assert first_assessment.evidence_spans == ()
+    assert final_assessment is not None
+    assert final_assessment.classification == CsoClassification.S
+    assert final_assessment.clause_no == ClauseNumber.CLAUSE_6
+    assert final_assessment.evidence_spans[0].quote == concrete.body_text
+
+
+def test_sensitive_monitor_derives_literal_table_row_from_abbreviated_link():
+    document = GeneratedDocumentIR(
+        title="복지급여 수급자 정보",
+        blocks=(
+            TableBlock(
+                block_id="applicant_info",
+                columns=("이름", "주민등록번호", "주소", "연락처"),
+                rows=(
+                    (
+                        "김민서",
+                        "910101-1234567",
+                        "서울시 종로구 종로1",
+                        "010-1234-5678",
+                    ),
+                ),
+            ),
+        ),
+    )
+    assessment, plan, artifact = _clause6_generated_artifact(document)
+    decision = SensitiveMonitorDecision(
+        document_form=DocumentForm.OFFICIAL_LETTER,
+        assertions=(
+            SensitiveMonitorAssertion(
+                block_id="applicant_info",
+                subject_role=SensitiveSubjectRole.APPLICANT,
+                subject_quote="김민서",
+                attribute_kind=SensitiveAttributeKind.PHONE,
+                value_quote="010-1234-5678",
+                link_quote="김민서 010-1234-5678",
+                identification_strength=IdentificationStrength.DIRECT,
+            ),
+            SensitiveMonitorAssertion(
+                block_id="applicant_info",
+                subject_role=SensitiveSubjectRole.APPLICANT,
+                subject_quote="김민서",
+                attribute_kind=SensitiveAttributeKind.NATIONAL_ID,
+                value_quote="910101-1234567",
+                link_quote="김민서 910101-1234567",
+                identification_strength=IdentificationStrength.DIRECT,
+            ),
+        ),
+        rationale="이름과 전화번호가 같은 표 행에 있다.",
+        verdict=SensitiveVerdict.ACCEPTED_S,
+        subclause_key=SubclauseKey.PETITIONER_PII,
+    )
+
+    checked = execute_consistency_validation(
+        assessment=assessment,
+        plan=plan,
+        artifact=artifact,
+        gateway=FakeGateway([decision]),
+        config=_config(sensitive=True),
+    )
+
+    assert checked.succeeded
+    assert checked.assessment is not None
+    assert len(checked.assessment.assertions) == 2
+    assert len(checked.assessment.evidence_spans) == 1
+    assert checked.assessment.evidence_spans[0].quote == (
+        "김민서\t910101-1234567\t서울시 종로구 종로1\t010-1234-5678"
+    )
+
+
+def test_invalid_sensitive_monitor_decision_returns_failure_without_crashing():
+    assessment, plan, artifact = _clause6_generated_artifact(generated_document())
+    inconsistent = _accepted_sensitive_decision().model_copy(
+        update={
+            "verdict": SensitiveVerdict.ASSESSED_O,
+            "subclause_key": None,
+        }
+    )
+
+    checked = execute_consistency_validation(
+        assessment=assessment,
+        plan=plan,
+        artifact=artifact,
+        gateway=FakeGateway([inconsistent]),
+        config=_config(sensitive=True),
+    )
+
+    assert not checked.succeeded
+    assert checked.failure is not None
+    assert checked.failure.code == FailureCode.SENSITIVE_ASSERTION_INVALID
+    assert checked.assessment is None
+    assert checked.receipt is None
 
 
 def test_sensitive_role_mismatch_is_not_accepted():
@@ -573,9 +748,9 @@ def test_sensitive_role_mismatch_is_not_accepted():
         [
             source_assessment(role=SourceActorRole.EMPLOYEE),
             generated_document(),
-            accepted_sensitive_assessment(),
+            _accepted_sensitive_decision(),
             generated_document(),
-            accepted_sensitive_assessment(),
+            _accepted_sensitive_decision(),
         ]
     )
 
@@ -598,31 +773,9 @@ def test_sensitive_role_mismatch_is_not_accepted():
 
 def test_invalid_sensitive_assertion_retries_generation_only():
     text = "신청인 김민서의 전화번호 항목을 확인한다."
-    link = EvidenceSpan(block_id="generated:b0", quote=text)
-    invalid = SensitiveConsistencyAssessment(
-        document_form=DocumentForm.OFFICIAL_LETTER,
-        classification=CsoClassification.S,
-        clause_no=ClauseNumber.CLAUSE_6,
-        subclause_key=SubclauseKey.PETITIONER_PII,
-        evidence_spans=(link,),
-        rationale="필드명을 값으로 오인했다.",
-        sensitivity_verdict=SensitiveVerdict.ACCEPTED_S,
-        assertions=(
-            SensitiveAssertion(
-                subject_role=SensitiveSubjectRole.APPLICANT,
-                subject_span=EvidenceSpan(
-                    block_id="generated:b0",
-                    quote="신청인 김민서",
-                ),
-                attribute_kind=SensitiveAttributeKind.PHONE,
-                value_span=EvidenceSpan(
-                    block_id="generated:b0",
-                    quote="전화번호 항목",
-                ),
-                link_span=link,
-                identification_strength=IdentificationStrength.DIRECT,
-            ),
-        ),
+    invalid = _accepted_sensitive_decision(
+        text,
+        value_quote="전화번호 항목",
     )
     gateway = FakeGateway(
         [
@@ -630,7 +783,7 @@ def test_invalid_sensitive_assertion_retries_generation_only():
             generated_document(text),
             invalid,
             generated_document(),
-            accepted_sensitive_assessment(),
+            _accepted_sensitive_decision(),
         ]
     )
 
