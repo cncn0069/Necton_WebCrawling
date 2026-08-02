@@ -158,4 +158,4 @@ def test_only_general_validator_carries_document_form_other_definition():
 
 
 def test_prompt_bundle_version_bumped_for_global_conflict_resolution():
-    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-02-v48"
+    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-03-v52"

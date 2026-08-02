@@ -51,6 +51,7 @@ from rd2.source_generation.contracts import (
     GenerationProvenance,
     GenerationRoute,
     GenerationTarget,
+    InsertionPlan,
     MaskFillResponse,
     PLANNER_POLICY_VERSION,
     RepairCode,
@@ -78,7 +79,10 @@ from rd2.source_generation.document_form_compatibility import (
     FormSubclauseCompatibility,
     form_subclause_compatibility,
 )
-from rd2.source_generation.evidence import validate_evidence_quotes
+from rd2.source_generation.evidence import (
+    validate_evidence_quotes,
+    validate_evidence_quotes_in_document,
+)
 from rd2.source_generation.legacy_synthetic import (
     FullySyntheticContext,
     FullySyntheticDocumentGenerator,
@@ -95,6 +99,21 @@ from rd2.source_generation.mask_restoration import (
     render_mask_slot_table,
     render_masked_source,
     resolve_mask_restoration_subclause,
+)
+from rd2.source_generation.minimal_prompt import (
+    render_insertion_fill_system_prompt,
+    render_insertion_fill_user_prompt,
+    render_insertion_plan_system_prompt,
+    render_insertion_plan_user_prompt,
+    render_minimal_generator_system_prompt,
+    render_minimal_generator_user_prompt,
+)
+from rd2.source_generation.synthetic_mask import (
+    SyntheticMaskError,
+    apply_insertion_fills,
+    place_insertion_plan,
+    render_slot_table,
+    render_slotted_source,
 )
 from rd2.source_generation.prompts import (
     PromptBundle,
@@ -377,6 +396,23 @@ class PipelineConfig:
     max_validator_output_tokens: int = 4_000
     source_sensitive_mode: bool = False
     reference_date: date | None = None
+    #: 생성 단계에서 현행 프롬프트 대신 최소판(레드팀)을 쓴다.
+    #:
+    #: 두 프롬프트가 답하는 것은 같지만 크기가 다르다 — 현행은 형식별
+    #: 3,500~4,000자에 판별 결과 JSON·계획 JSON·seed·repair code가 user prompt로
+    #: 더 붙고, 최소판은 system 1,127~1,754자에 원문 하나다.
+    #:
+    #: 설정으로 두는 것은 둘을 같은 파이프라인에서 바꿔 끼우며 재기 위해서다.
+    #: 프롬프트만 다르고 판별·계획·채점·렌더가 모두 같아야 차이를 프롬프트에
+    #: 돌릴 수 있다.
+    minimal_generator_prompt: bool = False
+    #: 문서를 다시 쓰지 않고 **자리를 만들어 값만 채운다**(2단계 합성 마스킹).
+    #:
+    #: 실측 52건의 원문 보존율 중앙값이 1.0%였다. 프롬프트 문구가 아니라 출력
+    #: 계약 때문이다 — 문서 전체를 반환하라고 하면 모델은 원문을 재타이핑하는
+    #: 대신 요약한다. 값만 반환하는 ``mask_restoration``은 같은 코퍼스에서
+    #: 91%였다. 이 옵션은 그 구조를 마스킹이 없는 원문에도 적용한다.
+    synthetic_mask_generation: bool = False
 
     def __post_init__(self) -> None:
         model_ids = (
@@ -588,6 +624,26 @@ def _selected_source_resolver(
         return snapshot.block_text(block_id)
 
     return resolve
+
+
+def _selected_source_text(
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+) -> str:
+    """판별기가 실제로 본 범위의 텍스트만 이어 붙인다.
+
+    선택되지 않은 block까지 대조 대상에 넣으면, 보지도 않은 뒷부분에서 우연히
+    같은 문구를 찾아 통과시킬 수 있다. 범위 제한은 유지하고 block 경계만
+    지운다.
+    """
+
+    selected_ids = set(selection.selected_block_ids)
+    return "\n".join(
+        block.text
+        for page in snapshot.pages
+        for block in page.blocks
+        if block.block_id in selected_ids
+    )
 
 
 def _assessment_scope(selection: DocumentSelection) -> AssessmentScope:
@@ -943,27 +999,27 @@ def _finalize_plan(
 def _canonicalize_source_assessment(
     assessment: SourceAssessment,
     *,
-    block_text: Callable[[str], str],
+    document_text: str,
 ) -> SourceAssessment:
     source_classification = assessment.source_classification.model_copy(
         update={
-            "evidence_spans": validate_evidence_quotes(
+            "evidence_spans": validate_evidence_quotes_in_document(
                 assessment.source_classification.evidence_spans,
-                block_text,
+                document_text,
             )
         }
     )
     source_suitability = assessment.source_suitability.model_copy(
         update={
-            "evidence_spans": validate_evidence_quotes(
+            "evidence_spans": validate_evidence_quotes_in_document(
                 assessment.source_suitability.evidence_spans,
-                block_text,
+                document_text,
             )
         }
     )
-    validated_slot_spans = validate_evidence_quotes(
+    validated_slot_spans = validate_evidence_quotes_in_document(
         (slot.evidence_span for slot in assessment.available_slots),
-        block_text,
+        document_text,
     )
     available_slots = tuple(
         slot.model_copy(update={"evidence_span": span})
@@ -989,7 +1045,7 @@ def _canonicalize_source_assessment(
             "available_slots": available_slots,
         }
     )
-    canonicalized.validate_evidence_against(block_text)
+    canonicalized.validate_evidence_in_document(document_text)
     return canonicalized
 
 
@@ -1088,7 +1144,7 @@ def execute_classification(
     try:
         assessment = _canonicalize_source_assessment(
             assessment,
-            block_text=_selected_source_resolver(snapshot, selection),
+            document_text=_selected_source_text(snapshot, selection),
         )
         expected_scope = _assessment_scope(selection)
         if assessment.source_suitability.assessment_scope != expected_scope:
@@ -1407,6 +1463,128 @@ def execute_generation(
             model_id=config.generator_model,
             call=call,
         )
+    elif config.synthetic_mask_generation:
+        if sensitive_seed is None or not sensitive_seed.strip():
+            sensitive_seed = build_sensitive_seed(assessment, plan.final_target)
+        subclause = plan.final_target.subclause_key
+        # block 머리표(``[BLOCK p9:b0]``)를 **붙여서** 준다. 1단계가 자리를
+        # block ID로 지목하므로 그 표시가 곧 답이다. 한때 머리표를 뺐는데,
+        # 그건 문장을 anchor로 받던 때 모델이 머리표까지 인용에 넣어서였다 —
+        # 주소를 ID로 바꾼 지금은 오히려 반드시 있어야 한다.
+        try:
+            plan_call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_insertion_plan_system_prompt(subclause),
+                user_prompt=render_insertion_plan_user_prompt(
+                    render_full_source(snapshot)
+                ),
+                response_model=InsertionPlan,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+            slots = place_insertion_plan(
+                snapshot,
+                cast(InsertionPlan, plan_call.parsed),
+            )
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_insertion_fill_system_prompt(subclause),
+                user_prompt=render_insertion_fill_user_prompt(
+                    render_slotted_source(snapshot, slots),
+                    slot_table=render_slot_table(slots),
+                ),
+                response_model=MaskFillResponse,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+            generated_document = apply_insertion_fills(
+                snapshot,
+                slots,
+                cast(MaskFillResponse, call.parsed),
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except (SyntheticMaskError, ValueError) as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message=str(exc),
+                    retryable=True,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
+    elif config.minimal_generator_prompt:
+        # 최소판은 판별 결과 JSON·계획 JSON·seed·repair code를 **프롬프트로**
+        # 받지 않는다. 그것들을 뺀 상태에서 조항 사례만으로 되는지 보는 것이 이
+        # 프롬프트의 요점이라, 편의로 일부만 되돌리면 비교가 무의미해진다.
+        #
+        # 다만 seed는 조립해 둔다. 모델에게 보내지 않을 뿐 ``anchored`` route의
+        # provenance가 seed 해시를 요구하기 때문이다 — route의 정당성은
+        # 프롬프트와 무관하고, 여기서 비워 두면 실제로는 anchored인 문서가
+        # "seed 없는 anchored"로 기록돼 계약이 깨진다.
+        if sensitive_seed is None or not sensitive_seed.strip():
+            sensitive_seed = build_sensitive_seed(assessment, plan.final_target)
+        try:
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_minimal_generator_system_prompt(
+                    plan.final_target.subclause_key
+                ),
+                user_prompt=render_minimal_generator_user_prompt(
+                    render_full_source(snapshot)
+                ),
+                response_model=GeneratedDocumentIR,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+        if not isinstance(call.parsed, GeneratedDocumentIR):
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message="generator gateway returned the wrong contract type",
+                )
+            )
+        generated_document = cast(GeneratedDocumentIR, call.parsed)
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
     else:
         sensitive = plan.final_target.clause_no == ClauseNumber.CLAUSE_6
         # document_form은 classifier가 이미 잠갔다(assessment.document_form).
@@ -1532,9 +1710,9 @@ def _canonicalize_consistency_assessment(
                 exclude={"evidence_spans"},
                 exclude_computed_fields=True,
             ),
-            "evidence_spans": validate_evidence_quotes(
+            "evidence_spans": validate_evidence_quotes_in_document(
                 assessment.evidence_spans,
-                document.block_text,
+                document.body_text,
             ),
         }
     )
@@ -1559,7 +1737,10 @@ def _materialize_sensitive_monitor_decision(
         classification=decision.classification,
         clause_no=target.clause_no if is_sensitive else None,
         subclause_key=target.subclause_key if is_sensitive else None,
-        evidence_spans=(),
+        # 검사기가 낸 근거를 그대로 옮긴다. 여기서 버리면 "어느 문장을 보고
+        # S라 했는가"가 사라지고, 그건 원문 때문인지 삽입 때문인지 가릴 유일한
+        # 단서다.
+        evidence_spans=decision.evidence_spans,
         rationale=decision.rationale.strip() or "부가 근거 기록 없음",
         sensitivity_verdict=(
             SensitiveVerdict.ACCEPTED_S
@@ -1660,11 +1841,15 @@ def execute_consistency_validation(
             selection_config or SelectionConfig(),
             prompt_bundle,
         )
-        sensitive_contract = plan.final_target.clause_no == ClauseNumber.CLAUSE_6
-        if config.source_sensitive_mode and not sensitive_contract:
-            raise ValueError(
-                "source_sensitive_mode requires a final clause 6 target"
-            )
+        # 어느 채점기를 쓸지는 **모드**가 정한다. 이전에는 목표가 제6호인지로
+        # 정하고 "source_sensitive_mode는 제6호 목표를 요구한다"고 거부했는데,
+        # ``sensitive_validator`` 프롬프트 자체는 제5~8호를 모두 다룬다
+        # (``[검사 범위: 정보공개법 제9조 제1항 제5~8호]``). 제6호 제한은 그
+        # 프롬프트가 제6호 전용이던 때 남은 것이다.
+        #
+        # 실측: 목표 강제를 끄자 60건 중 32건이 이 게이트에서 종료됐다 —
+        # 판별기가 제5·7·8호를 골랐다는 이유만으로.
+        sensitive_contract = config.source_sensitive_mode
     except ValueError as exc:
         return ConsistencyValidationExecution(
             failure=_failure(
@@ -1917,11 +2102,51 @@ def _source_sensitive_terminal_run(
     )
 
 
+#: 이 파이프라인이 다루는 범위. 이전에는 제6호 하나였는데, 그 제약이 배치가
+#: 제6호만 요청하던 것과 겹쳐 제5·7·8호 목표가 계획 단계에서 전부 막혔다.
+#: 부분공개 원문 실측(hwpx 1,684건)에서 푸터 라벨은 제6호 557 / 제5호 340 /
+#: 제7호 147로 갈리는데, 제6호만 받으면 그중 절반을 쓰지 못한다.
+#:
+#: 제6호 전용 처리(``SensitiveConsistencyAssessment``의 assertion 계약)는 이미
+#: ``sensitive_contract = clause_no == CLAUSE_6``으로 분기돼 있어 범위만 넓히면
+#: 된다.
+_SENSITIVE_PIPELINE_CLAUSES: frozenset[ClauseNumber] = frozenset(
+    {
+        ClauseNumber.CLAUSE_5,
+        ClauseNumber.CLAUSE_6,
+        ClauseNumber.CLAUSE_7,
+        ClauseNumber.CLAUSE_8,
+    }
+)
+
+
+def _target_from_assessment(assessment: SourceAssessment) -> GenerationTarget:
+    """판별기가 고른 ``primary_subclause``를 그대로 생성 목표로 삼는다.
+
+    호를 밖에서 강제하지 않기 위한 것이다. 강제하면 원문에 없는 것을 만들라는
+    요구가 되고(실측: 고시·통계 문서에 제6호를 요구해 24건이 계획 단계에서
+    종료), 부분공개 원문에서는 푸터가 말한 호와 어긋나 마스킹 route가 풀린다.
+
+    ``primary_subclause``는 필수 필드라 항상 존재하고 제5~8호로 제한돼 있다
+    (``SourceAssessment`` 계약).
+    """
+
+    clause = clause_of_subclause(assessment.primary_subclause)
+    return GenerationTarget(
+        classification=TargetClassification(
+            expected_classification(clause).value
+        ),
+        clause_no=clause,
+        subclause_key=assessment.primary_subclause,
+        generation_mode=GenerationMode.COUNTERFACTUAL,
+    )
+
+
 def run_source_sensitive_pipeline(
     *,
     snapshot: SourceDocumentSnapshot,
     selection: DocumentSelection,
-    counterfactual_target: GenerationTarget,
+    counterfactual_target: GenerationTarget | None = None,
     gateway: StructuredOutputGateway,
     config: PipelineConfig,
     selection_config: SelectionConfig | None = None,
@@ -1961,10 +2186,16 @@ def run_source_sensitive_pipeline(
     assert classification.assessment is not None
     assert classification.receipt is not None
 
+    # 호출자가 목표를 주지 않으면 판별기가 고른 것을 쓴다. 판별 결과가 나온
+    # 뒤에야 정할 수 있으므로 여기서 채운다.
+    requested_target = counterfactual_target or _target_from_assessment(
+        classification.assessment
+    )
+
     try:
         plan = build_generation_plan(
             assessment=classification.assessment,
-            requested_target=counterfactual_target,
+            requested_target=requested_target,
             snapshot=snapshot,
             selection=selection,
             sensitive_seed=sensitive_seed,
@@ -1973,10 +2204,13 @@ def run_source_sensitive_pipeline(
                 and fully_synthetic_context is not None
             ),
         )
-        if plan.final_target.clause_no != ClauseNumber.CLAUSE_6:
+        if plan.final_target.clause_no not in _SENSITIVE_PIPELINE_CLAUSES:
             raise GenerationPlanningError(
                 FailureCode.SOURCE_INCOMPATIBLE,
-                "source-sensitive pipeline requires a final clause 6 target",
+                (
+                    "source-sensitive pipeline requires a final clause 5-8 "
+                    "target"
+                ),
             )
     except GenerationPlanningError as exc:
         attempts.append(

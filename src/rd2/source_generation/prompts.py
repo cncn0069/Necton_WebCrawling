@@ -55,7 +55,7 @@ from rd2.source_generation.document_form import (
 from rd2.source_generation.document_select import SelectionConfig
 from rd2.source_generation.sensitive_policy import render_sensitive_policy_guidance
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-02-v48"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-03-v52"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 SENSITIVE_TAXONOMY_GUIDANCE = render_taxonomy_guidance(
@@ -851,8 +851,18 @@ SENSITIVE_VALIDATOR_SYSTEM_PROMPT = f"""\
 - rationale에는 어느 호의 어떤 보호 대상 내용이 실제로 있어서 S인지, 또는
   무엇이 항목명·절차·공개정보·집계·마스킹에 그쳐 O인지 판정 이유만 간단히
   기록한다. rationale은 후속 흐름을 차단하지 않는 기록이다.
-- 정확한 block_id, 글자 그대로의 인용문, 문서 형식, 구조화된 조항·세부유형,
-  주체 역할은 응답의 별도 필드로 찾거나 반환하지 않는다.
+- S로 판정했으면 그렇게 판단한 근거 문장을 evidence_spans에 남긴다. 그 문장이
+  들어 있는 block ID와, 그 block에 **글자 그대로 있는 인용문**을 담는다.
+  요약하거나 바꿔 쓰지 않는다. O이면 비워 둔다.
+  근거를 남기는 이유는 판정을 다시 묻기 위해서가 아니라, 어느 문장을 보고
+  판단했는지 기록해 두기 위해서다.
+- 인용하는 것은 **보호 대상 내용이 실제로 적힌 문장**이다. 제목·목차·항목명·
+  표 머리글은 그 내용이 어디 있는지 가리킬 뿐이라 근거가 아니다.
+  `예산·회계 집행분야`가 아니라 `표본은 계약 금액 5억원 이상 건을 중심으로
+  한다`처럼 값이 들어 있는 문장을 고른다. 위 [판정 원칙]에서 S로 본 그
+  내용을 그대로 짚는다.
+- 문서 형식, 구조화된 조항·세부유형, 주체 역할은 응답의 별도 필드로 찾거나
+  반환하지 않는다.
 """
 
 #: ``mask_restoration`` route의 system prompt를 만드는 재료.

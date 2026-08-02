@@ -67,7 +67,7 @@ def test_sensitive_monitor_contract_contains_only_binary_decision_and_record():
     schema = definition.response_model.model_json_schema()
     properties = schema["properties"]
 
-    assert set(properties) == {"classification", "rationale"}
+    assert set(properties) == {"classification", "rationale", "evidence_spans"}
     assert set(properties["classification"]["enum"]) == {"S", "O"}
     for forbidden in (
         "block_id",
@@ -79,7 +79,11 @@ def test_sensitive_monitor_contract_contains_only_binary_decision_and_record():
         "hard_case_review",
     ):
         assert forbidden not in properties
-    assert "정확한 block_id" in definition.system_prompt
+    # S에는 근거 문장을 요구한다. 원문 보존율이 1%에서 99%로 올라가자 검사기가
+    # 원문 쪽 문장을 근거로 S를 줄 수 있게 됐고, 인용문이 없으면 그걸 못 가린다.
+    assert "근거 문장을 evidence_spans에 남긴다" in definition.system_prompt
+    assert "글자 그대로 있는 인용문" in definition.system_prompt
+    # 문서형식·조항·세부유형은 여전히 잠긴 계획에서 가져온다.
     assert "별도 필드로 찾거나 반환하지 않는다" in definition.system_prompt
 
 
@@ -479,10 +483,13 @@ def test_validator_rejects_field_names_as_evidence():
     assert "제출해 주시기 바랍니다" in validator
     assert "글자 그대로 있을 때만 evidence로 인정" in validator
 
-    # 제6호 전용 검사기는 정확한 위치·인용을 통과 조건으로 삼지 않는다.
+    # 민감 검사기도 이제 근거 문장을 남긴다. 다만 그건 **판정을 통과시키는
+    # 조건**이 아니라 어느 문장을 보고 판단했는지의 기록이다 — 원문 보존율이
+    # 99%가 되면서 원문 쪽 문장이 근거로 잡히는지 가려야 한다.
     sensitive = bundle.definition("sensitive_validator").system_prompt
-    assert "정확한 block_id" in sensitive
-    assert "글자 그대로의 인용문" in sensitive
+    assert "근거 문장을 evidence_spans에 남긴다" in sensitive
+    assert "판정을 다시 묻기 위해서가 아니라" in sensitive
+    # 문서형식·조항·세부유형은 여전히 잠긴 계획에서 온다.
     assert "찾거나 반환하지 않는다" in sensitive
 
 

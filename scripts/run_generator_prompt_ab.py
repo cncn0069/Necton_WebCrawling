@@ -75,21 +75,30 @@ from run_seoul_official_batch import (  # noqa: E402
 )
 
 
-def _targets() -> list[GenerationTarget]:
-    clause = ClauseNumber.CLAUSE_6
-    return [
-        GenerationTarget(
-            classification=TargetClassification(
-                expected_classification(clause).value
-            ),
-            clause_no=clause,
-            subclause_key=subclause,
-            generation_mode=GenerationMode.COUNTERFACTUAL,
-        )
+def _targets(clauses: tuple[ClauseNumber, ...]) -> list[GenerationTarget]:
+    """요청한 호의 세부유형을 순환 목표로 만든다.
+
+    호를 섞어 도는 것이 요점이다. 제6호만 돌면 제5·7·8호 극대화 규칙이 한 번도
+    실행되지 않은 채 "최소판이 현행과 같다"는 결론이 나온다 — 실제로 v1~v3
+    실측 30건이 전부 제6호였다.
+    """
+
+    targets: list[GenerationTarget] = []
+    for clause in clauses:
         for subclause in sorted(
             SUBCLAUSES_BY_CLAUSE[clause], key=lambda item: item.value
-        )
-    ]
+        ):
+            targets.append(
+                GenerationTarget(
+                    classification=TargetClassification(
+                        expected_classification(clause).value
+                    ),
+                    clause_no=clause,
+                    subclause_key=subclause,
+                    generation_mode=GenerationMode.COUNTERFACTUAL,
+                )
+            )
+    return targets
 
 
 def _minimal_generation(
@@ -191,6 +200,11 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--source-name", default="seoul_opengov")
     parser.add_argument("--count", type=int, default=10)
+    parser.add_argument(
+        "--clauses",
+        default="5,6,7,8",
+        help="목표로 순환할 호 (예: 6 또는 5,6,7,8)",
+    )
     parser.add_argument("--classifier-model", default="gpt-4o")
     parser.add_argument("--generator-model", default="gpt-4o")
     parser.add_argument("--validator-model", default="gpt-4o-mini")
@@ -216,12 +230,19 @@ def main() -> int:
     )
     selection_config = SelectionConfig()
     prompt_bundle = build_prompt_bundle(selection_config)
-    targets = _targets()
+    targets = _targets(
+        tuple(
+            ClauseNumber(part.strip())
+            for part in args.clauses.split(",")
+            if part.strip()
+        )
+    )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     records_path = args.out_dir / "ab_records.jsonl"
 
     done = 0
+    attempted = 0
     with records_path.open("w", encoding="utf-8") as out:
         for path in files:
             if done >= args.count:
@@ -252,7 +273,8 @@ def main() -> int:
                 continue
             assessment = classification.assessment
 
-            target = targets[done % len(targets)]
+            target = targets[attempted % len(targets)]
+            attempted += 1
             try:
                 plan = build_generation_plan(
                     assessment=assessment,

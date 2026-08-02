@@ -362,3 +362,62 @@ def test_classification_stage_receipt_must_have_classification_stage():
             source_assessment=source_assessment(),
             receipt=_receipt(FailureStage.GENERATION),
         )
+
+def _sensitive_symbols():
+    from rd2.source_generation.contracts import (
+        SensitiveConsistencyAssessment,
+        SensitiveVerdict,
+    )
+
+    return SensitiveConsistencyAssessment, SensitiveVerdict
+
+
+def test_accepted_s_covers_clauses_five_to_eight():
+    """제6호 밖의 목표도 S로 확정될 수 있어야 한다.
+
+    이전에는 ``accepted_s requires clause 6``이 계약에 박혀 있었다. 그 제약은
+    이 계약이 제6호 개인정보 관계 판정 전용이던 때 남은 것인데, 목표 강제를
+    끄고 판별기가 제5호를 고르기 시작하자 생성까지 정상으로 끝난 문서 34건이
+    전부 여기서 버려졌다.
+
+    ``assertions``는 제6호 전용 구조라 다른 호에서는 비어 있는 것이 정상이다 —
+    예정가격이 비공개인 이유에는 '주체 역할'이 없다.
+    """
+
+    for clause, subclause in (
+        (ClauseNumber.CLAUSE_5, SubclauseKey.BID_CONTRACT),
+        (ClauseNumber.CLAUSE_7, SubclauseKey.UNIT_COST),
+        (ClauseNumber.CLAUSE_8, SubclauseKey.CORNERING),
+    ):
+        SensitiveConsistencyAssessment, SensitiveVerdict = _sensitive_symbols()
+        assessment = SensitiveConsistencyAssessment(
+            document_form=DocumentForm.OFFICIAL_LETTER,
+            classification=CsoClassification.S,
+            clause_no=clause,
+            subclause_key=subclause,
+            rationale="목표 조항의 보호 대상이 본문에 있다.",
+            sensitivity_verdict=SensitiveVerdict.ACCEPTED_S,
+        )
+
+        assert assessment.clause_no is clause
+        assert assessment.assertions == ()
+
+
+def test_accepted_s_still_rejects_clauses_one_to_four():
+    """범위를 넓힌 것이지 연 것이 아니다. 이 파이프라인은 제5~8호만 다룬다.
+
+    제1~4호는 C로 매핑돼 있어 ``expected_classification`` 검사가 먼저 걸린다 —
+    ``clause 5-8`` 규칙까지 가지도 못한다. 어느 쪽이 잡든 거부되는 것이 요점이라
+    메시지를 좁게 고정하지 않는다.
+    """
+
+    SensitiveConsistencyAssessment, SensitiveVerdict = _sensitive_symbols()
+    with pytest.raises(ValidationError):
+        SensitiveConsistencyAssessment(
+            document_form=DocumentForm.OFFICIAL_LETTER,
+            classification=CsoClassification.S,
+            clause_no=ClauseNumber.CLAUSE_2,
+            subclause_key=SubclauseKey.SECURITY_DEFENSE,
+            rationale="범위 밖 조항이다.",
+            sensitivity_verdict=SensitiveVerdict.ACCEPTED_S,
+        )

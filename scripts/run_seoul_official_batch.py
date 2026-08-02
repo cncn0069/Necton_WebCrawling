@@ -1,17 +1,30 @@
-"""서울 정보소통광장 결재문서(hwpx)를 원문으로 삼아 생성 파이프라인을 돌린다.
+"""실제 공문 원문을 넣고 판별→생성→blind 검사와 재생성 게이트를 거친다.
 
 앞선 `generate_official_letters.py`는 원문 없이 LLM 한 번만 호출해 공문 모양
 문서를 만들었다 — 유형 판별과 독립 검사도 거치지 않아 라벨과 provenance가 없다.
-이 스크립트는 **실제 공문 원문**을 넣고 판별→생성→blind 검사와 재생성 게이트를
-거친 뒤, 승인된 문서만 PDF로 렌더링한다.
+이 스크립트는 승인된 문서만 PDF로 렌더링한다.
 
-원문은 서울시 결재문서다. 수신·결재선·시행번호·접수란·기관 연락처가 실제로
-들어 있고, 부분공개 문서는 본문에 마스킹(`****`)과 `부분공개(6)` 같은 근거
-표기까지 남아 있다. 공문 형식을 배울 재료로는 이보다 나은 것이 없다.
+원문의 표준은 서울시 결재문서다. 수신·결재선·시행번호·접수란·기관 연락처가
+실제로 들어 있고, 부분공개 문서는 본문에 마스킹(`****`)과 `부분공개(6)` 같은
+근거 표기까지 남아 있다. 공문 형식을 배울 재료로는 이보다 나은 것이 없다.
 
-수집 코퍼스(RDS)에는 이 소스가 아직 없다 — 한국 정부 사이트가 EC2 IP를
-차단해 서버에서는 수집이 안 되고 로컬에서만 된다(TODOS의 open_go_kr 건과 같은
-패턴). 그래서 DB가 아니라 이미 내려받은 파일에서 직접 읽는다.
+**입력은 두 가지다.**
+
+``--source-dir``(기본)는 이미 내려받은 로컬 hwpx/pdf를 읽는다. 서울 소스는
+RDS에 없다 — 한국 정부 사이트가 EC2 IP를 차단해 서버에서는 수집이 안 되고
+로컬에서만 된다(TODOS의 open_go_kr 건과 같은 패턴).
+
+``--from-rds``는 RDS의 공개(O) 행을 골라 그 행의 ``body_file_path``가 가리키는
+파일을 연다. **파일을 여는 이유**는 마스킹 자리 때문이다 — 부분공개 원문의
+`****`와 `부분공개(6)` 표기가 ``mask_restoration`` route의 입력인데, 그게
+살아 있는 형태는 원본 파일이다. 파일이 없는 행은 기본적으로 건너뛰고,
+``--allow-body-text``를 주면 ``body_text``로 스냅샷을 만들어 처리한다.
+
+``--commit-to-rds``를 주면 승인된(``accepted_s``) 생성물이 같은 ``documents``
+테이블에 S 행으로 들어간다. 템플릿 작업이 끝나기 전이라 PDF가 없으므로
+``body_file_path``는 비워두고 생성 원문과 메타데이터만 넣는다 — 템플릿이
+나오면 ``DocumentStore.update_files()``로 같은 행을 백필한다
+(``source_generation/rds_writeback.py`` 참고).
 """
 
 from __future__ import annotations
@@ -22,6 +35,8 @@ from html import escape
 import json
 import os
 import sys
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -38,16 +53,22 @@ from rd2.generators.output_naming import generation_output_filename  # noqa: E40
 from rd2.source_generation.classification_taxonomy import (  # noqa: E402
     SUBCLAUSES_BY_CLAUSE,
     ClauseNumber,
+    SubclauseKey,
+    clause_of_subclause,
     expected_classification,
 )
 from rd2.source_generation.contracts import (  # noqa: E402
     GenerationMode,
     GenerationTarget,
+    SensitiveConsistencyAssessment,
     SensitivePipelineStatus,
     SourceDocumentSnapshot,
     TargetClassification,
 )
 from rd2.source_generation.document_form import check_document_form  # noqa: E402
+from rd2.source_generation.evidence import (  # noqa: E402
+    evidence_from_inserted_text,
+)
 from rd2.source_generation.document_select import (  # noqa: E402
     SelectionConfig,
     prepare_document_selection,
@@ -58,16 +79,31 @@ from rd2.source_generation.pipeline import (  # noqa: E402
     RetryingGateway,
     run_source_sensitive_pipeline,
 )
+from rd2.source_generation.minimal_prompt import (  # noqa: E402
+    MINIMAL_PROMPT_VERSION,
+)
 from rd2.source_generation.prompts import build_prompt_bundle  # noqa: E402
+from rd2.source_generation.rds_writeback import (  # noqa: E402
+    SourceRow,
+    build_generated_document,
+    should_commit,
+)
+from rd2.storage.db import DocumentStore  # noqa: E402
 
 BLOCKS_PER_PAGE = 12
 load_dotenv(ROOT / ".env")
+
+# cp949 콘솔(윈도우 기본)에서 em-dash가 섞인 --help/진행 로그가 UnicodeEncodeError로
+# 죽는다. collect_prism.py와 같은 처리.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 def _snapshot_from_pdf(
     path: Path,
     *,
     source: str,
+    doc_id: str | None = None,
 ) -> tuple[SourceDocumentSnapshot, str] | None:
     """PDF 원문을 hwpx와 **같은 block 구조**로 옮긴다.
 
@@ -100,11 +136,10 @@ def _snapshot_from_pdf(
     if not texts:
         return None
 
-    doc_id = path.stem
     return _snapshot_from_texts(
         texts,
         source=source,
-        doc_id=doc_id,
+        doc_id=doc_id or path.stem,
         source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
 
@@ -114,6 +149,7 @@ def _snapshot_from_hwpx(
     data_root: Path,
     *,
     source: str = "seoul_opengov",
+    doc_id: str | None = None,
 ) -> tuple[SourceDocumentSnapshot, str] | None:
     """추출기가 낸 page/line 구조를 그대로 snapshot block으로 옮긴다."""
 
@@ -133,7 +169,7 @@ def _snapshot_from_hwpx(
     return _snapshot_from_texts(
         texts,
         source=source,
-        doc_id=str(extracted.get("doc_id") or path.stem),
+        doc_id=doc_id or str(extracted.get("doc_id") or path.stem),
         source_sha256=extracted["source_sha256"],
     )
 
@@ -172,6 +208,182 @@ def _snapshot_from_texts(
     # 첫 몇 줄에 제목이 들어 있는 경우가 많다. 없으면 문서 ID로 대체한다.
     title = next((t for t in texts if len(t) > 6), doc_id)
     return snapshot, title
+
+
+@dataclass(frozen=True)
+class SourceItem:
+    """생성 파이프라인에 넣을 원문 하나. 입력이 파일이든 RDS 행이든 이 모양이다."""
+
+    snapshot: SourceDocumentSnapshot
+    title: str
+    #: 리포트·파일명에 쓰는 이름. 파일 입력은 파일명, RDS 입력은 "{source}-{id}".
+    display_name: str
+    row: SourceRow | None = None
+
+
+def _connect_rds(database: str | None):
+    """읽기 전용 연결.
+
+    ``DocumentStore``를 쓰지 않는다 — 그 생성자는 접속할 때마다 ALTER TABLE
+    마이그레이션을 돌리는데(``storage/db.py``), 원문을 고르기만 하는 경로에서
+    운영 테이블 스키마를 건드릴 이유가 없다. 쓰기가 필요할 때만
+    ``DocumentStore``를 연다.
+    """
+
+    import pymysql
+
+    return pymysql.connect(
+        host=os.environ["MARIADB_HOST"],
+        port=int(os.environ.get("MARIADB_PORT", 3306)),
+        user=os.environ["MARIADB_USER"],
+        password=os.environ["MARIADB_PASSWORD"],
+        database=database or os.environ["MARIADB_DATABASE"],
+        charset="utf8mb4",
+    )
+
+
+_RDS_COLUMNS = (
+    "id",
+    "source",
+    "doc_type",
+    "title",
+    "ordering_agency",
+    "department",
+    "unit_task",
+    "production_date",
+    "subject_category",
+    "body_text",
+    "body_file_path",
+)
+
+
+def _fetch_rds_rows(
+    connection,
+    *,
+    source: str | None,
+    doc_type: str | None,
+    require_file: bool,
+    limit: int,
+) -> list[SourceRow]:
+    """생성 입력 후보인 공개(O) 행을 고른다.
+
+    C/S 라벨 문서는 본문이 없으므로 애초에 후보가 아니다 — 입력은 항상 O다.
+    """
+
+    where = ["cso_classification = 'O'"]
+    params: list = []
+    if source is not None:
+        where.append("source = %s")
+        params.append(source)
+    if doc_type is not None:
+        where.append("doc_type = %s")
+        params.append(doc_type)
+    if require_file:
+        where.append("body_file_path IS NOT NULL AND body_file_path <> ''")
+    else:
+        where.append(
+            "(body_file_path IS NOT NULL AND body_file_path <> '' "
+            "OR body_text IS NOT NULL)"
+        )
+    params.append(limit)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT {', '.join(_RDS_COLUMNS)} FROM documents "
+            f"WHERE {' AND '.join(where)} ORDER BY id LIMIT %s",
+            params,
+        )
+        rows = cursor.fetchall()
+    return [SourceRow(**dict(zip(_RDS_COLUMNS, row))) for row in rows]
+
+
+def _snapshot_from_body_text(
+    body: str,
+    *,
+    source: str,
+    doc_id: str,
+) -> tuple[SourceDocumentSnapshot, str] | None:
+    """파일이 없는 행의 ``body_text``로 스냅샷을 만든다(폴백 경로).
+
+    파일 경로보다 열등하다 — 추출 과정에서 마스킹 표기가 사라진 본문이면
+    ``mask_restoration`` route가 서지 않는다. 그래서 기본값이 아니다.
+    """
+
+    # 개행이 아예 없는 본문을 문단으로 자르는 규칙은 RDS 입력을 먼저 다룬
+    # 배치에 이미 있다. 두 벌로 갈라두면 block 경계가 하네스마다 달라진다.
+    from scripts.run_source_generation_batch import _split_run_on_text
+
+    texts = [chunk.strip() for chunk in body.split("\n\n") if chunk.strip()]
+    if len(texts) <= 1:
+        texts = [line.strip() for line in body.splitlines() if line.strip()]
+    if len(texts) <= 1:
+        texts = _split_run_on_text(body)
+    if not texts:
+        return None
+    return _snapshot_from_texts(
+        texts,
+        source=source,
+        doc_id=doc_id,
+        source_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+    )
+
+
+def _iter_rds_items(
+    rows: list[SourceRow],
+    *,
+    files_root: Path,
+    allow_body_text: bool,
+) -> "Iterator[SourceItem]":
+    """RDS 행을 원문 스냅샷으로 바꾼다. 열 수 없는 행은 조용히 건너뛴다."""
+
+    for row in rows:
+        path: Path | None = None
+        if row.body_file_path:
+            candidate = files_root / row.body_file_path
+            if candidate.exists() and candidate.suffix.lower() in {".hwpx", ".pdf"}:
+                path = candidate
+        built: tuple[SourceDocumentSnapshot, str] | None = None
+        if path is not None:
+            if path.suffix.lower() == ".pdf":
+                built = _snapshot_from_pdf(
+                    path, source=row.source, doc_id=str(row.id)
+                )
+            else:
+                built = _snapshot_from_hwpx(
+                    path, ROOT / "data", source=row.source, doc_id=str(row.id)
+                )
+        if built is None and allow_body_text and row.body_text:
+            built = _snapshot_from_body_text(
+                row.body_text, source=row.source, doc_id=str(row.id)
+            )
+        if built is None:
+            continue
+        snapshot, extracted_title = built
+        yield SourceItem(
+            snapshot=snapshot,
+            title=row.title or extracted_title,
+            display_name=row.document_id,
+            row=row,
+        )
+
+
+def _iter_file_items(
+    files: list[Path],
+    *,
+    source_name: str,
+) -> "Iterator[SourceItem]":
+    for path in files:
+        if path.suffix.lower() == ".pdf":
+            built = _snapshot_from_pdf(path, source=source_name)
+        else:
+            built = _snapshot_from_hwpx(path, ROOT / "data", source=source_name)
+        if built is None:
+            continue
+        snapshot, title = built
+        yield SourceItem(
+            snapshot=snapshot,
+            title=title,
+            display_name=path.name,
+        )
 
 
 def _targets() -> list[GenerationTarget]:
@@ -390,18 +602,123 @@ def main() -> int:
         default="seoul_opengov",
         help="snapshot.source에 기록할 출처 이름 (예: alio, PRISM, orginl_info)",
     )
+    parser.add_argument(
+        "--subclause",
+        default=None,
+        help=(
+            "세부유형을 고정한다(예: technology_development). 생략하면 판별기가 "
+            "고른다. **기본값(생략)을 권한다** — PRISM 실측에서 고정이 라벨을 "
+            "모으는 대신 수율을 깎았다: technology_development로 묶으니 귀속이 "
+            "75%->89%로 올랐지만 S승인이 8->6으로 떨어졌고, 떨어진 3건은 모두 "
+            "`정책연구 활용결과 보고서`였다. 연구를 **어떻게 썼는지** 적은 "
+            "문서는 `연구개발의 심사·평가 절차`와 겹치지 않아 판별기가 "
+            "decision_review/audit_inspection으로 보낸 편이 맞았다. 출처 이름만 "
+            "보고 업무를 단정하지 말 것."
+        ),
+    )
+    parser.add_argument(
+        "--synthetic-mask",
+        action="store_true",
+        help="문서를 다시 쓰지 않고 자리를 만들어 값만 채운다(2단계)",
+    )
+    parser.add_argument(
+        "--minimal-prompt",
+        action="store_true",
+        help="생성 단계에 현행 대신 최소판(레드팀) 프롬프트를 쓴다",
+    )
+    parser.add_argument(
+        "--from-rds",
+        action="store_true",
+        help="로컬 디렉터리 대신 RDS의 공개(O) 행에서 원문을 고른다",
+    )
+    parser.add_argument(
+        "--rds-source",
+        default=None,
+        help="--from-rds일 때 documents.source 필터 (예: alio)",
+    )
+    parser.add_argument(
+        "--rds-doc-type",
+        default=None,
+        help="--from-rds일 때 documents.doc_type 필터",
+    )
+    parser.add_argument(
+        "--rds-scan-limit",
+        type=int,
+        default=0,
+        help="RDS에서 훑어볼 행 수. 0이면 --count의 20배 "
+             "(파일 없음·추출 실패·relevance 미달로 상당수가 빠진다)",
+    )
+    parser.add_argument(
+        "--files-root",
+        type=Path,
+        default=ROOT / "data",
+        help="body_file_path의 기준 경로(상대경로로 저장돼 있다)",
+    )
+    parser.add_argument(
+        "--allow-body-text",
+        action="store_true",
+        help="파일을 열 수 없는 행은 body_text로 대신 스냅샷을 만든다"
+             "(마스킹 자리가 사라진 본문일 수 있어 기본값 아님)",
+    )
+    parser.add_argument(
+        "--commit-to-rds",
+        action="store_true",
+        help="승인된(accepted_s) 생성물을 documents 테이블에 S 행으로 넣는다",
+    )
+    parser.add_argument(
+        "--rds-database",
+        default=None,
+        help="접속할 DB 이름. 생략하면 .env의 MARIADB_DATABASE "
+             "(검증 실행은 rd2_test를 쓸 것)",
+    )
+    parser.add_argument(
+        "--include-weak-mask-restoration",
+        action="store_true",
+        help="검증기가 O를 낸 mask_restoration 결과도 RDS에 넣는다"
+             "(기본은 제외 — rds_writeback.should_commit 참고)",
+    )
     parser.add_argument("--classifier-model", default="gpt-4o")
     parser.add_argument("--generator-model", default="gpt-4o")
     parser.add_argument("--validator-model", default="gpt-4o-mini")
     parser.add_argument("--max-attempts", type=int, default=2)
     args = parser.parse_args()
 
-    files = sorted(
-        [*args.source_dir.rglob("*.hwpx"), *args.source_dir.rglob("*.pdf")]
+    if args.from_rds:
+        read_connection = _connect_rds(args.rds_database)
+        try:
+            rows = _fetch_rds_rows(
+                read_connection,
+                source=args.rds_source,
+                doc_type=args.rds_doc_type,
+                require_file=not args.allow_body_text,
+                limit=args.rds_scan_limit or args.count * 20,
+            )
+        finally:
+            read_connection.close()
+        if not rows:
+            print("조건에 맞는 O 원문이 RDS에 없다")
+            return 1
+        print(f"RDS 후보 {len(rows)}행 -> 최대 {args.count}건 처리")
+        items = _iter_rds_items(
+            rows,
+            files_root=args.files_root,
+            allow_body_text=args.allow_body_text,
+        )
+    else:
+        files = sorted(
+            [*args.source_dir.rglob("*.hwpx"), *args.source_dir.rglob("*.pdf")]
+        )
+        if not files:
+            print(f"hwpx/pdf 파일이 없다: {args.source_dir}")
+            return 1
+        items = _iter_file_items(files, source_name=args.source_name)
+
+    store = (
+        DocumentStore(database=args.rds_database) if args.commit_to_rds else None
     )
-    if not files:
-        print(f"hwpx/pdf 파일이 없다: {args.source_dir}")
-        return 1
+    rds_inserted = 0
+    rds_skipped = 0
+    rds_failed = 0
 
     gateway = RetryingGateway(
         OpenAIResponsesGateway(OpenAI(api_key=os.environ["OPENAI_API_KEY"])),
@@ -413,9 +730,23 @@ def main() -> int:
         validator_model=args.validator_model,
         reference_date=date.today(),
         source_sensitive_mode=True,
+        minimal_generator_prompt=args.minimal_prompt,
+        synthetic_mask_generation=args.synthetic_mask,
     )
     selection_config = SelectionConfig()
     prompt_bundle = build_prompt_bundle(selection_config)
+    forced_target: GenerationTarget | None = None
+    if args.subclause:
+        subclause = SubclauseKey(args.subclause)
+        clause = clause_of_subclause(subclause)
+        forced_target = GenerationTarget(
+            classification=TargetClassification(
+                expected_classification(clause).value
+            ),
+            clause_no=clause,
+            subclause_key=subclause,
+            generation_mode=GenerationMode.COUNTERFACTUAL,
+        )
     targets = _targets()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -427,18 +758,10 @@ def main() -> int:
     with records_path.open("w", encoding="utf-8") as records, payload_path.open(
         "w", encoding="utf-8"
     ) as payloads:
-        for path in files:
+        for item in items:
             if done >= args.count:
                 break
-            if path.suffix.lower() == ".pdf":
-                built = _snapshot_from_pdf(path, source=args.source_name)
-            else:
-                built = _snapshot_from_hwpx(
-                    path, ROOT / "data", source=args.source_name
-                )
-            if built is None:
-                continue
-            snapshot, title = built
+            snapshot, title = item.snapshot, item.title
             prepared = prepare_document_selection(snapshot, selection_config)
             if prepared.selection is None:
                 continue
@@ -447,15 +770,20 @@ def main() -> int:
             source_text = "\n\n".join(
                 block.text for page in snapshot.pages for block in page.blocks
             )
-            # 판별기는 파이프라인 안에서 한 번만 호출된다. 이 값은 O 원문일 때
-            # 사용할 제6호 fallback 요청이며, S 원문이면 플래너가 원문 라벨을
-            # 그대로 잠근다.
-            target = targets[(done - 1) % len(targets)]
-            target_source = "clause-6-fallback-cycle"
+            # 목표를 밖에서 강제하지 않는다. 판별기가 원문을 읽고 고른
+            # primary_subclause가 그대로 생성 목표가 되고, 부분공개 원문이면
+            # 플래너가 푸터의 호로 다시 잠근다.
+            #
+            # 강제했을 때 값을 치른 자리가 둘이다 — 고시·통계처럼 개인이 없는
+            # 문서에 제6호를 요구해 계획 단계에서 끝났고(실측 24건), 푸터가
+            # 제6호인 문서에 제5호를 배정해 마스킹 route가 풀렸다.
+            target = forced_target
+            target_source = (
+                f"forced:{args.subclause}" if forced_target else "classifier-primary"
+            )
             print(
-                f"[{done}/{args.count}] {snapshot.source_document_id} <- "
-                f"{target.classification.value}/{target.clause_no.value}"
-                f"/{target.subclause_key.value} ({target_source})"
+                f"[{done}/{args.count}] {snapshot.source_document_id} "
+                f"({target_source})"
             )
 
             sensitive_run = run_source_sensitive_pipeline(
@@ -471,12 +799,15 @@ def main() -> int:
 
             record: dict = {
                 "source_document_id": snapshot.source_document_id,
-                "source_file": path.name,
+                "source_file": item.display_name,
+                "source_row_id": item.row.id if item.row is not None else None,
                 "source_title": title,
                 "source_block_count": sum(len(p.blocks) for p in snapshot.pages),
                 "source_text": source_text,
                 "target_source": target_source,
-                "requested_target": target.model_dump(mode="json"),
+                "requested_target": (
+                    target.model_dump(mode="json") if target else None
+                ),
                 "approval_status": sensitive_run.status.value,
                 "technical_succeeded": result.succeeded,
                 "succeeded": (
@@ -531,7 +862,7 @@ def main() -> int:
                 )
                 output_filename = generation_output_filename(
                     generation_route=plan.generation_route.value,
-                    source_filename=path.name,
+                    source_filename=item.display_name,
                     generated_title=document.title,
                 )
                 record.update(
@@ -589,6 +920,12 @@ def main() -> int:
                                     # 빠지면 그 분기가 서지 않는다.
                                     "generation_route": (
                                         plan.generation_route.value
+                                    ),
+                                    # 합성 마스킹도 원문을 그대로 옮긴다.
+                                    # route는 anchored 등으로 남으므로 표시를
+                                    # 따로 남겨야 렌더러가 알아본다.
+                                    "verbatim_render": bool(
+                                        args.synthetic_mask
                                     ),
                                     "generation_target": (
                                         plan.final_target.model_dump(mode="json")
@@ -648,6 +985,71 @@ def main() -> int:
                 )
             if result.comparison is not None:
                 record["comparison"] = result.comparison.model_dump(mode="json")
+            # 검사기가 든 근거가 **우리가 넣은 자리**에서 왔는지.
+            #
+            # 원문 보존율이 높아질수록 필요한 기록이다. 생성물의 99%가 원문이면
+            # 검사기가 원문 쪽 문장을 근거로 S를 줄 수 있고, 그러면 라벨은
+            # 맞아도 학습데이터로는 해롭다(실측: alio 연간감사 결과보고서에서
+            # 이미 공표된 징계 처분 내역이 근거로 잡혔다).
+            consistency = result.consistency_assessment
+            if consistency is not None and record.get("generated_body"):
+                quotes = [span.quote for span in consistency.evidence_spans]
+                record["evidence_quotes"] = quotes
+                record["evidence_from_insertion"] = list(
+                    evidence_from_inserted_text(
+                        source_text,
+                        record["generated_body"],
+                        quotes,
+                    )
+                )
+            if store is not None and result.generation_plan is not None:
+                plan = result.generation_plan
+                assessment = result.source_assessment
+                consistency = result.consistency_assessment
+                commit = (
+                    result.generation_artifact is not None
+                    and should_commit(
+                        status=sensitive_run.status,
+                        plan=plan,
+                        assessment=(
+                            consistency
+                            if isinstance(consistency, SensitiveConsistencyAssessment)
+                            else None
+                        ),
+                        include_weak_mask_restoration=(
+                            args.include_weak_mask_restoration
+                        ),
+                    )
+                )
+                record["rds_committed"] = False
+                if commit:
+                    try:
+                        doc = build_generated_document(
+                            document=(
+                                result.generation_artifact.generated_document
+                            ),
+                            plan=plan,
+                            source_document_id=snapshot.source_document_id,
+                            source_row=item.row,
+                            fallback_source=args.source_name,
+                            document_form=(
+                                assessment.source_classification.document_form
+                                if assessment is not None
+                                else None
+                            ),
+                        )
+                        # 한 건의 조립·삽입 실패가 배치를 끊지 않는다 — 나머지
+                        # 문서는 이미 API 비용을 치렀다.
+                        if store.upsert(doc):
+                            rds_inserted += 1
+                            record["rds_committed"] = True
+                        else:
+                            rds_skipped += 1
+                        record["rds_source_url"] = doc.source_url
+                    except Exception as exc:  # noqa: BLE001
+                        rds_failed += 1
+                        record["rds_error"] = str(exc)
+
             records.write(json.dumps(record, ensure_ascii=False) + "\n")
             report_records.append(record)
             records.flush()
@@ -680,6 +1082,11 @@ def main() -> int:
             {
                 "generated_at": datetime.now(UTC).isoformat(),
                 "prompt_bundle": prompt_bundle.version,
+                "generator_prompt": (
+                    MINIMAL_PROMPT_VERSION
+                    if args.minimal_prompt
+                    else prompt_bundle.version
+                ),
                 "taxonomy_version": prompt_bundle.taxonomy_version,
                 "classifier_prompt_sha256": prompt_bundle.definition(
                     "classifier"
@@ -693,7 +1100,32 @@ def main() -> int:
                 "classifier_model": args.classifier_model,
                 "generator_model": args.generator_model,
                 "validator_model": args.validator_model,
-                "source_dir": str(args.source_dir),
+                "input_mode": "rds" if args.from_rds else "files",
+                "source_dir": (
+                    None if args.from_rds else str(args.source_dir)
+                ),
+                "rds_filter": (
+                    {
+                        "source": args.rds_source,
+                        "doc_type": args.rds_doc_type,
+                        "allow_body_text": args.allow_body_text,
+                    }
+                    if args.from_rds
+                    else None
+                ),
+                "rds_writeback": (
+                    {
+                        "database": args.rds_database,
+                        "inserted": rds_inserted,
+                        "skipped_duplicate": rds_skipped,
+                        "failed": rds_failed,
+                        "include_weak_mask_restoration": (
+                            args.include_weak_mask_restoration
+                        ),
+                    }
+                    if args.commit_to_rds
+                    else None
+                ),
                 "processed": done,
                 "approval_counts": {
                     status.value: sum(
@@ -709,6 +1141,11 @@ def main() -> int:
         encoding="utf-8",
     )
     _write_html_outputs(report_records, args.out_dir)
+    if store is not None:
+        store.close()
+        print(
+            f"RDS 기록: 신규 {rds_inserted} / 중복스킵 {rds_skipped} / 실패 {rds_failed}"
+        )
     print(f"\n{done}건 -> {records_path}")
     return 0
 

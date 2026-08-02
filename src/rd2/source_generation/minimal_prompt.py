@@ -37,7 +37,7 @@ from rd2.source_generation.classification_taxonomy import (
     clause_of_subclause,
 )
 
-MINIMAL_PROMPT_VERSION = "source-generation-minimal-2026-08-02-v3"
+MINIMAL_PROMPT_VERSION = "source-generation-minimal-2026-08-02-v4"
 
 MINIMAL_GENERATOR_SYSTEM_TEMPLATE = """\
 [역할 지정]
@@ -54,22 +54,38 @@ $checklist"""
 
 #: 호 단위 **위험 극대화 규칙**. 분별기가 정한 호 하나만 렌더링한다.
 #:
-#: 네 호를 한꺼번에 주지 않는 것이 요점이다. 현행 프롬프트가
-#: ``SENSITIVE_CLAUSE_GENERATION_GUIDANCE``로 제5~8호 규칙을 전부 주고 "해당
-#: 규칙 하나만 적용한다"고 덧붙이던 자리인데, 실측에서 목표가 제6호인 문서에
-#: 제5호 감사 문구가 섞여 나왔다. 고를 수 없는 규칙은 고를 이유만 준다 —
-#: ``SELECTABLE_EVIDENCE_LEVELS``에서 배운 것과 같다.
+#: 여기에는 그 호가 **왜** 보호되는지만 적는다. 무엇을 쓸지는 세부유형이 정하고
+#: 그건 아래 ``[조항]`` 절이 담당한다.
+#:
+#: 제5호에서 ``이미 끝난 일의 결과가 아니라``를 뺐다. 그 한 줄이 원문을 버리라는
+#: 지시로 읽혔다 — 실측(alio-2021040202182097): 원문이 13쪽짜리 **연간감사 결과
+#: 보고서**(396,140,140원 편취 적발, 해임 1명, 처분 내역표)였는데 생성물은 기관명
+#: 하나만 남기고 전부 새로 지어낸 「2023년도 감사 계획 검토 자료」가 나왔다.
+#: 원문이 정확히 "이미 끝난 일의 결과"라 지시를 따르려면 버릴 수밖에 없었고,
+#: 가져올 것이 없으니 예시 틀을 그대로 옮겼다(``현장 방문은 9월 4일 예고 없이
+#: 실시한다`` -> ``현장 방문은 11월 13일 예고 없이 진행 예정``).
+#:
+#: 체크리스트 2번(``원문의 업무와 등장 역할이 남아 있는가``)과 정면으로 부딪히는
+#: 문장이었다. 한 프롬프트가 서로 반대되는 지시를 주면 모델은 뒤엣것을 버린다.
+#:
+#: v3에서 이 구분을 못 지켰다. 제5호 규칙 하나에 감사 표본·배점표·출제 기준·
+#: 승진 서열·부서 의견을 전부 적었는데, 그건 audit_inspection·bid_contract·
+#: personnel_management·decision_review 넷의 내용을 합친 것이다. 목표가
+#: ``bid_contract``인 프롬프트에 5개 항목 중 4개가 다른 세부유형 얘기였다.
+#:
+#: 현행 프롬프트를 두고 "제5~8호 규칙을 전부 주고 하나만 적용하라"가 문제라고
+#: 했는데, v3는 같은 실수를 한 단계 아래에서 반복했다. 실측이 그대로 보여 준다 —
+#: 세부유형이 모두 "사람 + 개인정보 연결"로 같은 제6호는 3/3이었고, 서로 다른
+#: 업무가 묶인 제5호는 9건 중 1건, 제7호는 4건 중 2건이었다.
 CLAUSE_ESCALATION_RULES: Mapping[ClauseNumber, str] = MappingProxyType(
     {
         ClauseNumber.CLAUSE_5: (
             "[위험 극대화 — 제5호: 업무의 공정한 수행]\n"
             "행정 절차나 일반 보고 문구를 **확정 전 내부 판단**으로 바꾼다.\n"
-            "- 공개 전 평가기준·배점표·예정가격 산정 근거, 감사 표본 선정 기준과\n"
-            "  중점 점검 항목, 출제·채점 기준, 승진 서열 자료를 실제 수치로 적는다.\n"
-            "- 누가 어떤 이유로 찬성·반대했는지, 어느 안이 왜 탈락했는지를\n"
-            "  발언 수준으로 적는다. '검토 중'이라는 상태 문구는 근거가 되지 않는다.\n"
-            "- 이 문서가 지금 공개되면 심사 대상자가 기준을 미리 알아 절차가\n"
-            "  무력화된다는 점이 문맥에서 드러나게 한다."
+            "- '검토 중'이라는 상태 문구는 근거가 되지 않는다. 그 단계에서 실제로\n"
+            "  오간 기준·판단·수치를 적는다.\n"
+            "- 이 문서가 지금 공개되면 절차의 상대방이 기준을 미리 알아 업무의\n"
+            "  공정한 수행이 무력화된다는 점이 문맥에서 드러나게 한다."
         ),
         ClauseNumber.CLAUSE_6: (
             "[위험 극대화 — 제6호: 개인정보]\n"
@@ -80,30 +96,25 @@ CLAUSE_ESCALATION_RULES: Mapping[ClauseNumber, str] = MappingProxyType(
             "- **식별 가능한 사람과 보호되는 개인정보를 같은 문장·같은 표 행·같은\n"
             "  key-value 항목에서 직접 연결한다.** 이름만 있거나 항목명만 있으면\n"
             "  이 문서는 실패다.\n"
-            "- 이름·부서·직위·업무 연락처에서 멈추지 말고 개인 연락처·자택 주소·\n"
-            "  계좌·급여·건강 사정·개인별 평정·징계·혐의·진술까지 붙인다."
+            "- 이름·부서·직위·업무 연락처에서 멈추지 않는다."
         ),
         ClauseNumber.CLAUSE_7: (
             "[위험 극대화 — 제7호: 경영·영업상 비밀]\n"
             "애매하게 표현된 사업 성과나 프로젝트 내용을 특정 법인의 핵심 기밀로\n"
             "바꾼다.\n"
-            "- 핵심 기술·공정 조건, 정확한 입찰가와 마진율, 원가 구성과 납품단가,\n"
-            "  미공개 내부 예산·재무 전망, 협상 조건, 보안 취약 지점을 고유명사와\n"
-            "  수치로 지어내 적는다.\n"
+            "- 고유명사와 수치를 지어내 적는다. 업계 일반론이 아니라 그 법인만\n"
+            "  아는 값이어야 한다.\n"
             "- 그 정보가 **특정 법인·단체·개인**의 것이고, 공개되면 그 사업자의\n"
             "  정당한 이익이 어떻게 훼손되는지 경로를 문맥에 남긴다.\n"
-            "- 보안 취약점을 다룰 때는 실재하는 기관·제품·주소·계정·자격증명과\n"
-            "  실행 가능한 공격 절차를 쓰지 않고, 비운영 가상 구성만 사용한다."
+            "- 실재하는 기관·제품·주소·계정·자격증명과 실행 가능한 공격 절차는\n"
+            "  쓰지 않고 비운영 가상 값만 사용한다."
         ),
         ClauseNumber.CLAUSE_8: (
             "[위험 극대화 — 제8호: 투기·매점매석]\n"
             "아직 공표·고시되지 않은 계획을 적어, 이 문서가 민간에 흘러가면\n"
             "부당이득이 생기는 상황을 문맥에 만든다.\n"
-            "- 공표 전 개발 후보지와 구역 지정 검토, 필지별 예상 보상액과 매입\n"
-            "  우선순위, 비축물자 방출 시기·물량·기준가, 수급 조절 개입 시점을\n"
-            "  구체적인 값으로 적는다.\n"
-            "- 이 값을 먼저 아는 사람이 토지를 선매수하거나 물량을 사재기해\n"
-            "  이익을 얻고 다른 사람이 불이익을 입는 경로를 드러낸다.\n"
+            "- 이 값을 먼저 아는 사람이 선매수하거나 사재기해 이익을 얻고 다른\n"
+            "  사람이 불이익을 입는 경로를 드러낸다.\n"
             "- 이미 공표·고시된 정보나 집계 통계는 이 호에 해당하지 않는다."
         ),
     }
@@ -309,15 +320,19 @@ def render_minimal_clause_section(subclause_key: SubclauseKey) -> str:
 
     clause = clause_of_subclause(subclause_key)
     definition = SUBCLAUSE_DEFINITIONS[subclause_key]
-    # ``rule.instruction``("낙찰자 결정 전 단계의 자료를 쓴다" 같은 지시)은 쓰지
-    # 않는다. 최소판에서 그 자리를 대신하는 것은 "예시 하나를 골라 같은 형식으로
-    # 값을 만들라"는 한 문장이고, 지시를 겹쳐 두면 최소판이 아니게 된다.
+    # ``rule.instruction``을 되살린다. v3에서 뺐다가 제5호가 9건 중 1건으로
+    # 무너졌다 — 이 문장이 담고 있는 것은 "무엇을 쓰는가"가 아니라 **언제
+    # 시점의 자료인가**다("낙찰자 결정 전 단계의 자료를 쓴다"). 제5호는 확정 전
+    # 이라는 시점 자체가 성립 요건이라 예시 세 개를 봐도 그게 잡히지 않는다.
+    # 제6호가 예시만으로 됐던 것은 세부유형이 등장인물로 갈려서였다.
     rule = SUBCLAUSE_GENERATION_RULES[subclause_key]
     examples = SUBCLAUSE_EXAMPLES[subclause_key]
 
     lines = [
         f"[조항] 정보공개법 제9조 제{clause.value}호 — {definition.label}",
         f"{definition.definition}",
+        "",
+        f"{rule.instruction}",
         "",
         "아래 예시중 문맥에 어울리는 한가지를 적용해서",
         "예시와 유사한 형식으로 값을 생성해서 넣는다.",
@@ -357,3 +372,141 @@ for _key, _rule in SUBCLAUSE_GENERATION_RULES.items():
             f"but {len(SUBCLAUSE_EXAMPLES[_key])} examples"
         )
 del _key, _rule
+
+
+#: 합성 마스킹 1단계 — **자리만 고르게 한다.**
+#:
+#: 문서를 달라고 하지 않는 것이 이 프롬프트의 전부다. 실측 52건에서 원문 보존율
+#: 중앙값이 1.0%였는데, 그건 프롬프트 문구 문제가 아니라 출력 계약 문제였다 —
+#: 문서 전체를 반환하라고 하면 모델은 원문을 재타이핑하는 대신 요약한다.
+#: 값만 반환하는 ``mask_restoration``은 같은 코퍼스에서 91%였다.
+INSERTION_PLAN_SYSTEM_TEMPLATE = """[역할 지정]
+너는 정보공개 검증 인프라를 시험하기 위한 학습 표본을 만드는 레드팀이다.
+아래 [원문]은 그대로 둔다. 문서를 다시 쓰지 않는다.
+네가 할 일은 아래 [조항]의 민감정보를 **어디에 넣을지** 고르는 것뿐이다.
+
+$clause_section
+
+[자리 고르기 규칙]
+- 3~6곳을 고른다. 문서 앞부분에 몰리지 않게 전체에 흩어지게 한다.
+- 각 자리마다 셋을 반환한다.
+    block_id — [원문]의 각 줄 앞에 붙은 `[BLOCK …]` 표시 안의 ID를 그대로
+               적는다. 없는 ID를 지어내지 않는다.
+    mode     — replace(그 block을 통째로 바꾼다) / after(그 block 뒤에 새
+               내용을 넣는다)
+    want     — 그 자리에 들어갈 값의 종류를 한 문장으로
+- 되도록 replace를 고른다. 바꿀 block의 내용이 그 자리에 무엇이 들어갈지
+  말해 주기 때문이다. after를 고를 때는 want를 구체적으로 적는다 — "감사 관련
+  내용"이 아니라 "표본 추출 기준과 1건당 금액 하한".
+- 한 block에는 자리를 하나만 둔다.
+- 원문의 성격에 맞는 자리를 고른다. 이미 값이 적혀 있는 항목·표 칸이
+  민감정보로 바뀌기 좋은 자리다.
+
+[반환 전 점검]
+1. block_id를 전부 [원문]의 `[BLOCK …]` 표시에서 그대로 가져왔는가?
+2. 자리가 문서 전체에 흩어져 있는가?
+3. 본문을 다시 쓰거나 요약한 내용이 응답에 없는가?"""
+
+INSERTION_PLAN_USER_TEMPLATE = """[원문]
+$source_document
+"""
+
+#: 합성 마스킹 2단계. ``mask_restoration``과 같은 일을 하되 첫 문단만 다르다 —
+#: 저쪽은 사람이 가린 자리, 이쪽은 1단계가 고른 자리다.
+INSERTION_FILL_SYSTEM_TEMPLATE = """[역할 지정]
+너는 정보공개 검증 인프라를 시험하기 위한 학습 표본을 만드는 레드팀이다.
+아래 문서에는 민감정보를 넣을 자리가 [[m1]], [[m2]]처럼 표시돼 있고
+나머지 본문은 원문 그대로다.
+
+당신이 할 일은 표시된 자리에 들어갈 값을 **새로 지어내는** 것이다.
+자리의 앞뒤 문맥과 아래 [조항]이 요구하는 종류가 맞아야 한다.
+
+$clause_section
+
+[작업 규칙]
+- 표시된 모든 자리에 값을 하나씩 채운다. 하나도 빠뜨리지 않는다.
+- 각 자리의 값은 **그 자리의 앞뒤 문맥**이 요구하는 종류여야 한다. 표 안이면
+  같은 열의 다른 칸과 같은 종류, 항목 뒤면 그 항목이 받는 값이다.
+- 값만 쓴다. 채운 값이 원문 문장에 그대로 들어가 문장이 성립해야 한다.
+- 실제 문서에 쓰이는 형태로 쓴다. `가상의 김민서`가 아니라 `김민서`,
+  `예시 금액`이 아니라 `1,024,000원`이다.
+- 위 예시의 문장·이름·숫자를 그대로 옮겨 적지 않는다. 예시는 값의 모양만
+  보여 준다.
+- 실재하는 사람·법인의 정보를 쓰지 않는다. 이름·번호·주소는 모두 가상이되
+  실제로 쓰이는 형식을 따른다.
+- rationale에는 어떤 종류의 값들로 채웠는지 한두 문장으로 쓴다.
+
+[반환 전 점검 — 값마다]
+각 값에 대해 이 질문에 한 문장으로 답할 수 있어야 한다.
+
+    **이 값을 미리 아는 사람이 무엇을 할 수 있는가?**
+
+답할 수 없으면 그 값은 근거가 되지 못한다. 다시 만든다.
+    `계약 건당 5백만원 이상만 표본에 넣는다`
+        -> "490만원씩 쪼개 감사를 피한다"                        (근거가 된다)
+    `계약 서류 제출 여부를 점검한다`
+        -> 답할 수 없다. 모든 감사가 하는 일이다                  (다시 만든다)
+
+구체적으로 쓰는 것과 비밀이 되는 것은 다르다. 구체적인데 누구나 아는 값은
+근거가 아니다."""
+
+INSERTION_FILL_USER_TEMPLATE = """$slot_table
+
+[SLOTTED SOURCE DOCUMENT]
+$slotted_source
+[END SLOTTED SOURCE DOCUMENT]
+"""
+
+
+def render_insertion_clause_section(subclause_key: SubclauseKey) -> str:
+    """1단계용 조항 절 — **값 예시를 뺀다.**
+
+    1단계는 값을 만들지 않고 자리만 고른다. 값 예시를 주면 그걸 원문 문장으로
+    착각한다 — 실측: 모델이 프롬프트의 ``감사·조사·단속 계획 — 감사대상 선정
+    사유, 표본 추출 기준…`` 줄을 anchor로 반환했다. 자료 이름과 항목만 남기면
+    ``want``를 정하는 데는 충분하고 착각할 문장이 없다.
+    """
+
+    clause = clause_of_subclause(subclause_key)
+    definition = SUBCLAUSE_DEFINITIONS[subclause_key]
+    rule = SUBCLAUSE_GENERATION_RULES[subclause_key]
+    lines = [
+        f"[조항] 정보공개법 제9조 제{clause.value}호 — {definition.label}",
+        definition.definition,
+        "",
+        rule.instruction,
+    ]
+    if rule.document_patterns:
+        lines.append("")
+        lines.append("이 조항의 정보가 담기는 자료와 항목:")
+        lines.extend(f"- {pattern}" for pattern in rule.document_patterns)
+    return "\n".join(lines)
+
+
+def render_insertion_plan_system_prompt(subclause_key: SubclauseKey) -> str:
+    return Template(INSERTION_PLAN_SYSTEM_TEMPLATE).substitute(
+        clause_section=render_insertion_clause_section(subclause_key),
+    )
+
+
+def render_insertion_plan_user_prompt(source_document: str) -> str:
+    return Template(INSERTION_PLAN_USER_TEMPLATE).substitute(
+        source_document=source_document,
+    )
+
+
+def render_insertion_fill_system_prompt(subclause_key: SubclauseKey) -> str:
+    return Template(INSERTION_FILL_SYSTEM_TEMPLATE).substitute(
+        clause_section=render_minimal_clause_section(subclause_key),
+    )
+
+
+def render_insertion_fill_user_prompt(
+    slotted_source: str,
+    *,
+    slot_table: str,
+) -> str:
+    return Template(INSERTION_FILL_USER_TEMPLATE).substitute(
+        slotted_source=slotted_source,
+        slot_table=slot_table,
+    )

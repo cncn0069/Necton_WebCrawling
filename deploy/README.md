@@ -89,6 +89,31 @@ sudo journalctl -u rd2-crawler -f   # 로그 확인
 디스크에 남는 진행 상태이므로 인스턴스가 사라지면 같이 사라진다 — EBS 스냅샷 등에
 포함시킬 것.
 
+## 6. S 생성 배치 (RDS 입력 → 생성 → RDS 기록)
+
+수집(크롤링)과 별개로, RDS의 공개(O) 원문을 재료로 민감(S) 문서를 생성해 같은
+`documents` 테이블에 넣는 경로다.
+
+```bash
+.venv/bin/python scripts/run_seoul_official_batch.py \
+  --from-rds --rds-source alio --count 10 \
+  --files-root /opt/rd2/data \
+  --out-dir output/ec2_s_batch_$(date +%Y%m%d) \
+  --commit-to-rds --rds-database rd2_test
+```
+
+- `--from-rds`가 `cso_classification='O'` 행을 고르고, 그 행의 `body_file_path`가
+  가리키는 파일(`--files-root` 기준)을 열어 원문 스냅샷을 만든다. **파일이 EC2에
+  있어야 한다** — 없는 행은 건너뛴다(`--allow-body-text`로 본문 텍스트 폴백 허용).
+- `--commit-to-rds`는 검증기를 통과한(`accepted_s`) 생성물만 S 행으로 넣는다.
+  템플릿 작업 전이라 `body_file_path`는 비어 있고 생성 원문과 메타데이터만 들어간다.
+  PDF가 나오면 같은 행을 `DocumentStore.update_files()`로 백필한다.
+- 생성 행은 `source`가 `gen_` 접두사를 갖는다(`gen_alio`) — 수집분과 구분하는
+  유일한 표시다(`is_synthetic` 컬럼은 스키마 정리로 사라졌다).
+- **첫 실행은 `--rds-database rd2_test`로** 할 것. `--commit-to-rds`는
+  `DocumentStore`를 여는데, 그 생성자가 접속 시 ALTER TABLE 마이그레이션을 돌린다.
+- `OPENAI_API_KEY`가 `.env`에 있어야 한다.
+
 ## 미포함 (별도 후속 작업)
 - 완성형 Dockerfile/컨테이너화 — 위 시스템 의존성 조각만 문서화했고, 현재 기본
   운영 방식은 systemd + venv다.

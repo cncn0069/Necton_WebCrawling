@@ -376,10 +376,32 @@ SUBCLAUSE_DEFINITIONS: Mapping[SubclauseKey, SubclauseDefinition] = MappingProxy
                 "확정 전 정책 대안 비교와 부서 검토 의견",
                 "결재 전 초안 단계의 판단",
             ),
+            # 이 목록은 제5호의 다른 네 세부유형을 **빠짐없이** 가리켜야 한다.
+            # ``decision_review``의 정의가 "특정 전문업무에 속하지 않는"이라
+            # 잔여 범주인데, 목록에서 빠진 전문업무는 그 조건이 작동하지 않아
+            # 이쪽으로 흘러든다.
+            #
+            # 실측(PRISM 9건): 연구개발이 빠져 있어 정책연구 평가·활용 보고서가
+            # decision_review 4 / technology_development 3 / audit_inspection 2로
+            # 흩어졌다. 제목이 거의 같은 `정책연구 활용결과 보고서` 4건이 세
+            # 갈래로 갔다.
+            #
+            # **다만 이 줄을 넣고 다시 재보니 분포가 안 바뀌었다**(decision_review
+            # 4 유지, technology_development 3 -> 2, 제7호·bid_contract로 새로
+            # 샌 것 2). 제외 규칙은 "이미 decision_review를 고르려는 중"일 때만
+            # 작동하는데, 판별기는 taxonomy를 훑다가 audit_inspection의 `평가·
+            # 점검`에 먼저 걸리면 여기까지 오지 않는다. 같은 문서가 두 실행에서
+            # `technology_development` -> `bid_contract`로 바뀌기도 했다 —
+            # 판별기 자체가 흔들린다.
+            #
+            # 규칙 자체는 맞아서 남긴다(잔여 범주라면 다른 넷을 빠짐없이 가리켜야
+            # 한다). 세부유형 흔들림은 프롬프트 한 줄로 잡히는 문제가 아니고,
+            # 출처 성격이 뚜렷한 코퍼스는 목표를 고정하는 편이 확실하다.
             excludes=(
                 "핵심 업무가 감사면 audit_inspection",
                 "핵심 업무가 입찰이면 bid_contract",
                 "핵심 업무가 인사면 personnel_management",
+                "핵심 업무가 연구개발·연구용역 심사·평가면 technology_development",
             ),
         ),
         SubclauseKey.TECHNOLOGY_DEVELOPMENT: SubclauseDefinition(
@@ -718,9 +740,21 @@ SUBCLAUSE_GENERATION_RULES: Mapping[SubclauseKey, SubclauseGenerationRule] = (
     MappingProxyType(
     {
         SubclauseKey.AUDIT_INSPECTION: SubclauseGenerationRule(
+            # "실지감사 착수 전"만 있던 때는 감사 **결과** 보고서가 원문으로
+            # 들어오면 쓸 자리가 없었다. 실측(alio-2021040202182097): 13쪽짜리
+            # 연간감사 결과 보고서를 받고 기관명만 남긴 채 「2023년도 감사 계획
+            # 검토 자료」를 새로 지어냈다.
+            #
+            # 그 원문 안에도 제5호 소재가 있었다 — `일상감사 대상 범위를
+            # 200만원에서 100만원으로 강화`, `원가계산 및 예정가격 산정의
+            # 적정성` 같은 점검 기준과 임계값이다. 착수 시점이 아니라 **확정
+            # 여부**가 제5호를 세우므로 그렇게 넓힌다.
             instruction=(
-                "실지감사 착수 전 단계의 자료를 쓴다. 이 내용이 미리 알려지면 "
-                "증거인멸이 가능해진다는 점이 문맥에서 드러나게 한다."
+                "실지감사·검사 착수 전이거나 아직 확정되지 않은 단계의 자료를 "
+                "쓴다. 감사 대상 선정 기준, 표본 추출 기준, 중점 점검 항목, "
+                "적용 임계값처럼 미리 알려지면 점검 대상이 대비할 수 있는 "
+                "내용을 담고, 그것이 감사·검사의 공정한 수행을 어떻게 "
+                "무력화하는지 문맥에서 드러나게 한다."
             ),
             document_patterns=(
                 "감사·조사·단속 계획: 감사대상 선정 사유, 표본 추출 기준, "

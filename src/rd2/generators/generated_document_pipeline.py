@@ -71,6 +71,19 @@ _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
 #: 다시 선언해 느슨하게 검증하는 것이 이 모듈의 기존 방침이다.
 MASK_RESTORATION_ROUTE = "mask_restoration"
 
+#: 원문을 그대로 옮기는 생성 방식은 route로만 구분되지 않는다. 합성 마스킹은
+#: ``anchored``·``span_seeded`` 같은 기존 route 위에서 도는 **생성 방식**이라
+#: route만 보면 템플릿 조립으로 흘러가고, 원문 block이 200개 넘어 공문 템플릿이
+#: 받지 못한다(실측 91건 중 렌더 실패 23건). 그래서 생성 쪽이 payload에
+#: 표시를 남기고 여기서는 그 표시를 함께 본다.
+VERBATIM_RENDER_KEY = "verbatim_render"
+
+
+def _is_verbatim(envelope: "GenerationEnvelope") -> bool:
+    if envelope.result.generation_route == MASK_RESTORATION_ROUTE:
+        return True
+    return bool(getattr(envelope.result, VERBATIM_RENDER_KEY, False))
+
 
 class GeneratedDocumentPipelineError(ValueError):
     """생성 계약을 안전하게 렌더링할 수 없을 때 발생한다."""
@@ -759,8 +772,8 @@ def render_generation_payload(
     envelope = parse_generation_payload(payload, allow_failed=allow_failed)
     seed = base_seed if base_seed is not None else _deterministic_seed(envelope)
     document = envelope.result.generated_document
-    if envelope.result.generation_route == MASK_RESTORATION_ROUTE:
-        # 이 route의 산출물은 이미 완성된 원문이다 — 템플릿 조립을 건너뛴다.
+    if _is_verbatim(envelope):
+        # 원문을 그대로 옮긴 산출물이다 — 템플릿 조립을 건너뛴다.
         # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
         manifest = [
             render_verbatim_document(

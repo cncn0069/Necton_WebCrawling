@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from difflib import SequenceMatcher
 
 from rd2.source_generation.contracts import EvidenceSpan, condense_whitespace
 
@@ -44,3 +45,79 @@ def validate_evidence_quotes(
             raise EvidenceResolutionError(str(exc)) from exc
         validated.append(span)
     return tuple(validated)
+
+
+def validate_evidence_quotes_in_document(
+    spans: Iterable[EvidenceSpan],
+    document_text: str,
+) -> tuple[EvidenceSpan, ...]:
+    """block을 특정하지 않고 **원문 어딘가에** 있는지만 확인한다.
+
+    원문 판별기용이다. 걸러야 할 것이 "지어낸 문장"뿐이고 위치는 아무도 쓰지
+    않으므로 block 경계를 요구하지 않는다 — 자세한 근거는
+    ``EvidenceSpan.require_in_document``에 있다.
+
+    중복 거부는 ``(block_id, quote)`` 쌍 그대로다. 인용문만으로 좁혔다가
+    되돌렸다 — 실측(alio-2021040202182097): 판별기가 ``Ⅱ. 분야별 주요 감사
+    결과``를 목차와 본문 절 머리에서 각각 인용했는데, 문서에 실제로 두 번
+    있는 서로 다른 자리라 부풀린 근거가 아니었다. block_id가 대조에서
+    빠졌다고 해서 **모델이 서로 다른 자리를 가리켰다는 신호**까지 버릴
+    이유는 없다.
+    """
+
+    validated: list[EvidenceSpan] = []
+    seen: set[tuple[str, str]] = set()
+    for span in spans:
+        key = (span.block_id, condense_whitespace(span.quote))
+        if key in seen:
+            raise EvidenceResolutionError(
+                f"duplicate evidence quote for block {span.block_id!r}"
+            )
+        seen.add(key)
+        try:
+            span.require_in_document(document_text)
+        except ValueError as exc:
+            raise EvidenceResolutionError(str(exc)) from exc
+        validated.append(span)
+    return tuple(validated)
+
+
+def evidence_from_inserted_text(
+    source_text: str,
+    generated_body: str,
+    quotes: Iterable[str],
+) -> tuple[bool, ...]:
+    """각 근거 인용문이 **원문에 없던 부분**에서 왔는지 판정한다.
+
+    원문 보존율이 높아질수록 필요한 검사다. 생성물의 99%가 원문이면 검사기가
+    원문 쪽 문장을 근거로 S를 줄 수 있고, 그러면 라벨은 맞아도 학습데이터로는
+    해롭다 — 실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과
+    임계값인데 검사기는 이미 공표된 징계 처분 내역을 근거로 들었다. 공개된
+    감사 연차보고서를 S로 배우게 된다.
+
+    원문과 생성물을 대조해 **바뀌거나 새로 들어간 구간**을 구하고, 인용문이 그
+    구간과 겹치는지 본다. 삽입 좌표를 따로 실어 나르지 않아도 되고, 합성
+    마스킹뿐 아니라 문서를 새로 쓰는 route에도 그대로 쓸 수 있다.
+    """
+
+    matcher = SequenceMatcher(None, source_text, generated_body, autojunk=False)
+    inserted: list[tuple[int, int]] = [
+        (j1, j2)
+        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes()
+        if tag in ("insert", "replace")
+    ]
+
+    verdicts: list[bool] = []
+    for quote in quotes:
+        needle = quote.strip()
+        start = generated_body.find(needle) if needle else -1
+        if start < 0:
+            # 인용문을 못 찾으면 "원문에서 왔다"고 단정하지 않는다. 판단 불가는
+            # 판단이 아니므로 보수적으로 False를 둔다.
+            verdicts.append(False)
+            continue
+        end = start + len(needle)
+        verdicts.append(
+            any(start < hi and lo < end for lo, hi in inserted)
+        )
+    return tuple(verdicts)

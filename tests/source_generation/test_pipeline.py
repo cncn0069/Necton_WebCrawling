@@ -165,6 +165,14 @@ def _accepted_sensitive_decision(
     return SensitiveMonitorDecision(
         classification=CsoClassification.S,
         rationale=rationale,
+        # S에는 근거 문장이 필요하다 — 어느 문장을 보고 판단했는지가 원문 때문인지
+        # 삽입 때문인지 가릴 유일한 단서다.
+        evidence_spans=(
+            EvidenceSpan(
+                block_id="generated:b0",
+                quote="신청인 김민서의 개인 연락처는 010-1234-5678이다.",
+            ),
+        ),
     )
 
 
@@ -631,7 +639,11 @@ def test_source_sensitive_retry_reuses_classification_and_plan():
     assert final_assessment is not None
     assert final_assessment.classification == CsoClassification.S
     assert final_assessment.clause_no == ClauseNumber.CLAUSE_6
-    assert final_assessment.evidence_spans == ()
+    # 검사기가 낸 근거를 그대로 옮긴다 — 어느 문장을 보고 S라 했는지가
+    # 원문 때문인지 삽입 때문인지 가릴 유일한 단서다.
+    assert [span.quote for span in final_assessment.evidence_spans] == [
+        "신청인 김민서의 개인 연락처는 010-1234-5678이다."
+    ]
     assert final_assessment.assertions == ()
     assert final_assessment.rationale == "신청인과 개인 연락처가 직접 연결된다."
 
@@ -655,7 +667,9 @@ def test_sensitive_monitor_uses_locked_metadata_and_allows_blank_rationale():
     )
     assert checked.assessment.clause_no == plan.final_target.clause_no
     assert checked.assessment.subclause_key == plan.final_target.subclause_key
-    assert checked.assessment.evidence_spans == ()
+    assert [span.quote for span in checked.assessment.evidence_spans] == [
+        "신청인 김민서의 개인 연락처는 010-1234-5678이다."
+    ]
     assert checked.assessment.assertions == ()
     assert checked.assessment.rationale == "부가 근거 기록 없음"
 

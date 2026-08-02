@@ -157,6 +157,41 @@ class EvidenceSpan(ContractModel):
             )
         return offsets[start]
 
+    def require_in_document(self, document_text: str) -> None:
+        """인용문이 **문서 어딘가에** 글자 그대로 있는지만 확인한다.
+
+        ``locate_in``과 지키는 것이 다르다. 저쪽은 "이 block의 이 위치"를
+        확정하지만, 여기서는 "지어낸 문장이 아니다"만 본다.
+
+        원문 판별에는 이쪽이 맞다. block_id를 읽어서 무엇을 결정하는 코드가
+        판별기 쪽에는 없고(생성기는 slot 이름만 쓰고, provenance는 기록만
+        한다), 위치를 안 쓰므로 유일성도 요구할 이유가 없다.
+
+        block 단위로 좁혀 두었을 때 값을 치른 것은 PDF 원문이다. 추출기가 줄
+        단위로 자르면 사람 눈에 한 덩어리인 제목이 ``2`` / ``예산·회계
+        집행분야`` 두 block이 되고 표는 셀 하나가 block 하나가 된다. 판별기가
+        읽은 위치와 block 경계가 계속 어긋나 실측 91건 중 40건이 여기서
+        끝났다 — PDF 출처는 mohw 6/7, molit 5/7, PRISM 7/10이었고 hwpx인
+        seoul_opengov는 1/10이었다.
+
+        생성물 채점(``ConsistencyAssessment``)은 그대로 ``locate_in``을 쓴다.
+        거기서는 제6호 assertion이 "같은 block 안에서 사람과 개인정보가
+        연결됐는가"를 판정하므로 block 경계가 판정의 일부다.
+        """
+
+        needle = condense_whitespace(self.quote)
+        if not needle:
+            raise ValueError(
+                f"evidence quote for block {self.block_id!r} has no visible characters"
+            )
+        haystack, _ = _condense_with_offsets(document_text)
+        if haystack.find(needle) < 0:
+            raise ValueError(
+                f"evidence quote not found anywhere in the source document: "
+                f"{_truncate(self.quote)!r}"
+                f"{_prefix_hint(needle, haystack)}"
+            )
+
 
 class ParagraphBlock(ContractModel):
     kind: Literal["paragraph"] = "paragraph"
@@ -353,6 +388,14 @@ class SourceDocumentSnapshot(ContractModel):
                     return block.text
         raise ValueError(f"unknown source block_id: {block_id!r}")
 
+    @property
+    def full_text(self) -> str:
+        """block 경계를 지운 원문 전체. 판별 evidence 대조에 쓴다."""
+
+        return "\n".join(
+            block.text for page in self.pages for block in page.blocks
+        )
+
 
 class SelectionMethod(str, Enum):
     FULL_DOCUMENT = "full_document"
@@ -395,6 +438,61 @@ class RelevanceSelectionResponse(ContractModel):
     def _selected_block_ids_must_be_unique(self) -> "RelevanceSelectionResponse":
         if len(self.selected_block_ids) != len(set(self.selected_block_ids)):
             raise ValueError("selected relevance block IDs must be unique")
+        return self
+
+
+class InsertionMode(str, Enum):
+    """자리를 어떻게 쓸지. ``replace``를 우선한다.
+
+    ``replace``는 바꿀 문장 자체가 그 자리에 무엇이 들어갈지 말해 준다 —
+    ``| 구경 | ****``를 바꾸라고 하면 관 지름이 온다. ``after``는 앞 문장만
+    있어 문맥이 약하고, 약하면 모델이 프롬프트 예시에 기댄다(v1 실측: 예시
+    슬롯 36개 중 22개를 글자 그대로 복사). 그래서 ``after``는 ``want``에
+    값의 종류를 구체적으로 적어야 한다.
+    """
+
+    REPLACE = "replace"
+    AFTER = "after"
+
+
+class InsertionSlot(ContractModel):
+    """원문 어디에 민감정보를 넣을지 가리키는 자리 하나.
+
+    자리를 **block ID**로 받는다. 한때 원문 문장을 인용하게 했는데(anchor) 그
+    문장을 코드가 다시 찾아야 했고 네 가지로 계속 빗나갔다 — 두 block에 걸친
+    인용, 프롬프트 예시를 원문으로 착각, ``감사원`` -> ``감사원의`` 같은 조사
+    한 글자, block 머리표까지 포함. 91건 실행에서 19건이 여기서 끝났다.
+
+    block은 이미 충분히 잘다. 실측 19,148개의 길이 중앙값이 13자이고 90%가
+    47자 이하다 — 한 줄이 곧 한 block이라 "이 block을 바꿔라"가 "이 문장을
+    바꿔라"와 사실상 같다. 찾을 필요가 없는 것을 찾게 만들고 있었다.
+    """
+
+    #: 원문에 붙은 ``[BLOCK …]`` 표시 안의 ID. 사전 조회로 확인한다.
+    block_id: NonEmptyText
+    mode: InsertionMode
+    #: 그 자리에 들어갈 값의 종류. 2단계가 이걸 보고 값을 만든다.
+    want: NonEmptyText
+
+
+class InsertionPlan(ContractModel):
+    """합성 마스킹 1단계의 출력 — **문서가 아니라 자리 목록**.
+
+    이 계약이 이 방식의 전부다. 지금 생성기는 ``GeneratedDocumentIR``을
+    요구하고, 그러면 모델은 원문을 보존하려고 통째로 재타이핑하는 대신
+    요약한다 — 실측 52건의 원문 보존율 중앙값이 1.0%였다(마스킹 복원 건만
+    91%). 문서를 달라고 하지 않으면 요약할 기회가 없다.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    slots: tuple[InsertionSlot, ...] = Field(min_length=1, max_length=8)
+    rationale: NonEmptyText
+
+    @model_validator(mode="after")
+    def _slots_must_target_distinct_blocks(self) -> "InsertionPlan":
+        block_ids = [slot.block_id for slot in self.slots]
+        if len(block_ids) != len(set(block_ids)):
+            raise ValueError("insertion slots must target distinct blocks")
         return self
 
 
@@ -565,8 +663,17 @@ def document_form_matches(
 
 
 class SourceClassification(LegalClassification):
+    def validate_evidence_in_document(self, document_text: str) -> None:
+        """block을 특정하지 않고 원문 어딘가에 있는지만 본다.
+
+        이유는 ``EvidenceSpan.require_in_document``에 있다.
+        """
+
+        for span in self.evidence_spans:
+            span.require_in_document(document_text)
+
     def validate_against_snapshot(self, snapshot: SourceDocumentSnapshot) -> None:
-        self.validate_evidence_against(snapshot.block_text)
+        self.validate_evidence_in_document(snapshot.full_text)
 
 
 class TargetClassification(str, Enum):
@@ -629,9 +736,9 @@ class SourceSuitability(ContractModel):
             raise ValueError(f"{self.evidence_level.value} requires evidence spans")
         return self
 
-    def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
+    def validate_evidence_in_document(self, document_text: str) -> None:
         for span in self.evidence_spans:
-            span.locate_in(block_text(span.block_id))
+            span.require_in_document(document_text)
 
 
 class SourceActorRole(str, Enum):
@@ -732,11 +839,13 @@ class SourceAssessment(ContractModel):
                 )
         return self
 
-    def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
-        self.source_classification.validate_evidence_against(block_text)
-        self.source_suitability.validate_evidence_against(block_text)
+    def validate_evidence_in_document(self, document_text: str) -> None:
+        """판별기 evidence 전체를 원문 문서 단위로 대조한다."""
+
+        self.source_classification.validate_evidence_in_document(document_text)
+        self.source_suitability.validate_evidence_in_document(document_text)
         for slot in self.available_slots:
-            slot.evidence_span.locate_in(block_text(slot.evidence_span.block_id))
+            slot.evidence_span.require_in_document(document_text)
 
 
 class GenerationTarget(ContractModel):
@@ -1093,7 +1202,24 @@ class ConsistencyAssessment(LegalClassification):
         return {**data, "near_miss": usable}
 
     def validate_against_document(self, document: GeneratedDocumentIR) -> None:
-        self.validate_evidence_against(document.block_text)
+        """근거 인용문이 **생성물 어딘가에** 있는지 본다.
+
+        판별기 evidence를 문서 전체 대조로 바꾼 것과 같은 처방이다
+        (``EvidenceSpan.require_in_document``). block 경계는 추출기와 삽입
+        로직이 만든 것이라 채점기가 지킬 이유가 없다.
+
+        실측(합성 마스킹 91건): 검증 단계 실패 12건이 전부 이 검사였다.
+        인용문은 맞는데 block만 어긋났다 — PDF가 한 문장을 여러 block으로
+        자르거나(``앞 24자는 이 block에 있다``), ``after`` 삽입이 만든 새 block
+        (``p6:b3+m1``)을 채점기가 모르거나.
+
+        ``SensitiveAssertion``의 세 span은 그대로 block 단위다. 거기서는
+        "식별 가능한 사람과 개인정보가 **같은 block**에 있는가"가 제6호 판정의
+        일부라 경계 자체가 의미를 갖는다.
+        """
+
+        for span in self.evidence_spans:
+            span.require_in_document(document.body_text)
 
 
 class SensitiveVerdict(str, Enum):
@@ -1173,15 +1299,35 @@ class SensitiveMonitorAssertion(ContractModel):
 
 
 class SensitiveMonitorDecision(ContractModel):
-    """실시간 제6호 검사기가 반환하는 비차단 S/O 판정 기록.
+    """검사기가 반환하는 비차단 S/O 판정 기록.
 
-    문서 형식·조항·세부유형은 잠긴 계획에서 가져오며, 정확한 block/quote와
-    assertion은 검사기 계약에 넣지 않는다. ``rationale``은 감사용 기록일 뿐
-    비어 있어도 S/O 판정 자체를 무효화하지 않는다.
+    문서 형식·조항·세부유형은 잠긴 계획에서 가져온다. ``rationale``은 감사용
+    기록일 뿐 비어 있어도 S/O 판정 자체를 무효화하지 않는다.
+
+    ``evidence_spans``만은 예외로 요구한다. 이 계약은 처음에 "정확한 인용문은
+    반환하지 않는다"로 시작했는데, 원문 보존율이 1%에서 99%로 올라가자 그
+    생략이 값을 치렀다 — 생성물의 대부분이 원문이 되면서 **검사기가 원문 쪽
+    문장을 근거로 S를 줄 수 있게 됐다.**
+
+    실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과 적용
+    임계값인데 검사기는 ``부정 행위 및 징계 처분에 대한 상세한 언급``을 근거로
+    들었다. 그건 이미 공표된 원문 내용이다. 라벨은 S로 맞았지만 이유가 원문
+    쪽이면 학습데이터로는 해롭다 — 공개된 감사 연차보고서를 S로 배운다.
+
+    인용문이 있으면 코드가 기계적으로 가른다. 그 문장이 삽입 구간 안에 있으면
+    우리가 만든 S이고, 밖에 있으면 원문이 원래 갖고 있던 것이다
+    (``evidence.evidence_from_inserted_text``).
     """
 
     classification: Literal[CsoClassification.S, CsoClassification.O]
     rationale: str = ""
+    evidence_spans: tuple[EvidenceSpan, ...] = ()
+
+    @model_validator(mode="after")
+    def _s_requires_evidence(self) -> "SensitiveMonitorDecision":
+        if self.classification == CsoClassification.S and not self.evidence_spans:
+            raise ValueError("S decision requires at least one evidence span")
+        return self
 
 
 class SensitiveAssertion(ContractModel):
@@ -1215,8 +1361,27 @@ class SensitiveAssertion(ContractModel):
             raise ValueError("sensitive assertion link must contain the value quote")
 
 
+#: ``accepted_s``가 설 수 있는 조항. 이 파이프라인이 다루는 범위와 같다.
+_SENSITIVE_VERDICT_CLAUSES: frozenset[ClauseNumber] = frozenset(
+    {
+        ClauseNumber.CLAUSE_5,
+        ClauseNumber.CLAUSE_6,
+        ClauseNumber.CLAUSE_7,
+        ClauseNumber.CLAUSE_8,
+    }
+)
+
+
 class SensitiveConsistencyAssessment(ConsistencyAssessment):
-    """원문 참고 S 생성 경로의 blind S/O 관계 판정."""
+    """원문 참고 S 생성 경로의 blind S/O 관계 판정.
+
+    ``assertions``(주체 역할 + 개인속성 + 연결 span)는 **제6호 전용**이다.
+    식별 가능한 사람과 보호되는 개인정보가 같은 자리에 있는지가 제6호의 성립
+    요건이라 그걸 구조로 요구한다. 제5·7·8호는 그런 구조가 없다 — 예정가격
+    382,000,000원이 비공개인 이유에 '주체 역할'이 없다. 그래서 그 호에서는
+    ``assertions``가 비어 있는 것이 정상이고, 아래 검증도 비어 있을 때를
+    통과시킨다.
+    """
 
     _requires_evidence_spans: ClassVar[bool] = False
 
@@ -1234,8 +1399,18 @@ class SensitiveConsistencyAssessment(ConsistencyAssessment):
         if self.sensitivity_verdict == SensitiveVerdict.ACCEPTED_S:
             if self.classification != CsoClassification.S:
                 raise ValueError("accepted_s requires classification S")
-            if self.clause_no != ClauseNumber.CLAUSE_6:
-                raise ValueError("accepted_s requires clause 6")
+            # 제5~8호를 모두 받는다. 이전에는 제6호만 허용했는데, 그건 이 계약이
+            # 제6호 개인정보 관계 판정 전용이던 때 남은 제약이다. 지금
+            # ``sensitive_validator``는 프롬프트 첫머리부터 제5~8호를 다루고
+            # (``[검사 범위: 정보공개법 제9조 제1항 제5~8호]``), 판별기도 그
+            # 범위에서 목표를 고른다.
+            #
+            # 실측: 목표 강제를 끄자 판별기가 제5호를 31건 골랐고, 생성까지
+            # 정상으로 끝난 문서 34건이 전부 이 한 줄에서 버려졌다. 버려진
+            # 문서를 열어 보면 감사·입찰 자료로 성립한다 — 계약이 채점 결과를
+            # 담지 못했을 뿐이다.
+            if self.clause_no not in _SENSITIVE_VERDICT_CLAUSES:
+                raise ValueError("accepted_s requires a clause 5-8 target")
             if self.assertions and any(
                 item.identification_strength != IdentificationStrength.DIRECT
                 for item in self.assertions
