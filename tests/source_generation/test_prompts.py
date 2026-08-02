@@ -9,6 +9,7 @@ from rd2.source_generation import prompts as prompts_module
 from rd2.source_generation.contracts import (
     ConsistencyAssessment,
     GeneratedDocumentIR,
+    MaskFillResponse,
     SensitiveMonitorDecision,
     SourceAssessment,
     SourceEvidenceLevel,
@@ -43,11 +44,17 @@ def test_bundle_has_role_specific_definitions_and_schemas():
         "classifier",
         "generator",
         "sensitive_generator",
+        "mask_restoration",
         "validator",
         "sensitive_validator",
     )
     assert bundle.definition("classifier").response_model is SourceAssessment
     assert bundle.definition("generator").response_model is GeneratedDocumentIR
+    # 마스킹 복원만 문서가 아니라 값을 반환한다 — 이 route의 요점이 계약에
+    # 드러나야 한다.
+    assert (
+        bundle.definition("mask_restoration").response_model is MaskFillResponse
+    )
     assert bundle.definition("validator").response_model is ConsistencyAssessment
     assert (
         bundle.definition("sensitive_validator").response_model
@@ -73,7 +80,20 @@ def test_sensitive_monitor_contract_contains_only_binary_decision_and_record():
     ):
         assert forbidden not in properties
     assert "정확한 block_id" in definition.system_prompt
-    assert "찾거나 반환하지 않는다" in definition.system_prompt
+    assert "별도 필드로 찾거나 반환하지 않는다" in definition.system_prompt
+
+
+def test_sensitive_monitor_keeps_inspector_role_and_explains_binary_labels():
+    prompt = build_prompt_bundle().definition("sensitive_validator").system_prompt
+
+    assert "당신은 법무부 내부 감찰관이다" in prompt
+    assert "제5호부터 제8호까지" in prompt
+    assert "S는" in prompt
+    assert "민감·비공개 학습데이터" in prompt
+    assert "O는" in prompt
+    assert "공개 가능한 일반 문서" in prompt
+    assert "하나라도 실제로 포함하면 S" in prompt
+    assert "관련 용어·항목명·처리 절차만" in prompt
 
 
 def test_each_prompt_has_an_independent_content_hash():

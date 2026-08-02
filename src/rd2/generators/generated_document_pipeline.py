@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.verbatim_rendering import render_verbatim_document
 from rd2.generators.synthetic_approval_stamps import (
     StampProfile,
     StampShape,
@@ -64,6 +65,11 @@ _CONTENT_CONTEXT_KEYS = frozenset(
     }
 )
 _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
+
+#: 이 route의 산출물만 템플릿 조립을 건너뛴다. 문자열로 두는 것은 이 모듈이
+#: ``rd2.source_generation.contracts``를 import하지 않기 때문이다 — 계약을
+#: 다시 선언해 느슨하게 검증하는 것이 이 모듈의 기존 방침이다.
+MASK_RESTORATION_ROUTE = "mask_restoration"
 
 
 class GeneratedDocumentPipelineError(ValueError):
@@ -752,20 +758,26 @@ def render_generation_payload(
 
     envelope = parse_generation_payload(payload, allow_failed=allow_failed)
     seed = base_seed if base_seed is not None else _deterministic_seed(envelope)
-    context = build_template_context(envelope, seed=seed)
     document = envelope.result.generated_document
-    manifest = render_official_document_variations(
-        context,
-        output_dir,
-        per_template=per_template,
-        base_seed=seed,
-        identity_seed=seed,
-        template_slugs=template_slugs,
-        protected_context_keys=_CONTENT_CONTEXT_KEYS,
-        required_source_texts=source_text_atoms(document),
-        enforce_expected_pages=False,
-        reject_legacy_identity=False,
-    )
+    if envelope.result.generation_route == MASK_RESTORATION_ROUTE:
+        # 이 route의 산출물은 이미 완성된 원문이다 — 템플릿 조립을 건너뛴다.
+        # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
+        manifest = [
+            render_verbatim_document(
+                document,
+                output_dir,
+                required_source_texts=source_text_atoms(document),
+            )
+        ]
+    else:
+        manifest = _render_template_variations(
+            envelope,
+            document,
+            output_dir,
+            seed=seed,
+            per_template=per_template,
+            template_slugs=template_slugs,
+        )
 
     input_metadata = {
         "contract_version": envelope.result.contract_version,
@@ -787,3 +799,27 @@ def render_generation_payload(
         encoding="utf-8",
     )
     return manifest
+
+
+def _render_template_variations(
+    envelope: GenerationEnvelope,
+    document: GeneratedDocumentContract,
+    output_dir: Path,
+    *,
+    seed: int,
+    per_template: int,
+    template_slugs: set[str] | None,
+) -> list[dict[str, object]]:
+    context = build_template_context(envelope, seed=seed)
+    return render_official_document_variations(
+        context,
+        output_dir,
+        per_template=per_template,
+        base_seed=seed,
+        identity_seed=seed,
+        template_slugs=template_slugs,
+        protected_context_keys=_CONTENT_CONTEXT_KEYS,
+        required_source_texts=source_text_atoms(document),
+        enforce_expected_pages=False,
+        reject_legacy_identity=False,
+    )

@@ -398,6 +398,34 @@ class RelevanceSelectionResponse(ContractModel):
         return self
 
 
+class MaskFill(ContractModel):
+    """마스킹 자리 하나에 들어갈 가상 값."""
+
+    mask_id: NonEmptyText
+    value: NonEmptyText
+
+
+class MaskFillResponse(ContractModel):
+    """``mask_restoration`` route의 유일한 모델 출력.
+
+    문서를 반환하지 않는 것이 이 route의 요점이다 — 원문 block은 코드가 그대로
+    옮기고 모델은 값만 낸다(``mask_restoration.apply_mask_fills``). 그래서 다른
+    route의 ``GeneratedDocumentIR``과 달리 서식·block 구성을 모델이 건드릴 수
+    없고, 표제부·붙임처럼 계약이 걸린 자리에서 실패할 여지가 없다.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    fills: tuple[MaskFill, ...] = Field(min_length=1)
+    rationale: NonEmptyText
+
+    @model_validator(mode="after")
+    def _mask_ids_must_be_unique(self) -> "MaskFillResponse":
+        mask_ids = [fill.mask_id for fill in self.fills]
+        if len(mask_ids) != len(set(mask_ids)):
+            raise ValueError("mask fill IDs must be unique")
+        return self
+
+
 class DocumentSelection(ContractModel):
     contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: NonEmptyText
@@ -557,6 +585,10 @@ class GenerationRoute(str, Enum):
     ANCHORED = "anchored"
     ADMINISTRATIVE_AUGMENTED = "administrative_augmented"
     FULLY_SYNTHETIC = "fully_synthetic"
+    #: 부분공개 원문의 마스킹 자리만 되돌린다. 다른 route와 달리 문서를 새로
+    #: 쓰지 않으므로 문서형식·업무 맥락이 원문 그대로 남는다
+    #: (``mask_restoration``).
+    MASK_RESTORATION = "mask_restoration"
 
 
 class SourceEvidenceLevel(str, Enum):
@@ -784,7 +816,19 @@ class GenerationPlan(ContractModel):
             if source.classification != CsoClassification.O:
                 raise ValueError(f"{route.value} route requires an O source")
 
-        if route == GenerationRoute.SPAN_SEEDED:
+        if route == GenerationRoute.MASK_RESTORATION:
+            # 이 route만 ``evidence_level``을 보지 않는다. 다른 route의 근거는
+            # 판별기가 "요청 목표에 대해 원문이 무엇을 주는가"를 판단한 값이지만,
+            # 이 route의 근거는 푸터 ``부분공개(N)``와 마스킹 스팬 — 실무자가
+            # 남긴 기록이고 snapshot에서 결정론적으로 다시 뽑을 수 있다
+            # (``mask_restoration.detect_redaction_evidence``). 서로 다른
+            # 질문의 답이라 한쪽을 다른 쪽 enum에 밀어 넣지 않는다. 대신
+            # 무엇을 보고 골랐는지는 provenance의 reason_code에 남는다.
+            if target.clause_no is None:
+                raise ValueError(
+                    "mask_restoration route requires a legal clause target"
+                )
+        elif route == GenerationRoute.SPAN_SEEDED:
             if suitability.evidence_level != SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN:
                 raise ValueError(
                     "span_seeded route requires direct_sensitive_span"

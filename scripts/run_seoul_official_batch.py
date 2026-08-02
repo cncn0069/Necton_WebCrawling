@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from html import escape
 import json
 import os
@@ -32,6 +33,7 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import OpenAI  # noqa: E402
 
 from rd2.extraction.hwp_text import extract_hwp_document  # noqa: E402
+from rd2.extractors.pdf import extract_pdf  # noqa: E402
 from rd2.generators.output_naming import generation_output_filename  # noqa: E402
 from rd2.source_generation.classification_taxonomy import (  # noqa: E402
     SUBCLAUSES_BY_CLAUSE,
@@ -62,7 +64,57 @@ BLOCKS_PER_PAGE = 12
 load_dotenv(ROOT / ".env")
 
 
-def _snapshot_from_hwpx(path: Path, data_root: Path) -> tuple[SourceDocumentSnapshot, str] | None:
+def _snapshot_from_pdf(
+    path: Path,
+    *,
+    source: str,
+) -> tuple[SourceDocumentSnapshot, str] | None:
+    """PDF 원문을 hwpx와 **같은 block 구조**로 옮긴다.
+
+    seoul_opengov 외의 출처는 대부분 PDF다(alio 4,303 / PRISM 1,964 /
+    orginl_info 105 …). 파이프라인은 ``SourceDocumentSnapshot``만 보므로 원문
+    형식과 무관한데, 이 스크립트가 hwpx만 읽어 그 출처들이 통째로 입력에서
+    빠져 있었다.
+
+    추출기는 이미 있다(``rd2.extractors.pdf.extract_pdf``) — 여기서는 그
+    페이지 텍스트를 hwpx 경로와 같은 규칙으로 줄 단위 block에 담기만 한다.
+    두 경로가 같은 모양의 block을 내야 마스킹 검출도, 판별기 프롬프트도
+    출처에 따라 다르게 동작하지 않는다.
+    """
+
+    try:
+        extracted = extract_pdf(path)
+    except Exception:  # noqa: BLE001 - 한 문서 실패가 배치를 끊지 않는다
+        return None
+    if extracted.needs_ocr:
+        # 텍스트 레이어가 없는 스캔본은 본문이 비어 있다. 넘기면 판별기가
+        # 빈 문서를 보고 지어내기 시작한다.
+        return None
+
+    texts = [
+        line.strip()
+        for page in extracted.pages
+        for line in page.text.splitlines()
+        if line.strip()
+    ]
+    if not texts:
+        return None
+
+    doc_id = path.stem
+    return _snapshot_from_texts(
+        texts,
+        source=source,
+        doc_id=doc_id,
+        source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
+def _snapshot_from_hwpx(
+    path: Path,
+    data_root: Path,
+    *,
+    source: str = "seoul_opengov",
+) -> tuple[SourceDocumentSnapshot, str] | None:
     """추출기가 낸 page/line 구조를 그대로 snapshot block으로 옮긴다."""
 
     extracted = extract_hwp_document(path, data_root=data_root)
@@ -78,6 +130,23 @@ def _snapshot_from_hwpx(path: Path, data_root: Path) -> tuple[SourceDocumentSnap
     if not texts:
         return None
 
+    return _snapshot_from_texts(
+        texts,
+        source=source,
+        doc_id=str(extracted.get("doc_id") or path.stem),
+        source_sha256=extracted["source_sha256"],
+    )
+
+
+def _snapshot_from_texts(
+    texts: list[str],
+    *,
+    source: str,
+    doc_id: str,
+    source_sha256: str,
+) -> tuple[SourceDocumentSnapshot, str]:
+    """hwpx·PDF가 공유하는 block 배치 규칙."""
+
     pages = []
     for offset in range(0, len(texts), BLOCKS_PER_PAGE):
         page_number = offset // BLOCKS_PER_PAGE + 1
@@ -91,13 +160,12 @@ def _snapshot_from_hwpx(path: Path, data_root: Path) -> tuple[SourceDocumentSnap
             }
         )
 
-    doc_id = str(extracted.get("doc_id") or path.stem)
     snapshot = SourceDocumentSnapshot.model_validate(
         {
-            "source_document_id": f"seoul_opengov-{doc_id}",
-            "source": "seoul_opengov",
+            "source_document_id": f"{source}-{doc_id}",
+            "source": source,
             "manifest_key": "seoul-official-batch",
-            "source_sha256": extracted["source_sha256"],
+            "source_sha256": source_sha256,
             "pages": pages,
         }
     )
@@ -317,15 +385,22 @@ def main() -> int:
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, default=10)
+    parser.add_argument(
+        "--source-name",
+        default="seoul_opengov",
+        help="snapshot.source에 기록할 출처 이름 (예: alio, PRISM, orginl_info)",
+    )
     parser.add_argument("--classifier-model", default="gpt-4o")
     parser.add_argument("--generator-model", default="gpt-4o")
     parser.add_argument("--validator-model", default="gpt-4o-mini")
     parser.add_argument("--max-attempts", type=int, default=2)
     args = parser.parse_args()
 
-    files = sorted(args.source_dir.glob("*.hwpx"))
+    files = sorted(
+        [*args.source_dir.rglob("*.hwpx"), *args.source_dir.rglob("*.pdf")]
+    )
     if not files:
-        print(f"hwpx 파일이 없다: {args.source_dir}")
+        print(f"hwpx/pdf 파일이 없다: {args.source_dir}")
         return 1
 
     gateway = RetryingGateway(
@@ -355,7 +430,12 @@ def main() -> int:
         for path in files:
             if done >= args.count:
                 break
-            built = _snapshot_from_hwpx(path, ROOT / "data")
+            if path.suffix.lower() == ".pdf":
+                built = _snapshot_from_pdf(path, source=args.source_name)
+            else:
+                built = _snapshot_from_hwpx(
+                    path, ROOT / "data", source=args.source_name
+                )
             if built is None:
                 continue
             snapshot, title = built
@@ -502,6 +582,16 @@ def main() -> int:
                                 "result": {
                                     "contract_version": (
                                         document.contract_version
+                                    ),
+                                    # 렌더러가 route별로 다르게 처리한다 —
+                                    # mask_restoration 산출물은 이미 완성된
+                                    # 원문이라 템플릿 조립을 건너뛴다. 이 값이
+                                    # 빠지면 그 분기가 서지 않는다.
+                                    "generation_route": (
+                                        plan.generation_route.value
+                                    ),
+                                    "generation_target": (
+                                        plan.final_target.model_dump(mode="json")
                                     ),
                                     "generated_document": (
                                         document.model_dump(mode="json")

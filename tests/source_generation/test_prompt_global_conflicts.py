@@ -129,18 +129,20 @@ def test_only_general_validator_carries_exact_evidence_sufficiency_rules():
     assert VALIDATOR_EVIDENCE_SUFFICIENCY_GUIDANCE not in sensitive_validator
 
 
-def test_sensitive_validator_does_not_choose_clause_six_subtypes():
+def test_sensitive_validator_reads_clauses_five_to_eight_without_returning_subtypes():
     prompt = build_prompt_bundle().definition("sensitive_validator").system_prompt
 
+    for clause_heading in ("제5호 (S)", "제6호 (S)", "제7호 (S)", "제8호 (S)"):
+        assert clause_heading in prompt
     for key in (
+        SubclauseKey.AUDIT_INSPECTION,
         SubclauseKey.PERSONNEL_PII,
-        SubclauseKey.PETITIONER_PII,
-        SubclauseKey.SUBJECT_PII,
-        SubclauseKey.WELFARE_PII,
+        SubclauseKey.BUSINESS_STRATEGY,
+        SubclauseKey.REAL_ESTATE_SPECULATION,
     ):
-        assert key.value not in prompt
-    assert "세부유형" in prompt
-    assert "찾거나 반환하지 않는다" in prompt
+        assert key.value in prompt
+    assert "판단 기준으로만 사용" in prompt
+    assert "별도 필드로 찾거나 반환하지 않는다" in prompt
 
 
 def test_only_general_validator_carries_document_form_other_definition():
@@ -156,4 +158,4 @@ def test_only_general_validator_carries_document_form_other_definition():
 
 
 def test_prompt_bundle_version_bumped_for_global_conflict_resolution():
-    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-02-v46"
+    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-02-v48"

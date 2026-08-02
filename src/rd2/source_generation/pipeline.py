@@ -51,6 +51,7 @@ from rd2.source_generation.contracts import (
     GenerationProvenance,
     GenerationRoute,
     GenerationTarget,
+    MaskFillResponse,
     PLANNER_POLICY_VERSION,
     RepairCode,
     SensitiveConsistencyAssessment,
@@ -86,11 +87,21 @@ from rd2.source_generation.seed_assembly import (
     SEED_ASSEMBLY_VERSION,
     build_sensitive_seed,
 )
+from rd2.source_generation.mask_restoration import (
+    MaskRestorationError,
+    RedactionEvidence,
+    apply_mask_fills,
+    detect_redaction_evidence,
+    render_mask_slot_table,
+    render_masked_source,
+    resolve_mask_restoration_subclause,
+)
 from rd2.source_generation.prompts import (
     PromptBundle,
     build_prompt_bundle,
     render_classifier_user_prompt,
     render_generator_user_prompt,
+    render_mask_restoration_user_prompt,
     render_validator_user_prompt,
 )
 from rd2.source_generation.sensitive_policy import validate_sensitive_assessment
@@ -619,6 +630,16 @@ _PLANNER_POLICY_PAYLOAD = {
         ),
     },
     "admin_only": GenerationRoute.ADMINISTRATIVE_AUGMENTED.value,
+    # 부분공개 원문은 evidence_level 표보다 먼저 걸린다. 근거가 판별기 추정이
+    # 아니라 원문에 찍힌 푸터 라벨과 마스킹 스팬이기 때문이다.
+    "redacted_source": {
+        "route": GenerationRoute.MASK_RESTORATION.value,
+        "precedence": "before_evidence_level_table",
+        "clause_from": "disclosure_footer_label",
+        "subclause_from": "requested_then_primary_then_compatible",
+        "administrative_statuses": "dropped",
+        "no_subclause_in_clause": "fall_through_to_evidence_level_table",
+    },
     "compatible_subclause_required": True,
     # ``primary_subclause``는 원문에 가장 가까운 세부유형이지 생성 목표가 아니다.
     # 반사실 생성은 원문 판별 결과와 다른 목표를 의도적으로 구현하므로, 두 값이
@@ -719,6 +740,48 @@ def _resolve_form_subclause_conflict(
     )
 
 
+def _mask_restoration_target(
+    evidence: RedactionEvidence,
+    *,
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+) -> GenerationTarget | None:
+    """푸터가 정한 호로 목표를 다시 세운다. 세부유형을 못 고르면 ``None``.
+
+    호는 사람이 문서에 적어 둔 값이므로 요청 목표를 이긴다 — 요청이 제6호인데
+    푸터가 제5호면 그 문서에서 만들 수 있는 것은 제5호다.
+
+    행정상태는 버린다. 이 route는 원문 본문을 건드리지 않으므로 "초안으로
+    만들라" 같은 요구를 이행할 수단이 없고, 이행하지 않은 목표를 계획에
+    남기면 journal이 거짓을 기록한다.
+
+    세부유형이 그 호 안에서 하나도 안 잡히면 ``None``을 돌려 기존 route로
+    보낸다. 세부유형 없는 목표는 ``GenerationTarget``이 행정상태 단독 목표로만
+    허용하므로 여기서 표현할 수 없고, 아무 값이나 끼워 넣으면 학습데이터에
+    틀린 라벨이 남는다.
+    """
+
+    subclause = resolve_mask_restoration_subclause(
+        evidence,
+        candidates=(
+            requested_target.subclause_key,
+            assessment.primary_subclause,
+            *assessment.compatible_subclauses,
+        ),
+    )
+    if subclause is None:
+        return None
+    return GenerationTarget(
+        classification=TargetClassification(
+            expected_classification(evidence.clause_no).value
+        ),
+        clause_no=evidence.clause_no,
+        subclause_key=subclause,
+        administrative_statuses=(),
+        generation_mode=requested_target.generation_mode,
+    )
+
+
 def build_generation_plan(
     *,
     assessment: SourceAssessment,
@@ -753,6 +816,34 @@ def build_generation_plan(
     else:
         final_target = requested_target
         admin_only = requested_target.clause_no is None
+
+        # 부분공개 원문이면 다른 어떤 route보다 먼저 잡는다. 이 문서에는 어느
+        # 호에 걸리는지와 그 정보가 어느 자리에 있었는지가 사람 손으로 표시돼
+        # 있고, 그 둘은 판별기가 추정한 어떤 값보다 강한 근거다. 행정상태 단독
+        # 목표만 예외다 — 채울 조항이 없으면 마스킹을 무엇으로 채울지도 정할 수
+        # 없다.
+        redaction = None if admin_only else detect_redaction_evidence(snapshot)
+        mask_target = (
+            _mask_restoration_target(
+                redaction,
+                assessment=assessment,
+                requested_target=requested_target,
+            )
+            if redaction is not None
+            else None
+        )
+        if mask_target is not None:
+            # 형식 충돌 해소를 걸지 않는다. 그 함수는 새로 쓸 문서의 형식과
+            # 세부유형을 맞추는 일인데, 여기서는 원문 서식을 그대로 두므로
+            # 맞출 것이 없다.
+            return _finalize_plan(
+                assessment=assessment,
+                requested_target=requested_target,
+                final_target=mask_target,
+                route=GenerationRoute.MASK_RESTORATION,
+                snapshot=snapshot,
+                selection=selection,
+            )
 
         final_target = _resolve_form_subclause_conflict(
             assessment=assessment,
@@ -811,6 +902,25 @@ def build_generation_plan(
                 ),
             )
 
+    return _finalize_plan(
+        assessment=assessment,
+        requested_target=requested_target,
+        final_target=final_target,
+        route=route,
+        snapshot=snapshot,
+        selection=selection,
+    )
+
+
+def _finalize_plan(
+    *,
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+    final_target: GenerationTarget,
+    route: GenerationRoute,
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+) -> GenerationPlan:
     plan = GenerationPlan(
         requested_target=requested_target,
         final_target=final_target,
@@ -1053,10 +1163,36 @@ def _build_generation_provenance(
     selection: DocumentSelection,
     sensitive_seed: str | None,
     fully_synthetic_context: FullySyntheticContext | None,
+    redaction: RedactionEvidence | None = None,
 ) -> GenerationProvenance:
     route = plan.generation_route
     uses_source_evidence = route != GenerationRoute.FULLY_SYNTHETIC
     seed_hash = None
+    if route == GenerationRoute.MASK_RESTORATION:
+        if redaction is None:
+            raise ValueError("mask_restoration provenance requires redaction evidence")
+        # 이 route의 근거는 판별기가 고른 span이 아니라 원문 푸터다. 판별기
+        # span을 그대로 적으면 실제로 무엇을 보고 route를 골랐는지가 감사에서
+        # 사라지고, 판별기가 span을 하나도 못 냈을 때는 provenance가 성립조차
+        # 하지 않는다.
+        return GenerationProvenance(
+            generation_route=route,
+            source_evidence_level=assessment.source_suitability.evidence_level,
+            reason_code=(
+                f"redaction_footer:{redaction.label_quote}:"
+                f"{len(redaction.mask_spans)}_masked_spans"
+            ),
+            requested_target=plan.requested_target,
+            final_target=plan.final_target,
+            selection_sha256=selection.selection_sha256,
+            uses_source_evidence=True,
+            validated_evidence_spans=(
+                EvidenceSpan(
+                    block_id=redaction.label_block_id,
+                    quote=redaction.label_quote,
+                ),
+            ),
+        )
     if route == GenerationRoute.ANCHORED:
         if sensitive_seed is None or not sensitive_seed.strip():
             raise ValueError("anchored generation requires a sensitive seed")
@@ -1159,6 +1295,7 @@ def execute_generation(
 
     generated_document: GeneratedDocumentIR
     receipt: CallReceipt | None = None
+    redaction_evidence: RedactionEvidence | None = None
     if plan.generation_route == GenerationRoute.FULLY_SYNTHETIC:
         if fully_synthetic_generator is None or fully_synthetic_context is None:
             return GenerationExecution(
@@ -1192,6 +1329,84 @@ def execute_generation(
                     message=f"{type(exc).__name__}: fully_synthetic generator failed",
                 )
             )
+    elif plan.generation_route == GenerationRoute.MASK_RESTORATION:
+        # 계획을 세울 때 본 것과 같은 근거를 snapshot에서 다시 뽑는다. 계획에
+        # 스팬을 실어 나르지 않는 것은 ``plan.source_sha256``이 이미 원문을
+        # 고정하고 있어 검출이 결정론적이기 때문이다.
+        evidence = redaction_evidence = detect_redaction_evidence(snapshot)
+        if evidence is None or plan.final_target.clause_no != evidence.clause_no:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.ROUTE_INVALID,
+                    message=(
+                        "mask_restoration plan no longer matches the source "
+                        "redaction evidence"
+                    ),
+                )
+            )
+        definition = resolved_prompt_bundle.mask_restoration_definition(
+            evidence.clause_no,
+            label_quote=evidence.label_quote,
+            subclause_key=plan.final_target.subclause_key,
+        )
+        try:
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=definition.system_prompt,
+                user_prompt=render_mask_restoration_user_prompt(
+                    render_masked_source(snapshot, evidence),
+                    mask_slots=render_mask_slot_table(evidence),
+                ),
+                response_model=MaskFillResponse,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+
+        if not isinstance(call.parsed, MaskFillResponse):
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message="mask restoration gateway returned the wrong contract type",
+                )
+            )
+        try:
+            generated_document = apply_mask_fills(
+                snapshot,
+                evidence,
+                cast(MaskFillResponse, call.parsed),
+            )
+        except (MaskRestorationError, ValueError) as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message=str(exc),
+                    retryable=True,
+                )
+            )
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
     else:
         sensitive = plan.final_target.clause_no == ClauseNumber.CLAUSE_6
         # document_form은 classifier가 이미 잠갔다(assessment.document_form).
@@ -1273,6 +1488,7 @@ def execute_generation(
             selection=selection,
             sensitive_seed=sensitive_seed,
             fully_synthetic_context=fully_synthetic_context,
+            redaction=redaction_evidence,
         )
         artifact = GenerationArtifact(
             plan_sha256=model_sha256(plan),
@@ -1866,6 +2082,20 @@ def run_source_sensitive_pipeline(
         attempts.append(result)
 
         verdict = validation.assessment.sensitivity_verdict
+        if plan.generation_route == GenerationRoute.MASK_RESTORATION:
+            # 이 route의 S 근거는 검증기의 재판독이 아니라 원문에 남은 사람의
+            # 판단이다 — 실무자가 그 자리를 제N호로 가렸고 우리는 그 자리만
+            # 채웠다. 그래서 검증기가 O를 내도 라벨은 S로 둔다.
+            #
+            # 다만 검증기 판정은 위 ``result``에 그대로 남는다. 채운 값이 약해
+            # 본문이 실제로는 요건에 못 미치는 경우가 있고(실측: 마스킹 자리가
+            # 이름·짧은 사유 두 칸뿐이라 O), 그 문서까지 S로 학습시키면 분류기가
+            # 오탐 쪽으로 기운다. 라벨과 근거를 함께 남겨 나중에 걸러낼 수 있게
+            # 한다.
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.ACCEPTED_S,
+                attempts=attempts,
+            )
         if verdict == SensitiveVerdict.ACCEPTED_S:
             return _source_sensitive_terminal_run(
                 status=SensitivePipelineStatus.ACCEPTED_S,
