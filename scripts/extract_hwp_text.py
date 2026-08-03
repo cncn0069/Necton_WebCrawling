@@ -15,6 +15,7 @@ from _common import ensure_src_on_path
 ensure_src_on_path()
 
 from rd2.extraction.pipeline import (  # noqa: E402
+    OCR_QUEUE_MANIFEST_NAME,
     RUN_MANIFEST_NAME,
     iter_source_documents,
     run_extraction,
@@ -23,6 +24,7 @@ from rd2.extraction.pipeline import (  # noqa: E402
 _REPO_ROOT = Path(__file__).parent.parent
 _DATA_ROOT = _REPO_ROOT / "data"
 _EXTRACTED_ROOT = _DATA_ROOT / "extracted"
+_OCR_QUEUE_ROOT = _DATA_ROOT / "ocr_queue"
 _HWP_SUFFIXES = {".hwp", ".hwpx"}
 
 
@@ -61,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         documents,
         data_root=_DATA_ROOT,
         extracted_root=_EXTRACTED_ROOT,
+        ocr_queue_root=_OCR_QUEUE_ROOT,
         force=args.force,
     )
     counts = manifest["counts"]
@@ -69,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         f"skipped={counts['skipped']} succeeded={counts['succeeded']} failed={counts['failed']}"
     )
     print(f"manifest: {_EXTRACTED_ROOT / RUN_MANIFEST_NAME}")
+    print(f"ocr queue: {_OCR_QUEUE_ROOT / OCR_QUEUE_MANIFEST_NAME}")
     return 0 if manifest["status"] == "complete" or args.allow_partial else 1
 
 

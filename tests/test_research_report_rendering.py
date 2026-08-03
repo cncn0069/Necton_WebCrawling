@@ -477,10 +477,10 @@ def test_research_pipeline_uses_untruncated_page_budget_for_long_input(
         template_slugs={"research_01_classic_flow"},
     )
 
-    assert manifest[0]["status"] == "ok"
+    assert manifest[0]["status"] == "ok_truncated"
     assert manifest[0]["source_text_present"] is True
     assert manifest[0]["truncated"] is True
-    assert manifest[0]["actual_pages"] == 10
+    assert manifest[0]["actual_pages"] == 12
 
 
 def test_research_renderer_rejects_excessive_title_before_pdf_render(

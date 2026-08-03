@@ -646,7 +646,7 @@ def test_c_payload_gets_general_confidential_mark_after_template_render(
         assert all(page.get_images(full=True) for page in document)
 
 
-def test_pipeline_keeps_first_ten_pages_after_natural_layout(
+def test_pipeline_keeps_first_twelve_pages_after_natural_layout(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -663,7 +663,7 @@ def test_pipeline_keeps_first_ten_pages_after_natural_layout(
         "장문 블록은 페이지 경계에서 문장 순서를 유지해야 하며 "
         "앞뒤 블록과 겹치지 않고 다음 페이지로 자연스럽게 이어져야 합니다. "
     )
-    document["title"] = "10페이지 절단 회귀 테스트"
+    document["title"] = "12페이지 절단 회귀 테스트"
     document["body_text"] = None
     document["blocks"] = [
         {
@@ -687,14 +687,14 @@ def test_pipeline_keeps_first_ten_pages_after_natural_layout(
 
     assert len(manifest) == 1
     entry = manifest[0]
-    assert entry["status"] == "ok"
+    assert entry["status"] == "ok_truncated"
     assert entry["truncated"] is True
-    assert entry["original_page_count"] > 10
-    assert entry["retained_page_count"] == 10
-    assert entry["discarded_page_count"] == entry["original_page_count"] - 10
-    assert entry["actual_pages"] == 10
+    assert entry["original_page_count"] > 12
+    assert entry["retained_page_count"] == 12
+    assert entry["discarded_page_count"] == entry["original_page_count"] - 12
+    assert entry["actual_pages"] == 12
     with fitz.open(str(entry["pdf"])) as document_pdf:
-        assert document_pdf.page_count == 10
+        assert document_pdf.page_count == 12
         assert all(page.get_images(full=True) for page in document_pdf)
 
 
@@ -734,8 +734,8 @@ def test_dense_field_report_reserves_one_common_confidential_mark_slot(
 
     assert len(manifest) == 1
     entry = manifest[0]
-    assert entry["status"] == "ok"
-    assert entry["actual_pages"] == 10
+    assert entry["status"] == "ok_truncated"
+    assert entry["actual_pages"] == 12
     assert entry["source_text_present"] is True
     assert entry["security_marking"]["kind"] == "confidential"
     assert entry["security_marking"]["placement"] == {
@@ -784,16 +784,16 @@ def test_every_template_keeps_dense_blocks_inside_page_bounds(
 
     assert len(manifest) == 1
     entry = manifest[0]
-    assert entry["status"] == "ok"
+    assert entry["status"] == "ok_truncated"
     assert entry["source_text_present"] is True
     assert entry["source_text_validation_scope"] == "pre_truncation_pdf"
     assert entry["truncated"] is True
-    assert entry["original_page_count"] > 10
-    assert entry["retained_page_count"] == 10
+    assert entry["original_page_count"] > 12
+    assert entry["retained_page_count"] == 12
     assert entry["discarded_page_count"] > 0
 
     with fitz.open(str(entry["pdf"])) as rendered:
-        assert rendered.page_count == 10
+        assert rendered.page_count == 12
         retained_text = "\n".join(page.get_text() for page in rendered)
         assert "중요내용" in retained_text
         for page in rendered:
@@ -871,6 +871,42 @@ def test_long_source_validation_rejects_middle_corruption() -> None:
         source,
         _normalized(corrupted),
     )
+
+
+def test_source_validation_accepts_pdf_typography_and_hwp_control_equivalents() -> None:
+    """보이는 본문은 같은데 추출 표현만 달라진 두 실측 사례를 허용한다."""
+
+    rendered = _normalized("서약서 관계공무원에게 취업을 알선·제공하지 않는다.")
+
+    assert _fragmentation_tolerant_text_present(
+        "서\x01 \x01 약\x01 \x01 서",
+        rendered,
+    )
+    assert _fragmentation_tolerant_text_present(
+        "관계공무원에게 취업을 알선・제공하지 않는다.",
+        rendered,
+    )
+
+
+def test_source_validation_accepts_bounded_page_furniture_in_table_cell() -> None:
+    source = (
+        "구 분 · 예산 구분 · 세부항목 · 산출내역 · 금액 (천원) · 비율(%) "
+        "구분 · 전체 국고 보조금 · 인건비 운영비 사업비 소 계 · 100 기타"
+    )
+    split_at = source.index("사업비")
+    rendered = _normalized(
+        source[:split_at] + " 공모 보건복지부 - 6 - " + source[split_at:]
+    )
+
+    assert 20 <= len(_normalized(source)) < 80
+    assert _fragmentation_tolerant_text_present(source, rendered)
+
+
+def test_source_validation_rejects_unbounded_fragmentation_for_medium_text() -> None:
+    source = "중간길이원문" * 6
+    rendered = _normalized(source[:18] + ("삽입문자" * 80) + source[18:])
+
+    assert not _fragmentation_tolerant_text_present(source, rendered)
 
 
 def test_missing_source_error_does_not_echo_confidential_text(

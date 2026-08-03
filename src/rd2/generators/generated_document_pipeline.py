@@ -71,7 +71,7 @@ from rd2.source_generation.classification_taxonomy import SemanticDocumentType
 #: 유지하고, 보안표지 후처리에서 필요한 분류와 군사기밀 등급만 검증한다.
 #: v1 같은 실제 구조 변경만 여기서 막는다.
 _CONTRACT_VERSION_RE = re.compile(r"^2\.\d+\.\d+$")
-GENERATED_DOCUMENT_MAX_PAGES = 10
+GENERATED_DOCUMENT_MAX_PAGES = 12
 _UNTRUNCATED_RENDER_PAGE_BUDGET = 1_000
 _CONTENT_CONTEXT_KEYS = frozenset(
     {
@@ -1683,6 +1683,13 @@ def render_generation_payload(
             agency_name=document.agency_name,
             content_sha256=content_sha256,
         )
+
+        # 보안표지는 위에서 status="ok"인 산출물에 먼저 적용한다. 게시 상한을
+        # 넘겨 뒷페이지를 의도적으로 버린 결과는 그 뒤에 별도 성공 상태로
+        # 바꿔, 렌더 누락 없이 만들어진 사실과 최종 원문 전체 보존을 구분한다.
+        for entry in manifest:
+            if entry.get("status") == "ok" and entry.get("truncated"):
+                entry["status"] = "ok_truncated"
     except Exception:
         if security_marking is not None:
             for entry in manifest:

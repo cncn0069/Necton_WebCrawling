@@ -123,6 +123,9 @@ def _canonical_hwp_base(
             "needs_quarantine": False,
             "pages_needing_ocr": [],
             "avg_chars_per_page": None,
+            "sparse_page_count": None,
+            "sparse_page_ratio": None,
+            "ocr_severity": "unknown",
             "warnings": [],
         },
         "pages": [],
@@ -225,6 +228,9 @@ def extract_hwp_document(
         "needs_quarantine": False,
         "pages_needing_ocr": [] if has_text_layer else [1],
         "avg_chars_per_page": None,
+        "sparse_page_count": 0 if has_text_layer else 1,
+        "sparse_page_ratio": 0.0 if has_text_layer else 1.0,
+        "ocr_severity": "clean" if has_text_layer else "needs_ocr",
         "warnings": warnings,
     }
     return result

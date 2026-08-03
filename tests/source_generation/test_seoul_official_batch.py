@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from rd2.extraction.pipeline import RUN_MANIFEST_NAME
+from rd2.extraction.storage import write_json_gz_atomic
 from rd2.source_generation.classification_taxonomy import ClauseNumber
 from rd2.source_generation.contracts import TargetClassification
 from rd2.source_generation.rds_writeback import SourceRow
@@ -12,7 +14,9 @@ from scripts.run_seoul_official_batch import (
     _RDS_COLUMNS,
     _fetch_rds_rows,
     _iter_rds_items,
+    _iter_extracted_items,
     _report_section,
+    _snapshot_from_extracted_payload,
     _targets,
     main,
 )
@@ -185,6 +189,98 @@ def test_rds_items_fall_back_to_body_text_only_when_allowed(tmp_path):
     # 원문 행 id가 스냅샷 id에 남아야 생성 결과에서 원문을 역추적할 수 있다.
     assert items[0].snapshot.source_document_id == "alio-7"
     assert items[0].row is row
+
+
+def _extraction_payload(*, status: str = "ok") -> dict:
+    return {
+        "schema_version": 2,
+        "source_path": "data/alio/audit_result/123_감사결과.hwp",
+        "source": "alio",
+        "source_sha256": "a" * 64,
+        "extraction_id": "b" * 64,
+        "status": status,
+        "pages": [
+            {
+                "page": 1,
+                "lines": [
+                    {"line_id": "p1:l0", "text": "감사 결과 통보서"},
+                    {"line_id": "p1:l1", "text": "점검 결과를 통보합니다."},
+                ],
+            },
+            {"page": 2, "lines": []},
+            {
+                "page": 3,
+                "lines": [{"line_id": "p3:l0", "text": "붙임 1. 점검표"}],
+            },
+        ],
+    }
+
+
+def test_extraction_payload_becomes_traceable_source_snapshot():
+    built = _snapshot_from_extracted_payload(
+        _extraction_payload(),
+        manifest_key="extraction-v2:run-1:alio/file.json.gz",
+    )
+
+    assert built is not None
+    snapshot, title = built
+    assert snapshot.source_document_id == f"alio-{'b' * 16}"
+    assert snapshot.source == "alio"
+    assert snapshot.page_count == 2
+    assert snapshot.pages[1].blocks[0].block_id == "source-p3:l0"
+    assert title == "감사 결과 통보서"
+
+
+def test_extracted_items_use_manifest_allowlist_and_skip_needs_ocr(tmp_path):
+    ok_payload = _extraction_payload()
+    ocr_payload = _extraction_payload(status="needs_ocr") | {
+        "source_path": "data/alio/audit_result/456_스캔.pdf",
+        "extraction_id": "c" * 64,
+    }
+    ok_path = tmp_path / "alio" / "ok.json.gz"
+    ocr_path = tmp_path / "alio" / "ocr.json.gz"
+    write_json_gz_atomic(ok_path, ok_payload)
+    write_json_gz_atomic(ocr_path, ocr_payload)
+    write_json_gz_atomic(
+        tmp_path / RUN_MANIFEST_NAME,
+        {
+            "run_id": "run-1",
+            "status": "complete",
+            "artifacts": [
+                {
+                    "source_path": ok_payload["source_path"],
+                    "output_path": "alio/ok.json.gz",
+                    "extraction_id": ok_payload["extraction_id"],
+                    "status": "ok",
+                },
+                {
+                    "source_path": ocr_payload["source_path"],
+                    "output_path": "alio/ocr.json.gz",
+                    "extraction_id": ocr_payload["extraction_id"],
+                    "status": "needs_ocr",
+                },
+            ],
+        },
+    )
+
+    items = list(_iter_extracted_items(tmp_path, allow_partial=False))
+
+    assert len(items) == 1
+    assert items[0].display_name == ok_payload["source_path"]
+
+
+def test_partial_extraction_requires_explicit_opt_in(tmp_path):
+    write_json_gz_atomic(
+        tmp_path / RUN_MANIFEST_NAME,
+        {"run_id": "run-1", "status": "partial", "artifacts": []},
+    )
+
+    try:
+        list(_iter_extracted_items(tmp_path, allow_partial=False))
+    except ValueError as exc:
+        assert "not complete" in str(exc)
+    else:
+        raise AssertionError("partial extraction should require an explicit opt-in")
 
 
 def test_rds_upsert_happens_after_rendering():

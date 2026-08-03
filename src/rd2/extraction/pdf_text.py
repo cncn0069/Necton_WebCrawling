@@ -22,9 +22,12 @@ from rd2.extraction.storage import (
     source_metadata,
 )
 
-# 문서 평균 페이지당 추출 글자 수가 이 값 미만이면 텍스트 레이어가 없는
-# 스캔본(이미지 PDF) 후보로 표시한다. OCR 적용 여부는 이번 범위 밖 — 표시만 한다.
-_SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD = 5
+# 한 페이지의 추출 글자 수가 이 값 미만이면 텍스트가 거의 없는 sparse page로
+# 본다. 문서 전체 OCR 여부는 sparse page 비율로 판정해 빈 표지나 구분 페이지 한
+# 장 때문에 정상 문서 전체가 needs_ocr가 되는 일을 막는다.
+_SPARSE_PAGE_CHAR_THRESHOLD = 5
+_NEEDS_OCR_SPARSE_PAGE_RATIO = 0.5
+_IMAGE_PDF_CANDIDATE_SPARSE_PAGE_RATIO = 0.9
 
 # 같은 블록 안에서 "다음 줄이 현재 줄 바로 아래(세로로 이어짐)"인 경우만 한
 # 문장/문단으로 합친다. 표는 같은 블록 안에 한 행의 여러 셀이 "같은 y좌표,
@@ -42,6 +45,11 @@ _PDF_EXTRACTION_CONFIG = {
     "bbox_precision": _LAYOUT_PRECISION,
     "font_size_precision": _LAYOUT_PRECISION,
     "coalesce_adjacent_style_runs": True,
+    "has_text_layer_mode": "any_non_sparse_page",
+    "document_ocr_mode": "sparse_page_ratio",
+    "sparse_page_char_threshold": _SPARSE_PAGE_CHAR_THRESHOLD,
+    "needs_ocr_sparse_page_ratio": _NEEDS_OCR_SPARSE_PAGE_RATIO,
+    "image_pdf_candidate_sparse_page_ratio": _IMAGE_PDF_CANDIDATE_SPARSE_PAGE_RATIO,
 }
 _FONT_BOLD_FLAG = int(getattr(fitz, "TEXT_FONT_BOLD", 16))
 _FONT_ITALIC_FLAG = int(getattr(fitz, "TEXT_FONT_ITALIC", 2))
@@ -238,6 +246,9 @@ def _canonical_pdf_base(
             "needs_quarantine": False,
             "pages_needing_ocr": [],
             "avg_chars_per_page": 0.0,
+            "sparse_page_count": None,
+            "sparse_page_ratio": None,
+            "ocr_severity": "unknown",
             "warnings": [],
         },
         "pages": [],
@@ -318,15 +329,29 @@ def extract_pdf_document(
             )
 
         average_chars = sum(page_char_counts) / len(pages) if pages else 0.0
-        pages_needing_ocr = [
+        sparse_pages = [
             page_number
             for page_number, count in enumerate(page_char_counts, start=1)
-            if count < _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD
+            if count < _SPARSE_PAGE_CHAR_THRESHOLD
         ]
-        if not pages:
-            pages_needing_ocr = []
-        has_text_layer = average_chars >= _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD
-        needs_ocr = not pages or bool(pages_needing_ocr)
+        sparse_page_ratio = len(sparse_pages) / len(pages) if pages else 1.0
+        has_text_layer = any(
+            count >= _SPARSE_PAGE_CHAR_THRESHOLD for count in page_char_counts
+        )
+        needs_ocr = sparse_page_ratio >= _NEEDS_OCR_SPARSE_PAGE_RATIO
+
+        if sparse_page_ratio >= _IMAGE_PDF_CANDIDATE_SPARSE_PAGE_RATIO:
+            ocr_severity = "image_pdf_candidate"
+            warnings = ["image_pdf_candidate"]
+        elif needs_ocr:
+            ocr_severity = "needs_ocr"
+            warnings = ["majority_sparse_pages"]
+        elif sparse_pages:
+            ocr_severity = "partial_text"
+            warnings = ["partial_text_layer"]
+        else:
+            ocr_severity = "clean"
+            warnings = []
 
         result["pages"] = pages
         result["status"] = "needs_ocr" if needs_ocr else "ok"
@@ -334,9 +359,12 @@ def extract_pdf_document(
             "has_text_layer": has_text_layer,
             "needs_ocr": needs_ocr,
             "needs_quarantine": False,
-            "pages_needing_ocr": pages_needing_ocr,
+            "pages_needing_ocr": sparse_pages,
             "avg_chars_per_page": round(average_chars, 1),
-            "warnings": ["partial_text_layer"] if has_text_layer and needs_ocr else [],
+            "sparse_page_count": len(sparse_pages),
+            "sparse_page_ratio": round(sparse_page_ratio, 4),
+            "ocr_severity": ocr_severity,
+            "warnings": warnings,
         }
         return result
     except Exception as exc:  # noqa: BLE001 - preserve a serializable failed result
@@ -443,7 +471,7 @@ def extract_pdf_spans(pdf_path: Path, *, data_root: Path) -> dict[str, Any]:
 
         result["num_pages"] = len(pages)
         avg_chars_per_page = total_chars / len(pages) if pages else 0
-        result["has_text_layer"] = avg_chars_per_page >= _SCANNED_AVG_CHARS_PER_PAGE_THRESHOLD
+        result["has_text_layer"] = avg_chars_per_page >= _SPARSE_PAGE_CHAR_THRESHOLD
         result["pages"] = pages
         return result
     except Exception as exc:  # noqa: BLE001

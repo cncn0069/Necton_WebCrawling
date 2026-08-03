@@ -19,8 +19,16 @@ from rd2.extraction.storage import (
 )
 
 SUPPORTED_SUFFIXES = {".pdf", ".hwp", ".hwpx"}
-NON_SOURCE_DIRS = {"extracted", "structured", "annotated", "candidates", "augmented"}
+NON_SOURCE_DIRS = {
+    "extracted",
+    "ocr_queue",
+    "structured",
+    "annotated",
+    "candidates",
+    "augmented",
+}
 RUN_MANIFEST_NAME = "_run_manifest.json.gz"
+OCR_QUEUE_MANIFEST_NAME = "_manifest.json.gz"
 
 
 def discover_sources(data_root: Path) -> list[str]:
@@ -172,14 +180,41 @@ def _manifest_artifact(
     }
 
 
+def _ocr_queue_entry(
+    payload: dict[str, Any],
+    *,
+    output_path: Path,
+    extracted_root: Path,
+) -> dict[str, Any]:
+    """Build a small OCR work item without copying the extraction artifact."""
+
+    quality = payload.get("quality")
+    if not isinstance(quality, dict):
+        raise ValueError("needs_ocr artifact is missing quality metadata")
+    pages_needing_ocr = quality.get("pages_needing_ocr")
+    if not isinstance(pages_needing_ocr, list):
+        raise ValueError("needs_ocr artifact is missing pages_needing_ocr")
+    return {
+        "source_path": str(payload["source_path"]),
+        "output_path": _manifest_output_path(output_path, extracted_root),
+        "extraction_id": str(payload["extraction_id"]),
+        "source_format": str(payload.get("source_format") or ""),
+        "has_text_layer": bool(quality.get("has_text_layer")),
+        "sparse_page_ratio": quality.get("sparse_page_ratio"),
+        "ocr_severity": str(quality.get("ocr_severity") or "needs_ocr"),
+        "pages_needing_ocr": list(pages_needing_ocr),
+    }
+
+
 def run_extraction(
     documents: Iterable[Path],
     *,
     data_root: Path,
     extracted_root: Path,
+    ocr_queue_root: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Run a batch, persist its latest manifest atomically, and return it."""
+    """Run a batch and atomically publish extraction and optional OCR manifests."""
 
     data_root = Path(data_root)
     extracted_root = Path(extracted_root)
@@ -194,6 +229,7 @@ def run_extraction(
     }
     failures: list[dict[str, Any]] = []
     artifacts: list[dict[str, str]] = []
+    ocr_queue_entries: list[dict[str, Any]] = []
 
     for source_path in document_paths:
         source_label = _manifest_source_path(source_path, data_root)
@@ -216,13 +252,21 @@ def run_extraction(
                     }
                 )
             else:
-                artifacts.append(
-                    _manifest_artifact(
+                artifact = _manifest_artifact(
+                    payload,
+                    output_path=output_path,
+                    extracted_root=extracted_root,
+                )
+                ocr_queue_entry = None
+                if payload.get("status") == "needs_ocr":
+                    ocr_queue_entry = _ocr_queue_entry(
                         payload,
                         output_path=output_path,
                         extracted_root=extracted_root,
                     )
-                )
+                artifacts.append(artifact)
+                if ocr_queue_entry is not None:
+                    ocr_queue_entries.append(ocr_queue_entry)
                 counts["succeeded"] += 1
         except Exception as exc:  # noqa: BLE001 - record one failure and continue the batch
             counts["failed"] += 1
@@ -236,9 +280,10 @@ def run_extraction(
             )
 
     finished_at = dt.datetime.now(dt.timezone.utc)
+    run_id = uuid.uuid4().hex
     manifest = {
         "manifest_version": 1,
-        "run_id": uuid.uuid4().hex,
+        "run_id": run_id,
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": finished_at.isoformat(timespec="seconds"),
         "status": "partial" if failures else "complete",
@@ -255,4 +300,24 @@ def run_extraction(
         ),
     }
     write_json_gz_atomic(extracted_root / RUN_MANIFEST_NAME, manifest)
+    if ocr_queue_root is not None:
+        queue_manifest = {
+            "manifest_version": 1,
+            "source_run_id": run_id,
+            "source_run_status": manifest["status"],
+            "created_at": finished_at.isoformat(timespec="seconds"),
+            "count": len(ocr_queue_entries),
+            "entries": sorted(
+                ocr_queue_entries,
+                key=lambda entry: (
+                    entry["source_path"],
+                    entry["output_path"],
+                    entry["extraction_id"],
+                ),
+            ),
+        }
+        write_json_gz_atomic(
+            Path(ocr_queue_root) / OCR_QUEUE_MANIFEST_NAME,
+            queue_manifest,
+        )
     return manifest
