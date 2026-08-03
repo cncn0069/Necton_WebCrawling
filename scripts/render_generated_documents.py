@@ -1,8 +1,9 @@
-"""생성 계약 JSON/JSONL을 공문 템플릿 PDF 묶음으로 렌더링한다."""
+"""생성 계약 JSON/JSONL을 문서 유형별 PDF 묶음으로 렌더링한다."""
 
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -19,8 +20,28 @@ from rd2.generators.output_naming import (
 from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
 )
+from rd2.generators.guide_rendering import GUIDE_TEMPLATE_VARIANTS
+from rd2.generators.interpretation_compilation_rendering import (
+    INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+)
+from rd2.generators.administrative_rule_rendering import (
+    ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
+)
 from rd2.generators.official_document_rendering import (
     OFFICIAL_TEMPLATE_VARIANTS,
+)
+from rd2.generators.notice_rendering import NOTICE_TEMPLATE_VARIANTS
+from rd2.generators.meeting_minutes_rendering import (
+    MEETING_MINUTES_TEMPLATE_VARIANTS,
+)
+from rd2.generators.research_report_rendering import (
+    RESEARCH_REPORT_TEMPLATE_VARIANTS,
+)
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_TEMPLATE_VARIANTS,
+)
+from rd2.generators.status_report_rendering import (
+    STATUS_REPORT_TEMPLATE_VARIANTS,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +74,12 @@ def _output_id(payload: dict[str, Any], index: int) -> str:
     request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
     raw = str(request_id or f"document-{index:05d}")
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
-    return safe or f"document-{index:05d}"
+    if not safe:
+        return f"document-{index:05d}"
+    if len(safe) > 96:
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:12]
+        safe = f"{safe[:80].rstrip('-._')}-{digest}"
+    return safe
 
 
 def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -135,7 +161,12 @@ def render_input_file(
                 json.dumps(rendered, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        except (GeneratedDocumentPipelineError, RuntimeError, ValueError) as exc:
+        except (
+            GeneratedDocumentPipelineError,
+            RuntimeError,
+            ValueError,
+            OSError,
+        ) as exc:
             batch_manifest.append(
                 {
                     "document_id": document_id,
@@ -164,7 +195,18 @@ def render_input_file(
 
 def main() -> None:
     template_choices = tuple(
-        variant["slug"] for variant in OFFICIAL_TEMPLATE_VARIANTS
+        variant["slug"]
+        for variant in (
+            *OFFICIAL_TEMPLATE_VARIANTS,
+            *RESEARCH_REPORT_TEMPLATE_VARIANTS,
+            *PRESS_RELEASE_TEMPLATE_VARIANTS,
+            *ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
+            *INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+            *GUIDE_TEMPLATE_VARIANTS,
+            *STATUS_REPORT_TEMPLATE_VARIANTS,
+            *MEETING_MINUTES_TEMPLATE_VARIANTS,
+            *NOTICE_TEMPLATE_VARIANTS,
+        )
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="생성 계약 .json 또는 .jsonl")
@@ -175,7 +217,10 @@ def main() -> None:
         "--template",
         action="append",
         choices=template_choices,
-        help="렌더링할 템플릿. 생략하면 10종 전체를 사용합니다.",
+        help=(
+            "렌더링할 템플릿. 생략하면 입력 document_type에 맞는 "
+            "템플릿 전체를 사용합니다."
+        ),
     )
     parser.add_argument(
         "--allow-failed-input",

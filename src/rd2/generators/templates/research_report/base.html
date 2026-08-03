@@ -1,0 +1,104 @@
+{% from "partials/approval_stamp.html" import approval_stamp %}
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="research_report/styles.css">
+  <style id="document-variation">{{ variation_css|safe }}</style>
+</head>
+<body class="research-document {{ variant_class }}">
+  <section class="report-cover">
+    <div class="cover-inner">
+      <div class="document-type-label">{{ document_type_label }}</div>
+      <h1 class="{{ title_class }}">{{ title }}</h1>
+      {% if agency_name %}
+      <div class="cover-agency">{{ agency_name }}</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <main class="report-content">
+    <header class="running-header">
+      <span class="running-title">{{ title }}</span>
+      <span>{{ document_type_label }}</span>
+    </header>
+
+    {% for block in blocks %}
+    <section
+      class="content-block block-{{ block.kind }}{% if loop.first %} is-first{% endif %}{% if block.is_wide|default(false) %} is-wide{% endif %}"
+      data-block-id="{{ block.block_id }}"
+    >
+      {% if block.kind == "paragraph" %}
+      <p>{{ block.text }}</p>
+      {% elif block.kind == "key_value" %}
+      <dl class="key-value-grid">
+        {% for entry in block.entries %}
+        <div class="key-value-entry">
+          <dt>{{ entry.key }}</dt>
+          <dd>{{ entry.value }}</dd>
+        </div>
+        {% endfor %}
+      </dl>
+      {% elif block.kind == "bullet_list" %}
+      <ul class="document-list">
+        {% for item in block["items"] %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+      {% elif block.kind == "table" %}
+      <div class="table-wrap columns-{{ block.column_count }}">
+        <table>
+          <thead>
+            <tr>
+              {% for column in block.columns %}
+              <th>{{ column }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in block.rows %}
+            <tr>
+              {% for cell in row %}
+              <td>{{ cell }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% elif block.kind == "attachment_reference" %}
+      <div class="attachment-reference">
+        <strong class="attachment-label">{{ block.label }}</strong>
+        <span class="attachment-id">{{ block.attachment_id }}</span>
+        {% if block.description %}
+        <span class="attachment-description">{{ block.description }}</span>
+        {% endif %}
+      </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+
+    {% if administrative_events %}
+    <section class="administrative-events">
+      {% for event in administrative_events %}
+      <p><time>{{ event.date }}</time><span>{{ event.text }}</span></p>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if signers %}
+    <section class="research-approval signer-count-{{ signers|length }}">
+      {% for signer in signers %}
+      <div class="research-signer signer-entry{% if signer.stamp_data_uri %} has-stamp{% endif %}">
+        <strong>{{ signer.role }}</strong>
+        {% if signer.name %}<span>{{ signer.name }}</span>{% endif %}
+        {% if signer.date %}<small>{{ signer.date }}</small>{% endif %}
+        {{ approval_stamp(signer) }}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>
