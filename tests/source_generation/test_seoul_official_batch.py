@@ -232,3 +232,37 @@ def test_rds_reader_filters_to_extensions_the_snapshot_builders_can_read():
     # "unsupported format character"로 죽는다(실측 2026-08-03 EC2).
     assert "like '%%.pdf'" in sql
     assert "like '%%.hwpx'" in sql
+
+
+def test_rds_items_accept_windows_separators_in_the_stored_path(tmp_path):
+    """수집이 윈도우에서 돈 행은 body_file_path가 역슬래시다(실측 2026-08-03
+    운영 RDS: alio/audit_result 전부). 리눅스에서 그대로 이으면 폴더가 아니라
+    통짜 파일명이 되어 전부 파일 없음으로 빠진다."""
+
+    target = tmp_path / "alio" / "audit_result" / "1-500"
+    target.mkdir(parents=True)
+    pdf = target / "감사결과.pdf"
+    pdf.write_bytes(b"%PDF-1.4 not a real pdf")
+
+    row = SourceRow(
+        id=9616,
+        source="alio",
+        body_file_path=r"alio\audit_result\1-500\감사결과.pdf",
+    )
+
+    resolved = []
+
+    def _fake_snapshot(path, *, source, doc_id=None):
+        resolved.append(path)
+        return None
+
+    import scripts.run_seoul_official_batch as batch
+
+    original = batch._snapshot_from_pdf
+    batch._snapshot_from_pdf = _fake_snapshot
+    try:
+        list(_iter_rds_items([row], files_root=tmp_path, allow_body_text=False))
+    finally:
+        batch._snapshot_from_pdf = original
+
+    assert resolved == [pdf]

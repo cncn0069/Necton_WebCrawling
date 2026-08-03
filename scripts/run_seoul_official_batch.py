@@ -350,7 +350,12 @@ def _iter_rds_items(
     for row in rows:
         path: Path | None = None
         if row.body_file_path:
-            candidate = files_root / row.body_file_path
+            # 구분자를 맞춘다. 수집이 윈도우에서 돈 행은 역슬래시로 저장돼
+            # 있어(실측 2026-08-03 운영 RDS: alio/audit_result 전부) 리눅스에서
+            # 그대로 이으면 폴더가 아니라 통짜 파일명이 되어 전부 "파일 없음"이
+            # 된다. 같은 테이블에 슬래시로 저장된 행도 섞여 있다.
+            relative = row.body_file_path.replace("\\", "/")
+            candidate = files_root / relative
             if candidate.exists() and candidate.suffix.lower() in {".hwpx", ".pdf"}:
                 path = candidate
         built: tuple[SourceDocumentSnapshot, str] | None = None
