@@ -698,6 +698,56 @@ def test_pipeline_keeps_first_ten_pages_after_natural_layout(
         assert all(page.get_images(full=True) for page in document_pdf)
 
 
+def test_dense_field_report_reserves_one_common_confidential_mark_slot(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    payload["result"]["source_classification"][
+        "document_type"
+    ] = "policy_material"
+    payload["result"]["generation_target"] = {
+        "classification": "C",
+        "clause_no": "2",
+        "subclause_key": "security_defense",
+        "generation_mode": "counterfactual",
+    }
+    document = payload["result"]["generated_document"]
+    document["agency_name"] = "행정안전부"
+    document["title"] = "현장보고형 대외비 표지 안전영역 회귀 테스트"
+    document["body_text"] = None
+    repeated = (
+        "장문 블록은 페이지 경계에서 순서를 유지해야 하며 "
+        "보안표지와 겹치지 않고 다음 페이지로 이어져야 합니다. "
+    )
+    document["blocks"] = [
+        _dense_mixed_block(index, repeated)
+        for index in range(1, 81)
+    ]
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={"05_field_report"},
+    )
+
+    assert len(manifest) == 1
+    entry = manifest[0]
+    assert entry["status"] == "ok"
+    assert entry["actual_pages"] == 10
+    assert entry["source_text_present"] is True
+    assert entry["security_marking"]["kind"] == "confidential"
+    assert entry["security_marking"]["placement"] == {
+        "strategy": "perimeter_slot",
+        "slot": 0,
+    }
+    with fitz.open(str(entry["pdf"])) as rendered:
+        assert all(page.get_images(full=True) for page in rendered)
+        assert "[블록" not in rendered[0].get_text()
+        assert "[블록" in rendered[1].get_text()
+
+
 @pytest.mark.parametrize(
     ("document_type", "template_slug"),
     _PAGINATION_TEMPLATE_CASES,
