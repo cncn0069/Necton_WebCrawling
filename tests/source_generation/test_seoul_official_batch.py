@@ -228,5 +228,7 @@ def test_rds_reader_filters_to_extensions_the_snapshot_builders_can_read():
     )
 
     sql = connection.cursor_obj.sql.lower()
-    assert "like '%.pdf'" in sql
-    assert "like '%.hwpx'" in sql
+    # %%로 써야 한다 — pymysql이 파라미터 바인딩에 % 포맷을 쓰므로 홑 %는
+    # "unsupported format character"로 죽는다(실측 2026-08-03 EC2).
+    assert "like '%%.pdf'" in sql
+    assert "like '%%.hwpx'" in sql

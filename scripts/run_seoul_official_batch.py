@@ -285,10 +285,12 @@ def _fetch_rds_rows(
         # hwpx 2,580) 걸러내지 않으면 --rds-scan-limit이 못 읽는 파일로 다
         # 채워진다. alio를 그대로 훑었더니 60행이 전부 director_activity의
         # xlsx라 0건으로 끝났다. 구버전 hwp는 추출기가 없어 제외된다.
+        # LIKE의 ``%``는 ``%%``로 쓴다 — pymysql이 파라미터 바인딩에 %s 포맷을
+        # 쓰기 때문에 홑 %는 포맷 문자로 먹혀 ValueError로 죽는다.
         where.append(
             "body_file_path IS NOT NULL AND body_file_path <> '' "
-            "AND (LOWER(body_file_path) LIKE '%.pdf' "
-            "OR LOWER(body_file_path) LIKE '%.hwpx')"
+            "AND (LOWER(body_file_path) LIKE '%%.pdf' "
+            "OR LOWER(body_file_path) LIKE '%%.hwpx')"
         )
     else:
         where.append(
