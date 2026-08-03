@@ -210,3 +210,23 @@ def test_render_gate_is_off_while_templates_are_being_rebuilt():
     assert '"--require-render-ok"' in source
     # 기본이 꺼져 있어야 한다 — store_true는 기본값 False다.
     assert "args.require_render_ok and record.get" in source
+
+
+def test_rds_reader_filters_to_extensions_the_snapshot_builders_can_read():
+    """실측(2026-08-03 운영 RDS): O 행의 파일은 pdf 13,596 / hwp 9,647 /
+    xlsx 3,435 / hwpx 2,580이다. 확장자를 SQL에서 거르지 않으면 스캔 한도가
+    못 읽는 파일로 채워진다 — alio를 그대로 훑어 60행 전부 xlsx라 0건이었다."""
+
+    connection = _FakeConnection([])
+
+    _fetch_rds_rows(
+        connection,
+        source="alio",
+        doc_type=None,
+        require_file=True,
+        limit=60,
+    )
+
+    sql = connection.cursor_obj.sql.lower()
+    assert "like '%.pdf'" in sql
+    assert "like '%.hwpx'" in sql

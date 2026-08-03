@@ -280,7 +280,16 @@ def _fetch_rds_rows(
         where.append("doc_type = %s")
         params.append(doc_type)
     if require_file:
-        where.append("body_file_path IS NOT NULL AND body_file_path <> ''")
+        # 확장자를 SQL에서 거른다. 스냅샷 빌더가 읽는 건 pdf·hwpx뿐인데
+        # (실측 2026-08-03, 운영 RDS: pdf 13,596 / hwp 9,647 / xlsx 3,435 /
+        # hwpx 2,580) 걸러내지 않으면 --rds-scan-limit이 못 읽는 파일로 다
+        # 채워진다. alio를 그대로 훑었더니 60행이 전부 director_activity의
+        # xlsx라 0건으로 끝났다. 구버전 hwp는 추출기가 없어 제외된다.
+        where.append(
+            "body_file_path IS NOT NULL AND body_file_path <> '' "
+            "AND (LOWER(body_file_path) LIKE '%.pdf' "
+            "OR LOWER(body_file_path) LIKE '%.hwpx')"
+        )
     else:
         where.append(
             "(body_file_path IS NOT NULL AND body_file_path <> '' "
