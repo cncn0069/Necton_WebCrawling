@@ -313,8 +313,18 @@ rule_04_notice_frame
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
 `manifest.json`에는 seed, 입력 해시, 기관명 선택, 원문 포함 검증,
-합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. 배치 입력의
-문서별 성공·실패는 `batch_manifest.json`에서 확인한다.
+합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. C 문서의
+기관명이 로고 매핑에 있으면 별도 `agency_marking`에 기관 자산·중앙 배치·
+투명도도 기록한다. 배치 입력의 문서별 성공·실패는 `batch_manifest.json`에서
+확인한다.
+
+기관 워터마크는 기존 템플릿 PDF를 먼저 완성한 뒤 모든 페이지의 같은 중앙
+위치에 투명한 회색 로고를 합성한다. 그 다음 기존 대외비 또는 군사기밀
+분류표지를 가장자리 여백에 넣는다. 입력의 `ordering_agency`는 렌더 경계에서
+`generated_document.agency_name`으로 전달되며, 외부 로고 파일 경로는 받지
+않는다. C 이외의 문서와 매핑되지 않은 기관에는 기관 워터마크를 넣지 않는다.
+전체 기관 매핑, 17개 자산의 사용 상태, 크기·투명도 기준은
+[`logo/README.md`](../logo/README.md)를 따른다.
 
 실패 입력을 조사 목적으로만 렌더링할 때는
 `--allow-failed-input`을 명시한다.
@@ -330,6 +340,7 @@ python scripts/render_generated_documents.py input.json \
 - `scripts/render_generated_documents.py`
 - `src/rd2/generators/generated_document_pipeline.py`
 - `src/rd2/generators/document_security_marking.py`
+- `logo/README.md`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`

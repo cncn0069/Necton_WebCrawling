@@ -298,7 +298,7 @@ def _fetch_documents(
         params.append(source)
     cursor.execute(
         f"""
-        SELECT id, source, doc_type, title, body_text
+        SELECT id, source, doc_type, title, body_text, ordering_agency
         FROM documents
         WHERE {' AND '.join(where)}
         ORDER BY id
@@ -328,7 +328,7 @@ def _fetch_documents(
 
 
 def _record(row, target, result, snapshot) -> dict:
-    row_id, source, doc_type, title, body = row
+    row_id, source, doc_type, title, body, ordering_agency = row
     assessment = result.source_assessment
     plan = result.generation_plan
     generation = result.generation_artifact
@@ -339,6 +339,7 @@ def _record(row, target, result, snapshot) -> dict:
         "collected_doc_type": doc_type,
         "source_title": title,
         "source_excerpt": body[:400],
+        "ordering_agency": ordering_agency,
         "source_block_count": sum(len(page.blocks) for page in snapshot.pages),
         "requested_target": target.model_dump(mode="json"),
         "succeeded": result.succeeded,
@@ -513,7 +514,7 @@ def main() -> int:
         "w", encoding="utf-8"
     ) as render_handle:
         for index, row in enumerate(rows, 1):
-            row_id, source, doc_type, title, body = row
+            row_id, source, doc_type, title, body, ordering_agency = row
             document_id = f"{source}-{row_id}"
             snapshot = _snapshot_from_body(document_id, source, body)
             if snapshot is None:
@@ -537,7 +538,7 @@ def main() -> int:
                 fully_synthetic_generator=synthetic_generator,
                 fully_synthetic_context=FullySyntheticContext(
                     scenario_id=f"batch-{document_id}",
-                    ordering_agency="가상행정기관",
+                    ordering_agency=ordering_agency,
                     production_date=date.today().isoformat(),
                 ),
             )
@@ -546,9 +547,11 @@ def main() -> int:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             handle.flush()
             if result.generation_artifact is not None:
+                render_payload = result.model_dump(mode="json")
+                render_payload["ordering_agency"] = ordering_agency
                 render_handle.write(
                     json.dumps(
-                        result.model_dump(mode="json"), ensure_ascii=False
+                        render_payload, ensure_ascii=False
                     )
                     + "\n"
                 )

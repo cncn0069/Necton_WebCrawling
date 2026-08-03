@@ -45,6 +45,63 @@ def test_renderer_projection_preserves_military_secret_grade():
     ] == "1급"
 
 
+def test_renderer_projection_carries_ordering_agency_into_document():
+    payload = {
+        "ordering_agency": "행정안전부",
+        "generation_plan": {
+            "generation_route": "fully_synthetic",
+            "final_target": {"classification": "C"},
+        },
+        "generation_artifact": {
+            "contract_version": "2.3.0",
+            "generated_document": {
+                "contract_version": "2.3.0",
+                "title": "대외비 문서",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "block_id": "g1",
+                        "text": "합성 본문",
+                    }
+                ],
+            },
+        },
+    }
+
+    projected = _renderer_payload(payload)
+
+    assert projected["result"]["generated_document"]["agency_name"] == (
+        "행정안전부"
+    )
+    assert "agency_name" not in payload["generation_artifact"][
+        "generated_document"
+    ]
+
+
+def test_renderer_carries_agency_into_existing_result_without_overwriting_input():
+    payload = {
+        "ordering_agency": "행정안전부",
+        "result": {
+            "generated_document": {
+                "agency_name": "국방부",
+            }
+        },
+    }
+
+    assert _renderer_payload(payload) is payload
+    assert payload["result"]["generated_document"]["agency_name"] == "국방부"
+
+    missing = {
+        "ordering_agency": "행정안전부",
+        "result": {"generated_document": {}},
+    }
+    projected = _renderer_payload(missing)
+    assert projected["result"]["generated_document"]["agency_name"] == (
+        "행정안전부"
+    )
+    assert missing["result"]["generated_document"] == {}
+
+
 def test_requested_filename_preserves_korean_source_stem():
     payload = {"output_filename": "36534390_결재문서본문.pdf"}
 

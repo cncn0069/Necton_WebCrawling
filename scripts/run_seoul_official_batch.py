@@ -912,6 +912,11 @@ def main() -> int:
                         json.dumps(
                             {
                                 "output_filename": output_filename,
+                                "ordering_agency": (
+                                    item.row.ordering_agency
+                                    if item.row is not None
+                                    else None
+                                ),
                                 "approval_status": sensitive_run.status.value,
                                 "consistency_assessment": (
                                     result.consistency_assessment.model_dump(

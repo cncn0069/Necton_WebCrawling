@@ -113,10 +113,42 @@ def _write_document_manifest(
 
 
 def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다."""
+    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다.
 
-    if isinstance(payload.get("result"), dict):
-        return payload
+    원본 수집 계약의 ``ordering_agency``는 생성 IR의 본문 필드가 아니다.
+    렌더 경계에서 ``generated_document.agency_name``으로 한 번만 옮겨 기관
+    워터마크 입력으로 쓴다. 로고 파일 경로는 외부 입력에서 받지 않는다.
+    """
+
+    agency_name = next(
+        (
+            str(payload[key]).strip()
+            for key in ("agency_name", "ordering_agency")
+            if isinstance(payload.get(key), str) and str(payload[key]).strip()
+        ),
+        None,
+    )
+
+    def with_agency_name(document: dict[str, Any]) -> dict[str, Any]:
+        if document.get("agency_name") or agency_name is None:
+            return document
+        return {**document, "agency_name": agency_name}
+
+    result = payload.get("result")
+    if isinstance(result, dict):
+        document = result.get("generated_document")
+        if not isinstance(document, dict):
+            return payload
+        projected_document = with_agency_name(document)
+        if projected_document is document:
+            return payload
+        return {
+            **payload,
+            "result": {
+                **result,
+                "generated_document": projected_document,
+            },
+        }
     artifact = payload.get("generation_artifact")
     plan = payload.get("generation_plan")
     if not isinstance(artifact, dict) or not isinstance(plan, dict):
@@ -139,7 +171,7 @@ def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
             ),
             "generation_route": plan.get("generation_route"),
             "generation_target": plan.get("final_target"),
-            "generated_document": document,
+            "generated_document": with_agency_name(document),
             "source_classification": source_classification,
         },
         "receipt": payload.get("generation_receipt"),
