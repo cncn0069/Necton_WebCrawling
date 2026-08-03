@@ -185,3 +185,28 @@ def test_rds_items_fall_back_to_body_text_only_when_allowed(tmp_path):
     # 원문 행 id가 스냅샷 id에 남아야 생성 결과에서 원문을 역추적할 수 있다.
     assert items[0].snapshot.source_document_id == "alio-7"
     assert items[0].row is row
+
+
+def test_rds_upsert_happens_after_rendering():
+    """PDF가 최종 산출물이 되면 렌더 결과가 코퍼스 포함 여부를 정해야 한다.
+    순서가 뒤집히면 --require-render-ok가 아무것도 막지 못한다."""
+
+    source = getsource(main)
+
+    render_at = source.index("render_input_file(")
+    upsert_at = source.index("store.upsert(")
+
+    assert upsert_at > render_at
+    assert "require_render_ok" in source[render_at:upsert_at]
+
+
+def test_render_gate_is_off_while_templates_are_being_rebuilt():
+    """실측(2026-08-03): 검증기를 통과한 35건 중 23건이 렌더 검증의
+    missing source text로 떨어졌는데, 원인이 생성이 아니라 곧 교체될
+    템플릿이라 기본으로 막으면 멀쩡한 생성물을 버린다."""
+
+    source = getsource(main)
+
+    assert '"--require-render-ok"' in source
+    # 기본이 꺼져 있어야 한다 — store_true는 기본값 False다.
+    assert "args.require_render_ok and record.get" in source

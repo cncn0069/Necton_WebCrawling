@@ -259,3 +259,72 @@ def test_administrative_status_only_target_still_has_a_reason():
 
     assert reason
     assert "제5~8호" in reason
+
+
+def _accepted_assessment():
+    from .v2_fixtures import accepted_sensitive_assessment
+
+    return accepted_sensitive_assessment()
+
+
+def test_reason_carries_the_validator_rationale_and_evidence():
+    """학습에 본문만 쓰므로(2026-08-03 결정) 근거를 메타데이터에 남긴다."""
+
+    doc = build_generated_document(
+        document=_document(),
+        plan=_plan(),
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(),
+        assessment=_accepted_assessment(),
+    )
+
+    assert "신청인과 개인 연락처가 직접 연결된다." in doc.non_disclosure_reason
+    assert "근거 인용:" in doc.non_disclosure_reason
+    # 목표 라벨은 여전히 첫 줄이다.
+    assert doc.non_disclosure_reason.startswith("정보공개법 제9조 제1항 제6호")
+
+
+def test_reason_keeps_route_and_verdict_machine_filterable():
+    """DB에 route/verdict 컬럼이 없으므로 이 문자열이 사후 필터의 유일한 통로다."""
+
+    from .v2_fixtures import open_sensitive_assessment
+
+    doc = build_generated_document(
+        document=_document(),
+        plan=_plan(route=GenerationRoute.MASK_RESTORATION),
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(),
+        assessment=open_sensitive_assessment(),
+    )
+
+    assert "[생성 route: mask_restoration / 검증: assessed_o]" in (
+        doc.non_disclosure_reason
+    )
+
+
+def test_evidence_quotes_are_capped_so_a_row_is_not_a_body_copy():
+    from rd2.source_generation.contracts import EvidenceSpan
+    from .v2_fixtures import accepted_sensitive_assessment
+
+    base = accepted_sensitive_assessment()
+    long_quote = "가" * 400
+    assessment = base.model_copy(
+        update={
+            "evidence_spans": tuple(
+                EvidenceSpan(block_id="generated:b0", quote=long_quote)
+                for _ in range(6)
+            )
+        }
+    )
+
+    doc = build_generated_document(
+        document=_document(),
+        plan=_plan(),
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(),
+        assessment=assessment,
+    )
+
+    quoted = doc.non_disclosure_reason.split("근거 인용: ")[1]
+    assert quoted.count("|") == 2  # 인용 3개
+    assert len(quoted) < 400

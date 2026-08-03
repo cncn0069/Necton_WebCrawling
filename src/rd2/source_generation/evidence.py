@@ -109,15 +109,36 @@ def evidence_from_inserted_text(
 
     verdicts: list[bool] = []
     for quote in quotes:
-        needle = quote.strip()
-        start = generated_body.find(needle) if needle else -1
-        if start < 0:
-            # 인용문을 못 찾으면 "원문에서 왔다"고 단정하지 않는다. 판단 불가는
-            # 판단이 아니므로 보수적으로 False를 둔다.
+        span = locate_quote(generated_body, quote)
+        if span is None:
+            # 어디인지 모르면 "삽입 쪽"이라고 말할 수 없다. 판단 불가는 판단이
+            # 아니므로 보수적으로 False를 둔다.
             verdicts.append(False)
             continue
-        end = start + len(needle)
-        verdicts.append(
-            any(start < hi and lo < end for lo, hi in inserted)
-        )
+        start, end = span
+        verdicts.append(any(start < hi and lo < end for lo, hi in inserted))
     return tuple(verdicts)
+
+
+#: 근사 일치로 인정할 최소 글자 수.
+#:
+#: 검사기 인용문은 자리를 가리키는 **주소**다. 실측 7건 중 5건이 앞 24자는 맞고
+#: 뒤만 바꿔 쓴 경우였는데, 그 정도면 어느 문장인지 분명하다.
+_QUOTE_MIN_MATCH = 12
+
+
+def locate_quote(text: str, quote: str) -> tuple[int, int] | None:
+    """인용문이 가리키는 구간을 찾는다. 근사 일치를 허용하고, 없으면 ``None``."""
+
+    needle = quote.strip()
+    if not needle:
+        return None
+    exact = text.find(needle)
+    if exact >= 0:
+        return exact, exact + len(needle)
+    block = SequenceMatcher(None, text, needle, autojunk=False).find_longest_match(
+        0, len(text), 0, len(needle)
+    )
+    if block.size < _QUOTE_MIN_MATCH:
+        return None
+    return block.a, block.a + block.size

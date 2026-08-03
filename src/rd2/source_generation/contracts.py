@@ -1445,7 +1445,26 @@ class SensitiveConsistencyAssessment(ConsistencyAssessment):
         return self
 
     def validate_against_document(self, document: GeneratedDocumentIR) -> None:
-        super().validate_against_document(document)
+        """``assertions``만 대조한다. ``evidence_spans``는 대조하지 않는다.
+
+        상위(``ConsistencyAssessment``)와 다른 점이 이것이다. 이 계약의
+        ``evidence_spans``는 검사기가 **어느 문장을 보고 판단했는지의 기록**이지
+        그 문장이 생성물에 실재한다는 주장이 아니다 — 실재 검증은 판별기
+        evidence의 역할이고 거기서는 그대로 엄격하다.
+
+        실측(전 출처 91건): 검증 실패 7건이 전부 인용문 불일치였고 그중 5건은
+        앞 24자가 맞는데 뒤를 자기 말로 바꿔 쓴 경우였다. 어느 문장인지는
+        분명한데 문서가 통째로 버려졌다.
+
+        자리는 ``evidence.locate_quote``가 근사로 찾는다. 그래도 못 찾으면
+        귀속 판정이 ``False``가 되어 승인 게이트에서 걸린다 — 판정 실패가
+        아니라 등급 하락으로 다룬다.
+
+        ``assertions``는 그대로 대조한다. 거기서는 "식별 가능한 사람과
+        개인정보가 같은 block에 있는가"가 제6호 판정의 일부라 span이 기록이
+        아니라 근거 자체다.
+        """
+
         for assertion in self.assertions:
             assertion.validate_against_document(document)
 

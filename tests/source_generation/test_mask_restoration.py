@@ -14,10 +14,12 @@ from rd2.source_generation.classification_taxonomy import (
     SubclauseKey,
 )
 from rd2.source_generation.contracts import (
+    DocumentForm,
     FailureStage,
     GenerationRoute,
     MaskFill,
     MaskFillResponse,
+    ParagraphBlock,
     SourceDocumentSnapshot,
     SourcePage,
     SourceTextBlock,
@@ -36,6 +38,7 @@ from rd2.source_generation.pipeline import (
     PipelineConfig,
     build_generation_plan,
     execute_generation,
+    model_sha256,
 )
 
 from .v2_fixtures import FakeGateway, source_assessment, target
@@ -503,3 +506,84 @@ def test_execution_rejects_a_response_that_skips_a_mask():
     assert execution.failure is not None
     assert execution.failure.stage is FailureStage.GENERATION
     assert "m3" in execution.failure.message
+
+
+def test_s_verdict_needs_evidence_from_what_we_inserted():
+    """검사기가 **원문 쪽** 문장을 근거로 들면 통과시키지 않는다.
+
+    원문 보존율이 1%일 때는 물을 필요가 없었다 — 원문이 거의 안 남으니 근거가
+    될 만한 것은 우리가 쓴 것뿐이었다. 보존율이 93%가 되면서 생성물의 대부분이
+    원문이 됐고, 실측 92개 근거 중 28개가 원문 쪽이었다. 라벨은 S로 맞아도
+    이유가 원문이면 공개 문서를 S로 학습시키게 된다.
+    """
+
+    from rd2.schema.models import CsoClassification
+    from rd2.source_generation.contracts import (
+        EvidenceSpan,
+        GenerationArtifact,
+        GenerationProvenance,
+        SensitiveConsistencyAssessment,
+        SensitiveVerdict,
+        SourceEvidenceLevel,
+    )
+    from rd2.source_generation.pipeline import _evidence_came_from_us
+
+    snapshot = _redacted_snapshot()
+    selection = prepare_document_selection(snapshot).selection
+    assert selection is not None
+    _, _, plan = _plan()
+
+    # 원문을 그대로 옮기고 한 줄만 새로 넣은 생성물.
+    inserted = "표본은 계약 건당 5백만원 이상 12건을 우선 추출한다."
+    document = apply_mask_fills(
+        snapshot,
+        detect_redaction_evidence(snapshot),
+        _fills("2026. 7. 15.", "김민수", "배우자 간병"),
+    )
+    document = document.model_copy(
+        update={
+            "blocks": document.blocks
+            + (ParagraphBlock(block_id="added:b0", text=inserted),)
+        }
+    )
+    artifact = GenerationArtifact(
+        plan_sha256=model_sha256(plan),
+        generated_document=document,
+        attempt_index=1,
+        provenance=GenerationProvenance(
+            generation_route=plan.generation_route,
+            source_evidence_level=SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
+            reason_code="TEST",
+            requested_target=plan.requested_target,
+            final_target=plan.final_target,
+            selection_sha256=selection.selection_sha256,
+            uses_source_evidence=True,
+            validated_evidence_spans=(
+                EvidenceSpan(block_id="source:b0", quote="내부결재"),
+            ),
+        ),
+    )
+
+    def _assessment(quote: str) -> SensitiveConsistencyAssessment:
+        return SensitiveConsistencyAssessment(
+            document_form=DocumentForm.OFFICIAL_LETTER,
+            classification=CsoClassification.S,
+            clause_no=plan.final_target.clause_no,
+            subclause_key=plan.final_target.subclause_key,
+            evidence_spans=(EvidenceSpan(block_id="x", quote=quote),),
+            rationale="근거를 하나 들었다.",
+            sensitivity_verdict=SensitiveVerdict.ACCEPTED_S,
+        )
+
+    # 우리가 넣은 문장을 짚으면 통과한다.
+    assert _evidence_came_from_us(
+        snapshot=snapshot,
+        artifact=artifact,
+        assessment=_assessment(inserted),
+    )
+    # 원문에 원래 있던 문장을 짚으면 통과시키지 않는다.
+    assert not _evidence_came_from_us(
+        snapshot=snapshot,
+        artifact=artifact,
+        assessment=_assessment("| 제목 | 가정의 날 초과근무 실시 |"),
+    )

@@ -88,6 +88,7 @@ from rd2.source_generation.rds_writeback import (  # noqa: E402
     build_generated_document,
     should_commit,
 )
+from rd2.schema.models import Document  # noqa: E402
 from rd2.storage.db import DocumentStore  # noqa: E402
 
 BLOCKS_PER_PAGE = 12
@@ -609,7 +610,7 @@ def main() -> int:
             "세부유형을 고정한다(예: technology_development). 생략하면 판별기가 "
             "고른다. **기본값(생략)을 권한다** — PRISM 실측에서 고정이 라벨을 "
             "모으는 대신 수율을 깎았다: technology_development로 묶으니 귀속이 "
-            "75%->89%로 올랐지만 S승인이 8->6으로 떨어졌고, 떨어진 3건은 모두 "
+            "75%%->89%%로 올랐지만 S승인이 8->6으로 떨어졌고, 떨어진 3건은 모두 "
             "`정책연구 활용결과 보고서`였다. 연구를 **어떻게 썼는지** 적은 "
             "문서는 `연구개발의 심사·평가 절차`와 겹치지 않아 판별기가 "
             "decision_review/audit_inspection으로 보낸 편이 맞았다. 출처 이름만 "
@@ -672,6 +673,13 @@ def main() -> int:
              "(검증 실행은 rd2_test를 쓸 것)",
     )
     parser.add_argument(
+        "--require-render-ok",
+        action="store_true",
+        help="PDF 렌더링에 성공한 문서만 RDS에 넣는다. 템플릿 교체 작업이 "
+             "끝나면 기본으로 올릴 것 — 지금 켜면 현재 템플릿이 담지 못하는 "
+             "긴 본문·표 문서가 통째로 빠진다",
+    )
+    parser.add_argument(
         "--include-weak-mask-restoration",
         action="store_true",
         help="검증기가 O를 낸 mask_restoration 결과도 RDS에 넣는다"
@@ -719,6 +727,8 @@ def main() -> int:
     rds_inserted = 0
     rds_skipped = 0
     rds_failed = 0
+    #: (배치 레코드, 조립된 Document). 렌더링 결과를 보고 나서 넣는다.
+    pending_commits: list[tuple[dict, Document]] = []
 
     gateway = RetryingGateway(
         OpenAIResponsesGateway(OpenAI(api_key=os.environ["OPENAI_API_KEY"])),
@@ -1002,20 +1012,26 @@ def main() -> int:
                         quotes,
                     )
                 )
+            # 조립만 하고 넣지는 않는다. 실제 upsert는 렌더링 이후다 —
+            # PDF 근거 검사(verify_rendered_sensitive_evidence)가 마지막
+            # 품질 게이트이고, 실측에서 검증기를 통과한 35건 중 23건이 그
+            # 게이트에서 떨어졌다(2026-08-03 allsources_synthmask). 여기서
+            # 넣으면 PDF로 만들지 못한 문서가 학습 코퍼스에 남는다.
             if store is not None and result.generation_plan is not None:
                 plan = result.generation_plan
                 assessment = result.source_assessment
                 consistency = result.consistency_assessment
+                sensitive_assessment = (
+                    consistency
+                    if isinstance(consistency, SensitiveConsistencyAssessment)
+                    else None
+                )
                 commit = (
                     result.generation_artifact is not None
                     and should_commit(
                         status=sensitive_run.status,
                         plan=plan,
-                        assessment=(
-                            consistency
-                            if isinstance(consistency, SensitiveConsistencyAssessment)
-                            else None
-                        ),
+                        assessment=sensitive_assessment,
                         include_weak_mask_restoration=(
                             args.include_weak_mask_restoration
                         ),
@@ -1024,7 +1040,7 @@ def main() -> int:
                 record["rds_committed"] = False
                 if commit:
                     try:
-                        doc = build_generated_document(
+                        generated_row = build_generated_document(
                             document=(
                                 result.generation_artifact.generated_document
                             ),
@@ -1037,16 +1053,12 @@ def main() -> int:
                                 if assessment is not None
                                 else None
                             ),
+                            assessment=sensitive_assessment,
                         )
-                        # 한 건의 조립·삽입 실패가 배치를 끊지 않는다 — 나머지
-                        # 문서는 이미 API 비용을 치렀다.
-                        if store.upsert(doc):
-                            rds_inserted += 1
-                            record["rds_committed"] = True
-                        else:
-                            rds_skipped += 1
-                        record["rds_source_url"] = doc.source_url
+                        pending_commits.append((record, generated_row))
                     except Exception as exc:  # noqa: BLE001
+                        # 한 건의 조립 실패가 배치를 끊지 않는다 — 나머지
+                        # 문서는 이미 API 비용을 치렀다.
                         rds_failed += 1
                         record["rds_error"] = str(exc)
 
@@ -1069,6 +1081,32 @@ def main() -> int:
             render_manifest,
             out_dir=args.out_dir,
         )
+    # 넣는 시점은 렌더링 **이후**다. PDF가 최종 산출물이 되면 렌더 결과가
+    # 코퍼스 포함 여부를 정해야 하기 때문이다(--require-render-ok).
+    #
+    # 다만 지금은 기본값이 꺼져 있다. 실측(2026-08-03 allsources_synthmask)에서
+    # 검증기를 통과한 35건 중 23건이 렌더 검증의 ``missing source text``로
+    # 떨어졌는데, 그건 생성 실패가 아니라 **현재 템플릿이 긴 본문·표를 담지
+    # 못한 결과**다. 템플릿 교체 작업이 끝나기 전까지 그걸로 코퍼스를 막으면
+    # 멀쩡한 생성물 3분의 2를 곧 사라질 이유로 버린다. 템플릿이 완성되면 이
+    # 플래그를 기본으로 올리고, 백필 패스가 렌더 성공분에만 body_file_path를
+    # 채운다 — 실패한 행은 경로가 NULL로 남아 그대로 식별된다.
+    for record, document in pending_commits:
+        if args.require_render_ok and record.get("render_status") not in (None, "ok"):
+            record["rds_skipped_reason"] = "render_not_ok"
+            continue
+        try:
+            if store.upsert(document):
+                rds_inserted += 1
+                record["rds_committed"] = True
+            else:
+                rds_skipped += 1
+            record["rds_source_url"] = document.source_url
+        except Exception as exc:  # noqa: BLE001
+            rds_failed += 1
+            record["rds_error"] = str(exc)
+
+    if report_records:
         records_path.write_text(
             "".join(
                 f"{json.dumps(record, ensure_ascii=False)}\n"

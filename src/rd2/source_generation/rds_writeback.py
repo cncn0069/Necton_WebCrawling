@@ -92,16 +92,13 @@ def generated_source_url(source_document_id: str, plan: GenerationPlan) -> str:
     return f"synthetic://source-generation/{source_document_id}/{clause}-{subclause}"
 
 
-def non_disclosure_reason(plan: GenerationPlan) -> str:
-    """비공개 사유 문자열.
+#: 검증 근거에 붙일 인용 개수와 인용당 길이 상한. 근거 span은 개수 제한이 없어
+#: 그대로 이으면 본문을 통째로 복사하는 행이 나온다.
+MAX_EVIDENCE_QUOTES = 3
+MAX_QUOTE_CHARS = 120
 
-    ``Document``는 disclosure_status가 공개가 아니면 이 값을 **요구**한다
-    (models.py의 ``_require_non_disclosure_reason_when_not_open``). 동시에
-    이 자리가 세부조항(subclause)을 남길 유일한 곳이다 — 테이블에는 호 단위
-    ``cso_sub_clause``만 있어서 ``personnel_management`` 같은 생성 목표가
-    그냥 버려진다.
-    """
 
+def _target_reason(plan: GenerationPlan) -> str:
     target = plan.final_target
     if target.clause_no is None:
         statuses = ", ".join(
@@ -114,6 +111,50 @@ def non_disclosure_reason(plan: GenerationPlan) -> str:
         label = SUBCLAUSE_LABELS[target.subclause_key]
         reason += f" — 세부유형: {target.subclause_key.value}({label})"
     return reason
+
+
+def non_disclosure_reason(
+    plan: GenerationPlan,
+    assessment: SensitiveConsistencyAssessment | None = None,
+) -> str:
+    """비공개 사유 + 검증기가 그렇게 판정한 근거.
+
+    ``Document``는 disclosure_status가 공개가 아니면 이 값을 **요구**한다
+    (models.py의 ``_require_non_disclosure_reason_when_not_open``). 동시에
+    이 자리가 생성 provenance를 남길 유일한 곳이다 — 테이블에는 호 단위
+    ``cso_sub_clause``만 있어서 세부조항도, 생성 route도, 검증기 판정도
+    남길 컬럼이 없다.
+
+    **왜 컬럼을 늘리지 않고 여기 담나.** 학습에는 본문(PDF)만 쓴다는 것이
+    전제다(2026-08-03 사용자 결정). 메타데이터가 모델 입력에 들어가지 않으므로
+    검증기 문체가 합성 문서를 지목하는 누출 경로가 되지 않는다. 그 전제가
+    바뀌어 메타데이터까지 학습에 쓰게 되면 이 필드는 라벨 누출 채널이 된다 —
+    그때는 route/verdict를 별도 컬럼으로 빼야 한다.
+
+    route와 verdict는 **문장 앞의 고정 형식**으로 둔다. 사후에
+    ``WHERE non_disclosure_reason LIKE '%검증: assessed_o%'``로 근거가 약한
+    행을 골라낼 수 있어야 하기 때문이다(``should_commit`` 참고).
+    """
+
+    parts = [_target_reason(plan)]
+    parts.append(
+        f"[생성 route: {plan.generation_route.value}"
+        + (
+            f" / 검증: {assessment.sensitivity_verdict.value}]"
+            if assessment is not None
+            else "]"
+        )
+    )
+    if assessment is not None:
+        if assessment.rationale:
+            parts.append(f"검증 근거: {assessment.rationale}")
+        quotes = [
+            span.quote[:MAX_QUOTE_CHARS]
+            for span in assessment.evidence_spans[:MAX_EVIDENCE_QUOTES]
+        ]
+        if quotes:
+            parts.append("근거 인용: " + " | ".join(quotes))
+    return "\n".join(parts)
 
 
 def should_commit(
@@ -157,6 +198,7 @@ def build_generated_document(
     source_row: SourceRow | None = None,
     fallback_source: str | None = None,
     document_form: DocumentForm | None = None,
+    assessment: SensitiveConsistencyAssessment | None = None,
 ) -> Document:
     """승인된 생성 문서를 ``documents`` 행으로 조립한다.
 
@@ -201,7 +243,7 @@ def build_generated_document(
         # 템플릿 렌더링 전이라 PDF가 없다. 템플릿이 나오면
         # DocumentStore.update_files(dedup_key, ...)로 이 자리를 백필한다.
         body_file_path=None,
-        non_disclosure_reason=non_disclosure_reason(plan),
+        non_disclosure_reason=non_disclosure_reason(plan, assessment),
         cso_classification=CsoClassification(target.classification.value),
         cso_sub_clause=(
             target.clause_no.value if target.clause_no is not None else None

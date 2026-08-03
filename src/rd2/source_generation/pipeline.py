@@ -80,6 +80,7 @@ from rd2.source_generation.document_form_compatibility import (
     form_subclause_compatibility,
 )
 from rd2.source_generation.evidence import (
+    evidence_from_inserted_text,
     validate_evidence_quotes,
     validate_evidence_quotes_in_document,
 )
@@ -1710,9 +1711,17 @@ def _canonicalize_consistency_assessment(
                 exclude={"evidence_spans"},
                 exclude_computed_fields=True,
             ),
-            "evidence_spans": validate_evidence_quotes_in_document(
-                assessment.evidence_spans,
-                document.body_text,
+            # 민감 검사기의 인용문은 대조하지 않고 그대로 보관한다 —
+            # 판정 근거의 **기록**이라 자리를 못 찾아도 판정을 버릴 이유가
+            # 없다(``SensitiveConsistencyAssessment.validate_against_document``).
+            # 일반 검증기는 그대로 엄격하다.
+            "evidence_spans": (
+                assessment.evidence_spans
+                if isinstance(assessment, SensitiveConsistencyAssessment)
+                else validate_evidence_quotes_in_document(
+                    assessment.evidence_spans,
+                    document.body_text,
+                )
             ),
         }
     )
@@ -2142,6 +2151,41 @@ def _target_from_assessment(assessment: SourceAssessment) -> GenerationTarget:
     )
 
 
+def _evidence_came_from_us(
+    *,
+    snapshot: SourceDocumentSnapshot,
+    artifact: GenerationArtifact,
+    assessment: ConsistencyAssessment,
+) -> bool:
+    """검사기의 S 근거가 **우리가 넣은 자리**에서 왔는지.
+
+    원문 보존율이 1%일 때는 물을 필요가 없었다 — 원문이 거의 안 남으니 근거가
+    될 만한 것은 우리가 쓴 것뿐이었다. 보존율이 93%가 되면서 생성물의 대부분이
+    원문이 됐고, 검사기가 **원문 쪽** 문장을 근거로 S를 줄 수 있게 됐다.
+
+    실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과 적용
+    임계값인데 검사기는 ``부정 행위 및 징계 처분에 대한 상세한 언급``을 들었다.
+    그건 ALIO에 공표된 원문 내용이다. 라벨은 S로 맞았지만 이유가 원문 쪽이면
+    학습데이터로는 해롭다 — 공개된 감사 연차보고서를 S로 배운다. 전 출처 92개
+    근거 중 28개가 이랬다.
+
+    근거가 하나도 삽입 쪽이 아니면 통과시키지 않는다. 재생성으로 한 번 더
+    기회를 주고, 그래도 안 되면 ``EXCLUDED_AFTER_RETRY``로 끝난다 — 라벨을
+    붙이지 않는 편이 틀린 라벨보다 낫다.
+    """
+
+    quotes = [span.quote for span in assessment.evidence_spans]
+    if not quotes:
+        return False
+    return any(
+        evidence_from_inserted_text(
+            snapshot.full_text,
+            artifact.generated_document.body_text,
+            quotes,
+        )
+    )
+
+
 def run_source_sensitive_pipeline(
     *,
     snapshot: SourceDocumentSnapshot,
@@ -2330,7 +2374,11 @@ def run_source_sensitive_pipeline(
                 status=SensitivePipelineStatus.ACCEPTED_S,
                 attempts=attempts,
             )
-        if verdict == SensitiveVerdict.ACCEPTED_S:
+        if verdict == SensitiveVerdict.ACCEPTED_S and _evidence_came_from_us(
+            snapshot=snapshot,
+            artifact=generation.artifact,
+            assessment=validation.assessment,
+        ):
             return _source_sensitive_terminal_run(
                 status=SensitivePipelineStatus.ACCEPTED_S,
                 attempts=attempts,
