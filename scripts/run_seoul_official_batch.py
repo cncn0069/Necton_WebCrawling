@@ -35,6 +35,7 @@ from html import escape
 import json
 import os
 import sys
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -388,6 +389,31 @@ def _iter_rds_items(
         )
 
 
+def processed_document_ids(paths: list[Path]) -> set[str]:
+    """이미 처리한 배치의 ``source_document_id``를 모은다.
+
+    중단된 배치를 이어서 돌릴 때 쓴다. 문서 하나가 LLM을 3~4회 부르므로 다시
+    도는 건 그대로 비용이다. 쓰다 만 마지막 줄은 깨져 있을 수 있어 건너뛴다 —
+    프로세스가 죽어서 이어 도는 상황이 이 옵션의 전제다.
+    """
+
+    processed: set[str] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            document_id = record.get("source_document_id")
+            if document_id:
+                processed.add(str(document_id))
+    return processed
+
+
 def _iter_file_items(
     files: list[Path],
     *,
@@ -694,6 +720,22 @@ def main() -> int:
              "(검증 실행은 rd2_test를 쓸 것)",
     )
     parser.add_argument(
+        "--skip-processed",
+        type=Path,
+        action="append",
+        default=None,
+        help="이미 처리한 batch_records.jsonl. 거기 있는 문서는 건너뛴다 — "
+             "중단된 배치를 이어서 돌릴 때 같은 문서에 다시 API 비용을 쓰지 "
+             "않게 한다(여러 번 줄 수 있다)",
+    )
+    parser.add_argument(
+        "--no-html-report",
+        action="store_true",
+        help="HTML 리포트를 만들지 않고 레코드를 메모리에 쌓지 않는다. 큰 배치는 "
+             "이 옵션이 필요하다 — 레코드는 문서당 약 0.75MB씩 쌓여 수천 건에서 "
+             "인스턴스 메모리를 다 쓴다. JSONL은 그대로 남는다",
+    )
+    parser.add_argument(
         "--skip-render",
         action="store_true",
         help="PDF 렌더링을 하지 않고 생성·검증까지만 하고 끝낸다. 템플릿 교체 "
@@ -794,12 +836,23 @@ def main() -> int:
 
     done = 0
     report_records: list[dict] = []
+    # 레코드를 전부 들고 있으면 문서당 약 0.75MB씩 쌓인다(실측 2026-08-03 EC2:
+    # 477건에 RSS 357MB). 전 구간(16,176건)이면 12GB라 3~4GB짜리 인스턴스는
+    # 중간에 죽는다 — 2번 장비가 그렇게 멈췄다. HTML 리포트는 수백 건까지나
+    # 사람이 볼 수 있는 물건이므로, 큰 배치에서는 포기하는 쪽이 맞다.
+    keep_records = not args.no_html_report
+    approval_counts: Counter[str | None] = Counter()
+    already_processed = processed_document_ids(args.skip_processed or [])
+    if already_processed:
+        print(f"이미 처리한 {len(already_processed)}건은 건너뛴다")
     with records_path.open("w", encoding="utf-8") as records, payload_path.open(
         "w", encoding="utf-8"
     ) as payloads:
         for item in items:
             if done >= args.count:
                 break
+            if item.snapshot.source_document_id in already_processed:
+                continue
             snapshot, title = item.snapshot, item.title
             prepared = prepare_document_selection(snapshot, selection_config)
             if prepared.selection is None:
@@ -1092,9 +1145,14 @@ def main() -> int:
                         record["rds_error"] = str(exc)
 
             records.write(json.dumps(record, ensure_ascii=False) + "\n")
-            report_records.append(record)
             records.flush()
             payloads.flush()
+            if keep_records:
+                report_records.append(record)
+            else:
+                # 레코드를 메모리에 쌓지 않는다. JSONL은 방금 흘려 썼으므로
+                # 데이터는 남는다 — 리포트만 포기하는 것이다.
+                approval_counts[record.get("approval_status")] += 1
 
     if args.skip_render:
         print("PDF 렌더링 생략 — render_payloads.jsonl로 나중에 렌더링할 수 있다")
@@ -1197,9 +1255,13 @@ def main() -> int:
                 ),
                 "processed": done,
                 "approval_counts": {
-                    status.value: sum(
-                        record.get("approval_status") == status.value
-                        for record in report_records
+                    status.value: (
+                        sum(
+                            record.get("approval_status") == status.value
+                            for record in report_records
+                        )
+                        if keep_records
+                        else approval_counts[status.value]
                     )
                     for status in SensitivePipelineStatus
                 },
@@ -1209,7 +1271,8 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
-    _write_html_outputs(report_records, args.out_dir)
+    if keep_records:
+        _write_html_outputs(report_records, args.out_dir)
     if store is not None:
         store.close()
         print(

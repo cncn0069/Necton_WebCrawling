@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from inspect import getsource
 from pathlib import Path
 import subprocess
@@ -322,3 +323,32 @@ def test_body_text_fallback_uses_the_row_identifier(tmp_path):
     )
 
     assert items[0].display_name == "molit-4900"
+
+
+def test_records_are_not_kept_in_memory_when_the_report_is_off():
+    """실측(2026-08-03 EC2): 레코드를 전부 들고 있으면 문서당 약 0.75MB씩 쌓여
+    477건에 RSS 357MB였다. 전 구간 16,176건이면 12GB라 인스턴스가 죽는다."""
+
+    source = getsource(main)
+
+    assert '"--no-html-report"' in source
+    assert "if keep_records:" in source
+    assert "report_records.append(record)" in source
+
+
+def test_processed_ids_are_collected_for_resuming(tmp_path):
+    """중단된 배치를 이어서 돌 때 같은 문서에 다시 API 비용을 쓰지 않는다."""
+
+    from scripts.run_seoul_official_batch import processed_document_ids
+
+    done = tmp_path / "batch_records.jsonl"
+    done.write_text(
+        json.dumps({"source_document_id": "alio-1"}) + "\n"
+        + json.dumps({"source_document_id": "alio-2"}) + "\n"
+        # 프로세스가 죽으면 마지막 줄이 잘려 있다.
+        + '{"source_document_id": "alio-3"',
+        encoding="utf-8",
+    )
+
+    assert processed_document_ids([done]) == {"alio-1", "alio-2"}
+    assert processed_document_ids([tmp_path / "없는파일.jsonl"]) == set()
