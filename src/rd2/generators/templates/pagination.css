@@ -1,7 +1,7 @@
 @page pagination-continuation {
   size: A4;
   margin: 17mm 18mm 18mm;
-  @top-left {
+  @top-center {
     color: #666;
     content: "본문 연속본";
     font-size: 7pt;
@@ -127,3 +127,14 @@
 /* long_form의 고정 2페이지 본문 그리드는 장문을 분할하지 못한다. 장문 모드에서는
    표지·요약만 미리보기로 남기고, 원문은 아래 연속 본문에서 한 번에 흘린다. */
 .pagination-preview.theme-long-form .long-body { display: none; }
+
+/* field_report의 고정 1페이지 그리드는 장문 block을 축약 카드·표로 다시
+   배치하면서 서로 겹칠 수 있다. 장문 모드에서는 첫 장을 표지로 남기고,
+   원문 block은 다음 페이지의 연속 본문에서만 한 번 흐르게 한다. */
+.pagination-preview.theme-sidebar .sidebar-main > header p,
+.pagination-preview.theme-sidebar .sidebar-sections,
+.pagination-preview.theme-sidebar .sidebar-facts,
+.pagination-preview.theme-sidebar .sidebar-table,
+.pagination-preview.theme-sidebar .sidebar-bottom {
+  display: none;
+}

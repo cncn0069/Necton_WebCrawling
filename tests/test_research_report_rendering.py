@@ -462,49 +462,25 @@ def test_batch_cli_function_routes_research_report_input(
     assert manifest[0]["input"]["document_type"] == "research_report"
 
 
-def test_research_renderer_rejects_page_overflow_without_truncation(
-    tmp_path: Path,
-) -> None:
-    envelope = parse_generation_payload(_research_payload())
-    context = build_research_report_context(envelope, seed=100)
-
-    with pytest.raises(RuntimeError, match="maximum 1 pages"):
-        render_research_report_variations(
-            context,
-            tmp_path,
-            per_template=1,
-            base_seed=100,
-            template_slugs={"research_01_classic_flow"},
-            required_source_texts=source_text_atoms(
-                envelope.result.generated_document
-            ),
-            max_pages=1,
-        )
-
-    manifest = (
-        tmp_path / "manifest.json"
-    ).read_text(encoding="utf-8")
-    assert '"status": "rejected"' in manifest
-    assert '"max_pages": 1' in manifest
-
-
-def test_research_renderer_rejects_oversized_input_before_pdf_render(
+def test_research_pipeline_uses_untruncated_page_budget_for_long_input(
     tmp_path: Path,
 ) -> None:
     payload = _research_payload()
     document = payload["result"]["generated_document"]
-    document["blocks"][0]["text"] = "과대입력" * 10_001
+    document["blocks"][0]["text"] = "장문연구" * 10_001
     document.pop("body_text")
 
-    with pytest.raises(ValueError, match="exceeds render budget"):
-        render_generation_payload(
-            payload,
-            tmp_path,
-            per_template=1,
-            template_slugs={"research_01_classic_flow"},
-        )
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        template_slugs={"research_01_classic_flow"},
+    )
 
-    assert not list(tmp_path.rglob("*.pdf"))
+    assert manifest[0]["status"] == "ok"
+    assert manifest[0]["source_text_present"] is True
+    assert manifest[0]["truncated"] is True
+    assert manifest[0]["actual_pages"] == 10
 
 
 def test_research_renderer_rejects_excessive_title_before_pdf_render(
