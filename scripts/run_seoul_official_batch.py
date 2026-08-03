@@ -673,6 +673,14 @@ def main() -> int:
              "(검증 실행은 rd2_test를 쓸 것)",
     )
     parser.add_argument(
+        "--skip-render",
+        action="store_true",
+        help="PDF 렌더링을 하지 않고 생성·검증까지만 하고 끝낸다. 템플릿 교체 "
+             "작업이 끝나기 전까지 본문과 메타데이터만 모을 때 쓴다 — "
+             "render_payloads.jsonl은 그대로 남으므로 나중에 그대로 렌더링할 수 "
+             "있다",
+    )
+    parser.add_argument(
         "--require-render-ok",
         action="store_true",
         help="PDF 렌더링에 성공한 문서만 RDS에 넣는다. 템플릿 교체 작업이 "
@@ -1067,7 +1075,9 @@ def main() -> int:
             records.flush()
             payloads.flush()
 
-    if payload_path.stat().st_size:
+    if args.skip_render:
+        print("PDF 렌더링 생략 — render_payloads.jsonl로 나중에 렌더링할 수 있다")
+    elif payload_path.stat().st_size:
         from scripts.render_generated_documents import render_input_file
 
         render_manifest = render_input_file(
