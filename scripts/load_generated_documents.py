@@ -78,6 +78,22 @@ def fetch_source_rows(connection, row_ids: list[int]) -> dict[int, SourceRow]:
     return result
 
 
+def _parse_document(raw: dict) -> GeneratedDocumentIR:
+    """JSONL의 문서 dump를 계약으로 되돌린다.
+
+    ``body_text``는 block에서 파생되는 computed field라 dump에는 들어 있지만
+    입력으로는 금지돼 있다(계약이 extra를 막는다). 빼고 검증한다 — 값을 버리는
+    게 아니라 block에서 그대로 다시 계산된다.
+    """
+
+    payload = {
+        key: value
+        for key, value in raw.items()
+        if key not in GeneratedDocumentIR.model_computed_fields
+    }
+    return GeneratedDocumentIR.model_validate(payload)
+
+
 def _document_form(record: dict) -> DocumentForm | None:
     raw = record.get("source_document_form")
     if not raw:
@@ -112,9 +128,7 @@ def build_rows(
             )
             continue
         plan = GenerationPlan.model_validate(raw_plan)
-        document = GeneratedDocumentIR.model_validate(
-            raw_artifact["generated_document"]
-        )
+        document = _parse_document(raw_artifact["generated_document"])
         raw_assessment = record.get("consistency_assessment")
         assessment = (
             SensitiveConsistencyAssessment.model_validate(raw_assessment)

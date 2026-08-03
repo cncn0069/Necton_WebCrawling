@@ -35,6 +35,10 @@ def _record(**overrides) -> dict:
         "generation_artifact": {
             "generated_document": {
                 "title": "민원 처리 결과 통보",
+                # 배치 dump에는 computed field가 그대로 들어 있다. 계약은
+                # 입력으로는 이를 금지하므로 적재기가 빼고 검증해야 한다
+                # (실측: EC2 산출물로 처음 확인).
+                "body_text": "신청인 김민서의 개인 연락처는 010-1234-5678이다.",
                 "blocks": [
                     {
                         "block_id": "generated:b0",
