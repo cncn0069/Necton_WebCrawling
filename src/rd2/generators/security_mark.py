@@ -1,5 +1,10 @@
 """보안마크(대외비/군사기밀 워터마크 + 분류 스탬프) 생성 — Pillow + opencv.
 
+최신 ``doc_type``별 PDF 생성기는 렌더 후
+``document_security_marking.py``에서 기관 워터마크와 분류표지를 합성한다.
+기관별 자산 매핑, 투명도, 크기, 레이어 순서는 ``logo/README.md``를 기준으로
+한다. 이 파일의 생성 함수는 기존 파일럿/레거시 이미지 합성 경로를 유지한다.
+
 2026-07-14 사용자 피드백 반영 이력:
 1. 초기 버전(우측 하단 작은 사각 스탬프)이 실제 한국 관공서 대외비 문서
    관례와 너무 달라서, 참고 이미지의 **관례 형식**(워터마크+분류 박스
@@ -201,7 +206,9 @@ def generate_agency_watermark(output_path: Path, logo_filename: str, *, seed: in
     """가/나/다/라... 글자 워터마크 대신, 기관 마크를 크게 옅게 키워 배경에 한 번 찍는다.
 
     _draw_single_character_watermark와 같은 톤(연한 회색, 알파 60)으로 맞춰
-    문서 배경에서 자연스럽게 보이도록 흑백+저알파 처리한다.
+    문서 배경에서 자연스럽게 보이도록 흑백+저알파 처리한다. 최신 PDF
+    후처리의 승인된 작은·선명한 합성 규칙은 ``logo/README.md``와
+    ``document_security_marking.py``를 따른다.
     """
     asset_path = _LOGO_DIR / logo_filename
     boxed = _load_mark_asset(asset_path, canvas_size=_AGENCY_WATERMARK_BOX_PX)

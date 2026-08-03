@@ -13,6 +13,7 @@ from rd2.generators.agency_resolver import (
     RECLASSIFICATION_RATIO,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
+    resolve_agency_logo,
     sample_compatible_scenario_agency_and_date,
     sample_diverse_agency_and_date_for_fallback,
     sample_real_agency_and_date_for_fallback,
@@ -103,6 +104,33 @@ class TestResolveAgencyForCandidate:
         assert PER_DOC_AGENCY_SOURCES == {
             "alio", "korea_kr", "open_go_kr", "orginl_info", "prism", "seoul_opengov", "me",
         }
+
+
+class TestResolveAgencyLogo:
+    def test_resolves_specific_generic_and_svg_assets(self):
+        assert resolve_agency_logo("국방부") == ("국방부", "국방부.png")
+        assert resolve_agency_logo("교육부") == ("교육부", "정부부처.png")
+        assert resolve_agency_logo("대통령실") == ("대통령실", "대통령실.svg")
+        assert resolve_agency_logo("청와대") == ("청와대", "청와대.svg")
+
+    def test_normalizes_explicit_aliases_and_prosecutor_offices(self):
+        assert resolve_agency_logo(" 대한민국 국가정보원 ") == (
+            "국가정보원",
+            "국정원.png",
+        )
+        assert resolve_agency_logo("공 수 처") == (
+            "고위공직자범죄수사처",
+            "고위공직자범죄수사처.png",
+        )
+        assert resolve_agency_logo("서울중앙지방검찰청") == (
+            "검찰청",
+            "검찰.png",
+        )
+
+    def test_unknown_agency_has_no_generic_fallback(self):
+        assert resolve_agency_logo("가상행정기관") is None
+        assert resolve_agency_logo("서울특별시") is None
+        assert resolve_agency_logo(None) is None
 
 
 class TestFetchRealAgencyDateSamples:
