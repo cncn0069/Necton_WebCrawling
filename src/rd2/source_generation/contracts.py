@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Callable, Literal
+from typing import Annotated, Callable, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -26,13 +26,14 @@ from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
     TAXONOMY_VERSION,
     ClauseNumber,
-    SemanticDocumentType,
+    DocumentForm,
     SubclauseKey,
+    clause_of_subclause,
     expected_classification,
     subclause_belongs_to_clause,
 )
 
-CONTRACT_SCHEMA_VERSION = "1.0.0"
+CONTRACT_SCHEMA_VERSION = "2.2.0"
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256Hex = Annotated[
@@ -50,17 +51,146 @@ class ContractModel(BaseModel):
     )
 
 
+def condense_whitespace(value: str) -> str:
+    """공백을 모두 제거한 비교용 형태. 전각 공백(``\\u3000``)도 함께 제거된다."""
+
+    return "".join(value.split())
+
+
+def _condense_with_offsets(value: str) -> tuple[str, tuple[int, ...]]:
+    """공백을 제거한 문자열과, 각 글자의 원본 인덱스를 함께 돌려준다.
+
+    원본 인덱스를 보존하므로 공백을 무시해 찾은 위치를 **원문 좌표로** 되돌릴
+    수 있다. 관대해진 것은 비교 방식이고 반환하는 위치는 여전히 원문 기준이다.
+    """
+
+    chars: list[str] = []
+    offsets: list[int] = []
+    for index, char in enumerate(value):
+        if not char.isspace():
+            chars.append(char)
+            offsets.append(index)
+    return "".join(chars), tuple(offsets)
+
+
+def _truncate(value: str, limit: int = 80) -> str:
+    """오류 메시지에 넣을 인용문. 길면 앞부분만 남긴다."""
+
+    collapsed = " ".join(value.split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+
+
+def _prefix_hint(needle: str, haystack: str) -> str:
+    """인용문이 어디까지 맞았는지 알려주는 한 마디.
+
+    앞부분은 맞는데 뒤가 안 맞으면 block 경계를 넘어 인용했거나 뒤를 지어낸
+    것이고, 앞부분조차 없으면 아예 다른 block을 가리킨 것이다. 이 둘은
+    고치는 방법이 다르므로 오류에서 구분되어야 한다.
+    """
+
+    for length in (24, 16, 10):
+        if len(needle) <= length:
+            continue
+        if needle[:length] in haystack:
+            return (
+                f" (앞 {length}자는 이 block에 있다 — 그 뒤가 어긋난다. "
+                "block 경계를 넘겼거나 뒷부분을 바꿔 썼을 수 있다)"
+            )
+    return " (앞부분도 이 block에 없다 — 다른 block이거나 지어낸 문장이다)"
+
+
 class EvidenceSpan(ContractModel):
+    """모델이 **무엇을** 인용했는지만 담는다. **어디인지**는 코드가 찾는다.
+
+    이전 계약은 ``start``/``end`` 문자 오프셋을 모델에게 요구했다. 실측 결과
+    모델은 인용문 자체는 정확히 고르면서 오프셋은 거의 항상 틀렸다 — 3글자
+    ``"요약문"``에 ``end=9``(UTF-8 바이트 수)를 반환하는 식이다. LLM은 글자를
+    셀 수 없고 한글 멀티바이트에서 특히 그렇다.
+
+    오프셋은 어차피 코드가 ``locate_in``으로 다시 계산했고 그 값을 읽는
+    downstream도 없었다. 그래서 모델에게 묻지 않는다 — 못 하는 일을 시켜
+    출력 토큰을 쓰고 틀릴 기회만 주는 계약이었다.
+
+    같은 이유로 **공백의 완전 일치도 요구하지 않는다.** 실측에서 classifier가
+    PDF 표를 인용할 때 글자는 모두 맞히면서 칸 사이 공백 개수만 달라
+    ``str.find``에 걸리지 않았다. 표에서 뽑은 불규칙한 공백을 한 칸도 틀리지
+    않게 재현하라는 것은 글자 수를 세라는 요구와 같은 부류다.
+
+    근거가 실재해야 한다는 보안 속성은 그대로다 — 글자는 빠짐없이 같은 순서로
+    있어야 하고, 하나라도 다르거나 요약·바꿔쓰기가 있으면 여전히 실패한다.
+    풀어준 것은 공백뿐이다.
+    """
+
     block_id: NonEmptyText
-    start: int = Field(ge=0)
-    end: int = Field(gt=0)
     quote: NonEmptyText
 
-    @model_validator(mode="after")
-    def _end_must_follow_start(self) -> "EvidenceSpan":
-        if self.end <= self.start:
-            raise ValueError("evidence span end must be greater than start")
-        return self
+    def locate_in(self, text: str) -> int:
+        """block text에서 인용문의 시작 위치를 원문 좌표로 찾는다.
+
+        공백은 무시하고 비교한다(``EvidenceSpan`` 참고). 같은 인용문이 두 번
+        이상 나오면 임의의 occurrence를 고르지 않고 실패시킨다 — 어느 쪽을
+        가리키는지 모르는 근거는 근거가 아니다. 모델은 더 긴 고유 인용문을
+        반환해야 한다.
+        """
+
+        needle = condense_whitespace(self.quote)
+        if not needle:
+            raise ValueError(
+                f"evidence quote for block {self.block_id!r} has no visible characters"
+            )
+        haystack, offsets = _condense_with_offsets(text)
+        start = haystack.find(needle)
+        if start < 0:
+            # 실측(2026-08-01): 오류가 block ID만 말해서 모델이 무엇을 인용했는지
+            # 알 수 없었다. 문장을 지어낸 것인지, block 경계를 넘어 인용한 것인지,
+            # 다른 block을 가리킨 것인지 구분이 안 돼 원인을 추측만 했다.
+            # 인용문과, 앞부분이라도 걸리는 지점을 함께 남긴다.
+            raise ValueError(
+                f"evidence quote not found in block {self.block_id!r}: "
+                f"{_truncate(self.quote)!r}"
+                f"{_prefix_hint(needle, haystack)}"
+            )
+        if haystack.find(needle, start + 1) >= 0:
+            raise ValueError(
+                f"evidence quote is ambiguous in block {self.block_id!r}; "
+                f"return a longer unique quote: {_truncate(self.quote)!r}"
+            )
+        return offsets[start]
+
+    def require_in_document(self, document_text: str) -> None:
+        """인용문이 **문서 어딘가에** 글자 그대로 있는지만 확인한다.
+
+        ``locate_in``과 지키는 것이 다르다. 저쪽은 "이 block의 이 위치"를
+        확정하지만, 여기서는 "지어낸 문장이 아니다"만 본다.
+
+        원문 판별에는 이쪽이 맞다. block_id를 읽어서 무엇을 결정하는 코드가
+        판별기 쪽에는 없고(생성기는 slot 이름만 쓰고, provenance는 기록만
+        한다), 위치를 안 쓰므로 유일성도 요구할 이유가 없다.
+
+        block 단위로 좁혀 두었을 때 값을 치른 것은 PDF 원문이다. 추출기가 줄
+        단위로 자르면 사람 눈에 한 덩어리인 제목이 ``2`` / ``예산·회계
+        집행분야`` 두 block이 되고 표는 셀 하나가 block 하나가 된다. 판별기가
+        읽은 위치와 block 경계가 계속 어긋나 실측 91건 중 40건이 여기서
+        끝났다 — PDF 출처는 mohw 6/7, molit 5/7, PRISM 7/10이었고 hwpx인
+        seoul_opengov는 1/10이었다.
+
+        생성물 채점(``ConsistencyAssessment``)은 그대로 ``locate_in``을 쓴다.
+        거기서는 제6호 assertion이 "같은 block 안에서 사람과 개인정보가
+        연결됐는가"를 판정하므로 block 경계가 판정의 일부다.
+        """
+
+        needle = condense_whitespace(self.quote)
+        if not needle:
+            raise ValueError(
+                f"evidence quote for block {self.block_id!r} has no visible characters"
+            )
+        haystack, _ = _condense_with_offsets(document_text)
+        if haystack.find(needle) < 0:
+            raise ValueError(
+                f"evidence quote not found anywhere in the source document: "
+                f"{_truncate(self.quote)!r}"
+                f"{_prefix_hint(needle, haystack)}"
+            )
 
 
 class ParagraphBlock(ContractModel):
@@ -81,9 +211,28 @@ class BulletListBlock(ContractModel):
         return "\n".join(f"- {item}" for item in self.items)
 
 
+DRAFT_BLANK_HEADER_KEYS: frozenset[str] = frozenset({"문서번호", "시행일자"})
+
+
 class KeyValueEntry(ContractModel):
     key: NonEmptyText
-    value: NonEmptyText
+    value: str
+
+    @model_validator(mode="after")
+    def _blank_value_is_only_for_draft_header_fields(self) -> "KeyValueEntry":
+        """공란은 초안 표제부의 문서번호·시행일자에서만 표현한다.
+
+        ``KeyValueEntry`` 자체는 생성 목표를 알 수 없으므로 두 표제부 키의
+        공란만 구조적으로 표현 가능하게 둔다. 실제로 초안인지, 반대로 확정
+        문서인데 공란이 남았는지는 target-aware ``check_document_form``이
+        판정한다. 그 밖의 key-value 값은 종전처럼 비어 있을 수 없다.
+        """
+
+        if not self.value and self.key not in DRAFT_BLANK_HEADER_KEYS:
+            raise ValueError(
+                "blank key-value is only allowed for draft document number/date"
+            )
+        return self
 
 
 class KeyValueBlock(ContractModel):
@@ -154,7 +303,7 @@ DocumentBlock = (
 
 
 class GeneratedDocumentIR(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     title: NonEmptyText
     blocks: tuple[DocumentBlock, ...] = Field(min_length=1)
 
@@ -163,6 +312,19 @@ class GeneratedDocumentIR(ContractModel):
         block_ids = [block.block_id for block in self.blocks]
         if len(block_ids) != len(set(block_ids)):
             raise ValueError("generated document block IDs must be unique")
+        return self
+
+    @model_validator(mode="after")
+    def _blank_key_values_must_be_in_the_header(self) -> "GeneratedDocumentIR":
+        """공란 표제부 값을 일반 본문 key-value로 오용하지 못하게 한다."""
+
+        for index, block in enumerate(self.blocks):
+            if block.kind != "key_value":
+                continue
+            if any(not entry.value for entry in block.entries) and index != 0:
+                raise ValueError(
+                    "blank draft header values are only allowed in the first block"
+                )
         return self
 
     def block_text(self, block_id: str) -> str:
@@ -197,7 +359,7 @@ class SourcePage(ContractModel):
 
 
 class SourceDocumentSnapshot(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source: NonEmptyText
     manifest_key: NonEmptyText
@@ -226,6 +388,14 @@ class SourceDocumentSnapshot(ContractModel):
                     return block.text
         raise ValueError(f"unknown source block_id: {block_id!r}")
 
+    @property
+    def full_text(self) -> str:
+        """block 경계를 지운 원문 전체. 판별 evidence 대조에 쓴다."""
+
+        return "\n".join(
+            block.text for page in self.pages for block in page.blocks
+        )
+
 
 class SelectionMethod(str, Enum):
     FULL_DOCUMENT = "full_document"
@@ -239,7 +409,7 @@ class RelevanceCandidateBlock(ContractModel):
 
 
 class RelevanceSelectionRequest(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
@@ -260,7 +430,7 @@ class RelevanceSelectionRequest(ContractModel):
 
 
 class RelevanceSelectionResponse(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     selected_block_ids: tuple[NonEmptyText, ...] = Field(min_length=1)
     rationale: NonEmptyText
 
@@ -271,8 +441,91 @@ class RelevanceSelectionResponse(ContractModel):
         return self
 
 
+class InsertionMode(str, Enum):
+    """자리를 어떻게 쓸지. ``replace``를 우선한다.
+
+    ``replace``는 바꿀 문장 자체가 그 자리에 무엇이 들어갈지 말해 준다 —
+    ``| 구경 | ****``를 바꾸라고 하면 관 지름이 온다. ``after``는 앞 문장만
+    있어 문맥이 약하고, 약하면 모델이 프롬프트 예시에 기댄다(v1 실측: 예시
+    슬롯 36개 중 22개를 글자 그대로 복사). 그래서 ``after``는 ``want``에
+    값의 종류를 구체적으로 적어야 한다.
+    """
+
+    REPLACE = "replace"
+    AFTER = "after"
+
+
+class InsertionSlot(ContractModel):
+    """원문 어디에 민감정보를 넣을지 가리키는 자리 하나.
+
+    자리를 **block ID**로 받는다. 한때 원문 문장을 인용하게 했는데(anchor) 그
+    문장을 코드가 다시 찾아야 했고 네 가지로 계속 빗나갔다 — 두 block에 걸친
+    인용, 프롬프트 예시를 원문으로 착각, ``감사원`` -> ``감사원의`` 같은 조사
+    한 글자, block 머리표까지 포함. 91건 실행에서 19건이 여기서 끝났다.
+
+    block은 이미 충분히 잘다. 실측 19,148개의 길이 중앙값이 13자이고 90%가
+    47자 이하다 — 한 줄이 곧 한 block이라 "이 block을 바꿔라"가 "이 문장을
+    바꿔라"와 사실상 같다. 찾을 필요가 없는 것을 찾게 만들고 있었다.
+    """
+
+    #: 원문에 붙은 ``[BLOCK …]`` 표시 안의 ID. 사전 조회로 확인한다.
+    block_id: NonEmptyText
+    mode: InsertionMode
+    #: 그 자리에 들어갈 값의 종류. 2단계가 이걸 보고 값을 만든다.
+    want: NonEmptyText
+
+
+class InsertionPlan(ContractModel):
+    """합성 마스킹 1단계의 출력 — **문서가 아니라 자리 목록**.
+
+    이 계약이 이 방식의 전부다. 지금 생성기는 ``GeneratedDocumentIR``을
+    요구하고, 그러면 모델은 원문을 보존하려고 통째로 재타이핑하는 대신
+    요약한다 — 실측 52건의 원문 보존율 중앙값이 1.0%였다(마스킹 복원 건만
+    91%). 문서를 달라고 하지 않으면 요약할 기회가 없다.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    slots: tuple[InsertionSlot, ...] = Field(min_length=1, max_length=8)
+    rationale: NonEmptyText
+
+    @model_validator(mode="after")
+    def _slots_must_target_distinct_blocks(self) -> "InsertionPlan":
+        block_ids = [slot.block_id for slot in self.slots]
+        if len(block_ids) != len(set(block_ids)):
+            raise ValueError("insertion slots must target distinct blocks")
+        return self
+
+
+class MaskFill(ContractModel):
+    """마스킹 자리 하나에 들어갈 가상 값."""
+
+    mask_id: NonEmptyText
+    value: NonEmptyText
+
+
+class MaskFillResponse(ContractModel):
+    """``mask_restoration`` route의 유일한 모델 출력.
+
+    문서를 반환하지 않는 것이 이 route의 요점이다 — 원문 block은 코드가 그대로
+    옮기고 모델은 값만 낸다(``mask_restoration.apply_mask_fills``). 그래서 다른
+    route의 ``GeneratedDocumentIR``과 달리 서식·block 구성을 모델이 건드릴 수
+    없고, 표제부·붙임처럼 계약이 걸린 자리에서 실패할 여지가 없다.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    fills: tuple[MaskFill, ...] = Field(min_length=1)
+    rationale: NonEmptyText
+
+    @model_validator(mode="after")
+    def _mask_ids_must_be_unique(self) -> "MaskFillResponse":
+        mask_ids = [fill.mask_id for fill in self.fills]
+        if len(mask_ids) != len(set(mask_ids)):
+            raise ValueError("mask fill IDs must be unique")
+        return self
+
+
 class DocumentSelection(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: NonEmptyText
     method: SelectionMethod
     source_sha256: Sha256Hex
@@ -308,20 +561,51 @@ class DocumentSelection(ContractModel):
 
 
 class LegalClassification(ContractModel):
-    document_type: SemanticDocumentType
-    other_document_type: NonEmptyText | None = None
+    """근거 → 이유 → 판정 순서로 필드를 선언한다.
+
+    OpenAI strict structured output은 스키마의 property 순서대로 자기회귀
+    생성하므로 **필드 순서가 곧 추론 순서**다. 그래서 근거를 판정보다 앞에
+    두는 편이 원칙적으로 낫다 — 판정이 먼저 나오면 근거가 사후 정당화가 된다.
+
+    **그러나 이 모델에서는 그 원칙을 적용하지 않는다.** 실측으로 두 번 시도해
+    두 번 다 실패했다.
+
+    1. ``evidence_spans``를 ``classification`` 앞에 두자 모델이 span을 먼저
+       뱉고 나중에 그 조합을 금지하는 값(O + clause)을 골라 계약 위반.
+    2. ``classification``만 앞으로 빼고 ``clause_no``를 근거 뒤에 남기자
+       둘 사이가 멀어져 매핑이 표류했다 — "clause 5 does not map to
+       classification C".
+
+    ``classification``·``clause_no``·``subclause_key``는 서로를 제약하는
+    **한 덩어리**다(C=제1~4호, S=제5~8호, O=둘 다 null, subclause는 clause
+    소속). 제약으로 묶인 필드를 떼어놓으면 모델은 앞서 emit한 값을 잊고
+    모순을 만든다. 그래서 덩어리를 붙여 앞에 두고 근거를 뒤에 둔다.
+
+    교차 제약이 없는 곳(``AdministrativeStatusFinding``)에서는 근거를 앞에
+    두는 원칙을 그대로 유지한다.
+
+    순서를 바꿔도 JSON 구조는 동일하므로 ``CONTRACT_SCHEMA_VERSION``은 올리지
+    않는다. 바뀐 것은 산출물의 shape이 아니라 생성 방식이므로
+    ``PROMPT_BUNDLE_VERSION``으로 추적하고 journal을 무효화한다.
+    """
+
+    _requires_evidence_spans: ClassVar[bool] = True
+
+    document_form: DocumentForm
+    other_document_form: NonEmptyText | None = None
     classification: CsoClassification
     clause_no: ClauseNumber | None = None
     subclause_key: SubclauseKey | None = None
     evidence_spans: tuple[EvidenceSpan, ...] = ()
+    rationale: NonEmptyText
 
     @model_validator(mode="after")
     def _classification_must_be_coherent(self) -> "LegalClassification":
-        if self.document_type == SemanticDocumentType.OTHER:
-            if self.other_document_type is None:
-                raise ValueError("other_document_type is required for document_type=other")
-        elif self.other_document_type is not None:
-            raise ValueError("other_document_type is only allowed for document_type=other")
+        if self.document_form == DocumentForm.OTHER:
+            if self.other_document_form is None:
+                raise ValueError("other_document_form is required for document_form=other")
+        elif self.other_document_form is not None:
+            raise ValueError("other_document_form is only allowed for document_form=other")
 
         if self.classification == CsoClassification.O:
             if self.clause_no is not None or self.subclause_key is not None:
@@ -340,7 +624,7 @@ class LegalClassification(ContractModel):
                 f"subclause {self.subclause_key.value!r} does not belong to "
                 f"clause {self.clause_no.value}"
             )
-        if not self.evidence_spans:
+        if self._requires_evidence_spans and not self.evidence_spans:
             raise ValueError("C/S classification requires at least one evidence span")
         return self
 
@@ -348,24 +632,48 @@ class LegalClassification(ContractModel):
         """``block_text(block_id) -> str`` resolver에 span을 대조한다."""
 
         for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
-                raise ValueError(
-                    f"evidence span for block {span.block_id!r} ends outside the block"
-                )
-            actual = text[span.start : span.end]
-            if actual != span.quote:
-                raise ValueError(
-                    f"evidence quote mismatch for block {span.block_id!r} "
-                    f"at range {span.start}:{span.end}"
-                )
+            span.locate_in(block_text(span.block_id))
+
+
+def document_form_matches(
+    left: LegalClassification,
+    right: LegalClassification,
+) -> bool:
+    """문서형식이 같은가. ``other``면 자유텍스트까지 같아야 한다.
+
+    **두 곳이 각자 계산하던 것을 하나로 합친 자리다.**
+    ``pipeline._compare_consistency``는 ``other``일 때
+    ``other_document_form``까지 비교했고, ``audit_bridge``의
+    ``ClassificationAuditArtifact``는 같은 값을 enum 동등성만으로 다시 계산했다.
+    양쪽이 ``other``인데 자유텍스트가 다르면 파이프라인은 불일치, 감사는
+    일치로 봤고 — 감사 아티팩트는 그 둘이 어긋나면
+    ``comparison does not match source/target/validation labels``로 거부하므로
+    **그 건이 감사 번들에서 통째로 빠졌다.**
+
+    같은 판정을 두 곳에서 재현하는 한 또 갈라진다. 그래서 계약 쪽에 한 번만
+    둔다 — ``expected_classification``·``subclause_belongs_to_clause``와 같은
+    자리다.
+    """
+
+    if left.document_form != right.document_form:
+        return False
+    if left.document_form is DocumentForm.OTHER:
+        return left.other_document_form == right.other_document_form
+    return True
 
 
 class SourceClassification(LegalClassification):
-    rationale: NonEmptyText
+    def validate_evidence_in_document(self, document_text: str) -> None:
+        """block을 특정하지 않고 원문 어딘가에 있는지만 본다.
+
+        이유는 ``EvidenceSpan.require_in_document``에 있다.
+        """
+
+        for span in self.evidence_spans:
+            span.require_in_document(document_text)
 
     def validate_against_snapshot(self, snapshot: SourceDocumentSnapshot) -> None:
-        self.validate_evidence_against(snapshot.block_text)
+        self.validate_evidence_in_document(snapshot.full_text)
 
 
 class TargetClassification(str, Enum):
@@ -384,6 +692,10 @@ class GenerationRoute(str, Enum):
     ANCHORED = "anchored"
     ADMINISTRATIVE_AUGMENTED = "administrative_augmented"
     FULLY_SYNTHETIC = "fully_synthetic"
+    #: 부분공개 원문의 마스킹 자리만 되돌린다. 다른 route와 달리 문서를 새로
+    #: 쓰지 않으므로 문서형식·업무 맥락이 원문 그대로 남는다
+    #: (``mask_restoration``).
+    MASK_RESTORATION = "mask_restoration"
 
 
 class SourceEvidenceLevel(str, Enum):
@@ -399,11 +711,19 @@ class AssessmentScope(str, Enum):
 
 
 class SourceSuitability(ContractModel):
-    evidence_level: SourceEvidenceLevel
+    """``evidence_level``이 span 허용 여부를 결정하는 gate라 근거보다 앞에 온다.
+
+    ``no_usable_public_source``는 span을 **금지**하고 나머지 level은 span을
+    **요구**한다. level을 뒤에 두면 모델이 span을 먼저 뱉고 나중에
+    ``no_usable_public_source``를 골라 스스로 모순되는 응답을 만든다(실측 확인).
+    나머지 순서는 ``LegalClassification``의 주석 참고.
+    """
+
     assessment_scope: AssessmentScope
+    evidence_level: SourceEvidenceLevel
     evidence_spans: tuple[EvidenceSpan, ...] = ()
-    reason_code: NonEmptyText
     rationale: NonEmptyText
+    reason_code: NonEmptyText
 
     @model_validator(mode="after")
     def _evidence_must_match_level(self) -> "SourceSuitability":
@@ -416,18 +736,116 @@ class SourceSuitability(ContractModel):
             raise ValueError(f"{self.evidence_level.value} requires evidence spans")
         return self
 
-    def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
+    def validate_evidence_in_document(self, document_text: str) -> None:
         for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
+            span.require_in_document(document_text)
+
+
+class SourceActorRole(str, Enum):
+    PETITIONER = "petitioner"
+    REPORTER = "reporter"
+    APPLICANT = "applicant"
+    JOB_APPLICANT = "job_applicant"
+    BENEFICIARY = "beneficiary"
+    EMPLOYEE = "employee"
+    INVESTIGATION_SUBJECT = "investigation_subject"
+    CASE_SUBJECT = "case_subject"
+    WITNESS = "witness"
+    DISPUTE_PARTY = "dispute_party"
+    PUBLIC_OFFICIAL = "public_official"
+    CORPORATION = "corporation"
+    OTHER_EXTERNAL_PERSON = "other_external_person"
+    NONE = "none"
+
+
+class SourceSlotKind(str, Enum):
+    PARAGRAPH = "paragraph"
+    TABLE_COLUMN = "table_column"
+    KEY_VALUE = "key_value"
+    ATTACHMENT = "attachment"
+
+
+class SourceSlot(ContractModel):
+    """생성기가 원문 구조를 보존할 때 재사용할 수 있는 의미상 자리."""
+
+    name: NonEmptyText
+    kind: SourceSlotKind
+    evidence_span: EvidenceSpan
+
+
+class SourceAssessment(ContractModel):
+    """유형 판별기 LLM의 유일한 출력.
+
+    생성 경로·목표·본문은 포함하지 않는다. 이 계약을 먼저 고정한 뒤
+    결정론적 계획기가 ``GenerationPlan``을 만든다.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    source_classification: SourceClassification
+    source_suitability: SourceSuitability
+    business_context: NonEmptyText
+    subject_roles: tuple[SourceActorRole, ...] = Field(min_length=1)
+    available_slots: tuple[SourceSlot, ...] = Field(min_length=1)
+    #: 이 원문에 **가장 가까운** 세부유형 하나. 계획기가 요청 목표를 대체할 때
+    #: 쓰는 값이다.
+    #:
+    #: 이전에는 ``compatible_subclauses[0]``이 그 역할이었다. 두 가지가 문제였다 —
+    #: 순서에 의미가 있다는 것을 계약이 검증하지 않아 프롬프트 지시에만 의존했고,
+    #: 목록이 비어도(``= ()``) 유효해서 판별기가 "결정하지 않음"을 낼 수 있었다.
+    #: 실측 10건에서 3건이 빈 목록을 냈고 그 3건은 계획 단계에서 폐기됐다.
+    #: 필수 필드로 두면 그 상태가 계약 단계에서 불가능해진다.
+    primary_subclause: SubclauseKey
+    #: 왜 그것이 가장 가까운지. 순위 판단의 근거가 어디에도 기록되지 않아
+    #: 사후 검증이 불가능했던 것을 남기려는 필드다.
+    primary_rationale: NonEmptyText
+    #: ``primary_subclause`` 외의 후보. 비어 있어도 된다.
+    compatible_subclauses: tuple[SubclauseKey, ...] = ()
+
+    @property
+    def candidate_subclauses(self) -> tuple[SubclauseKey, ...]:
+        """요청 목표가 이 원문과 호환되는지 볼 때 쓰는 전체 후보 집합."""
+
+        return (self.primary_subclause, *self.compatible_subclauses)
+
+    @model_validator(mode="after")
+    def _facts_must_be_unique_and_coherent(self) -> "SourceAssessment":
+        if self.source_classification.classification == CsoClassification.C:
+            raise ValueError(
+                "source assessment supports only S/O for clauses 5-8"
+            )
+        if len(self.subject_roles) != len(set(self.subject_roles)):
+            raise ValueError("source subject roles must be unique")
+        slot_keys = [(slot.name, slot.kind) for slot in self.available_slots]
+        if len(slot_keys) != len(set(slot_keys)):
+            raise ValueError("source slots must be unique by name and kind")
+        if self.primary_subclause in self.compatible_subclauses:
+            raise ValueError(
+                "primary subclause must not repeat in compatible subclauses"
+            )
+        if len(self.compatible_subclauses) != len(set(self.compatible_subclauses)):
+            raise ValueError("compatible subclauses must be unique")
+        for subclause in self.candidate_subclauses:
+            clause = next(
+                (
+                    candidate
+                    for candidate in ClauseNumber
+                    if subclause_belongs_to_clause(candidate, subclause)
+                ),
+                None,
+            )
+            if clause is None or expected_classification(clause) != CsoClassification.S:
                 raise ValueError(
-                    f"suitability span for block {span.block_id!r} ends outside the block"
+                    "source assessment only supports subclauses in clauses 5-8"
                 )
-            if text[span.start : span.end] != span.quote:
-                raise ValueError(
-                    f"suitability quote mismatch for block {span.block_id!r} "
-                    f"at range {span.start}:{span.end}"
-                )
+        return self
+
+    def validate_evidence_in_document(self, document_text: str) -> None:
+        """판별기 evidence 전체를 원문 문서 단위로 대조한다."""
+
+        self.source_classification.validate_evidence_in_document(document_text)
+        self.source_suitability.validate_evidence_in_document(document_text)
+        for slot in self.available_slots:
+            slot.evidence_span.require_in_document(document_text)
 
 
 class GenerationTarget(ContractModel):
@@ -472,19 +890,28 @@ class GenerationTarget(ContractModel):
         return self
 
 
-class Pass1Result(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    source_classification: SourceClassification
-    source_suitability: SourceSuitability
-    generation_route: GenerationRoute
-    generation_target: GenerationTarget
-    generated_document: GeneratedDocumentIR
+PLANNER_POLICY_VERSION = "source-generation-planner-v3"
 
-    @model_validator(mode="after")
-    def _source_target_and_route_must_be_coherent(self) -> "Pass1Result":
-        source = self.source_classification
-        target = self.generation_target
-        suitability = self.source_suitability
+
+class GenerationPlan(ContractModel):
+    """판별 결과와 요청 target을 결합해 코드가 만드는 잠긴 생성 계획."""
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    requested_target: GenerationTarget
+    final_target: GenerationTarget
+    generation_route: GenerationRoute
+    source_assessment_sha256: Sha256Hex
+    source_sha256: Sha256Hex
+    selection_sha256: Sha256Hex
+    planner_policy_version: Literal["source-generation-planner-v3"] = (
+        PLANNER_POLICY_VERSION
+    )
+    planner_policy_sha256: Sha256Hex
+
+    def validate_against(self, assessment: SourceAssessment) -> None:
+        source = assessment.source_classification
+        target = self.final_target
+        suitability = assessment.source_suitability
         route = self.generation_route
 
         if route == GenerationRoute.SOURCE_ALIGNED:
@@ -498,14 +925,22 @@ class Pass1Result(ContractModel):
             if source.classification != CsoClassification.O:
                 raise ValueError(f"{route.value} route requires an O source")
 
-        if route == GenerationRoute.SPAN_SEEDED:
+        if route == GenerationRoute.MASK_RESTORATION:
+            # 이 route만 ``evidence_level``을 보지 않는다. 다른 route의 근거는
+            # 판별기가 "요청 목표에 대해 원문이 무엇을 주는가"를 판단한 값이지만,
+            # 이 route의 근거는 푸터 ``부분공개(N)``와 마스킹 스팬 — 실무자가
+            # 남긴 기록이고 snapshot에서 결정론적으로 다시 뽑을 수 있다
+            # (``mask_restoration.detect_redaction_evidence``). 서로 다른
+            # 질문의 답이라 한쪽을 다른 쪽 enum에 밀어 넣지 않는다. 대신
+            # 무엇을 보고 골랐는지는 provenance의 reason_code에 남는다.
+            if target.clause_no is None:
+                raise ValueError(
+                    "mask_restoration route requires a legal clause target"
+                )
+        elif route == GenerationRoute.SPAN_SEEDED:
             if suitability.evidence_level != SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN:
                 raise ValueError(
                     "span_seeded route requires direct_sensitive_span"
-                )
-            if target.clause_no == ClauseNumber.CLAUSE_6:
-                raise ValueError(
-                    "clause 6 span_seeded is disabled until de-identification is implemented"
                 )
         elif route == GenerationRoute.ANCHORED:
             if suitability.evidence_level != SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY:
@@ -548,7 +983,17 @@ class Pass1Result(ContractModel):
             or target.subclause_key != source.subclause_key
         ):
             raise ValueError("source_aligned target must exactly match the C/S source label")
-        return self
+
+
+class RepairCode(str, Enum):
+    FORM_MISMATCH = "form_mismatch"
+    CLASSIFICATION_MISMATCH = "classification_mismatch"
+    CLAUSE_MISMATCH = "clause_mismatch"
+    SUBCLAUSE_MISMATCH = "subclause_mismatch"
+    MASK_REMAINS = "mask_remains"
+    DIRECT_VALUE_MISSING = "direct_value_missing"
+    ROLE_INCOMPATIBLE = "role_incompatible"
+    EVIDENCE_INVALID = "evidence_invalid"
 
 
 class GenerationProvenance(ContractModel):
@@ -597,61 +1042,440 @@ class GenerationProvenance(ContractModel):
         return self
 
 
-class AdministrativeStatusFinding(ContractModel):
-    status: AdminStatus
-    evidence_spans: tuple[EvidenceSpan, ...] = Field(min_length=1)
-    rationale: NonEmptyText
+class GenerationArtifact(ContractModel):
+    """한 번의 생성 시도와 그 lineage를 보존하는 산출물."""
 
-    def validate_evidence_against(self, block_text: Callable[[str], str]) -> None:
-        for span in self.evidence_spans:
-            text = block_text(span.block_id)
-            if span.end > len(text):
-                raise ValueError(
-                    f"administrative status span for block {span.block_id!r} "
-                    "ends outside the block"
-                )
-            if text[span.start : span.end] != span.quote:
-                raise ValueError(
-                    f"administrative status quote mismatch for block "
-                    f"{span.block_id!r} at range {span.start}:{span.end}"
-                )
-
-
-class Pass2Assessment(LegalClassification):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    administrative_statuses: tuple[AdministrativeStatusFinding, ...] = ()
-    rationale: NonEmptyText
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    plan_sha256: Sha256Hex
+    generated_document: GeneratedDocumentIR
+    attempt_index: int = Field(ge=1)
+    parent_generation_sha256: Sha256Hex | None = None
+    repair_codes: tuple[RepairCode, ...] = ()
+    provenance: GenerationProvenance
 
     @model_validator(mode="after")
-    def _administrative_statuses_must_be_unique(self) -> "Pass2Assessment":
-        statuses = [finding.status for finding in self.administrative_statuses]
-        if len(statuses) != len(set(statuses)):
-            raise ValueError("Pass 2 administrative statuses must be unique")
+    def _attempt_lineage_must_be_coherent(self) -> "GenerationArtifact":
+        if len(self.repair_codes) != len(set(self.repair_codes)):
+            raise ValueError("generation repair codes must be unique")
+        if self.attempt_index == 1:
+            if self.parent_generation_sha256 is not None or self.repair_codes:
+                raise ValueError(
+                    "first generation attempt cannot have a parent or repair codes"
+                )
+        elif self.parent_generation_sha256 is None or not self.repair_codes:
+            raise ValueError(
+                "retry generation attempts require a parent hash and repair codes"
+            )
         return self
 
-    @computed_field
-    @property
-    def effective_classification(self) -> CsoClassification:
-        if self.classification == CsoClassification.C:
-            return CsoClassification.C
-        if (
-            self.classification == CsoClassification.S
-            or self.administrative_statuses
-        ):
-            return CsoClassification.S
-        return CsoClassification.O
+
+def effective_classification(
+    legal: CsoClassification,
+    administrative_statuses: tuple[AdminStatus, ...],
+) -> CsoClassification:
+    """법적 분류와 **선언된** 행정상태를 합친 최종 민감도.
+
+    행정상태는 blind validator가 본문에서 찾아내는 대상이 아니라 생성계획이 못 박는
+    메타데이터다. PDF 렌더러가 결재란을 강제로 그려 그 상태를 문서에
+    구성해 넣으므로, 라벨은 판정이 아니라 **구성으로 보장된다.** 결정론적
+    코드가 만든 사실을 LLM에게 다시 확인시키는 것은 검증이 아니라 잡음이다.
+
+    실측이 이를 뒷받침한다 — 기존 validator의 행정상태 탐지는 9건 중 4건만 맞았고,
+    상태를 본문 산문으로 서술하게 만든 탓에 실제 공문에 없는 문장
+    ("최종 결재는 아직 이루어지지 않았습니다")이 생성물에 들어갔다.
+    """
+
+    if legal == CsoClassification.C:
+        return CsoClassification.C
+    if legal == CsoClassification.S or administrative_statuses:
+        return CsoClassification.S
+    return CsoClassification.O
+
+
+class NearMissNote(ContractModel):
+    """O 판정 시 감찰관이 남기는 지적 — 무엇이 더 있었으면 S였는지.
+
+    생성기가 어디서 미끄러지는지는 지금까지 자유 문장 ``rationale``에만 남아
+    사람이 매번 읽어야 했고, 여러 건을 모아 패턴을 보기 어려웠다. 실측
+    (2026-08-01)에서 반복된 실패가 그런 종류였다 — 항목명만 쓰고 값을 안 쓴다,
+    자료를 요청만 한다, 진행 상태만 서술한다. 세부유형별로 모으면 어느 생성
+    규칙을 고쳐야 하는지가 드러난다.
+
+    **진단 전용이다.** 재생성 입력으로 되먹이지 않는다 — 채점자가 생성기에게
+    답을 알려주는 경로가 되면 두 판정이 더 이상 독립이 아니게 된다.
+    """
+
+    #: 이 문서가 가장 근접했던 세부유형. 판정이 아니라 "굳이 고르자면"이다.
+    subclause_key: SubclauseKey
+    #: 그 세부유형이 성립하려면 본문에 더 있어야 할 것. 항목명이 아니라
+    #: 무슨 값이 없는지를 적는다.
+    missing: NonEmptyText
+    #: 그 자리를 짚을 수 있으면 block ID. 없으면 null이다.
+    block_id: NonEmptyText | None = None
+
+    @field_validator("block_id", mode="before")
+    @classmethod
+    def _blank_block_id_is_none(cls, value: object) -> object:
+        """빈 문자열을 null과 같이 본다.
+
+        프롬프트는 "짚을 수 없으면 null"이라고 말하지만 모델은 빈 문자열을
+        낸다. ``NonEmptyText``가 그걸 거부하면 **판정 전체가 버려진다** —
+        gateway의 ``ValidationError`` 경로는 재시도가 없다
+        (``pipeline.SdkStructuredGateway.parse``). 진단용 칸 하나가 멀쩡한
+        O 판정을 죽이는 값은 치를 수 없다.
+        """
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+def _usable_near_miss(
+    notes: object,
+    classification: object,
+) -> object:
+    """판정을 죽이지 않고 쓸 수 없는 지적만 걸러 낸다.
+
+    ``near_miss``는 진단 전용이므로(``NearMissNote``) 계약 위반으로 응답을
+    버릴 권한이 없다. 버려야 할 것은 지적 하나이지 판정이 아니다. 걸러 내는
+    경우는 둘이다.
+
+    1. S 판정에 붙은 지적. "S다"와 "무엇이 부족했다"는 함께 참일 수 없고,
+       둘 중 판정이 본체다.
+    2. 제5~8호 밖 세부유형. 검증기는 제5~8호 taxonomy만 보지만 스키마의
+       ``SubclauseKey`` enum에는 제1~4호가 그대로 남아 있어(같은 이유로
+       ``classification=C`` 금지를 프롬프트에 한 줄 남겼다) 고를 수 있다.
+       그런 값이 섞이면 세부유형별 집계가 조용히 오염된다.
+    """
+
+    if not notes or not isinstance(notes, (list, tuple)):
+        return notes
+    try:
+        if CsoClassification(classification) is not CsoClassification.O:
+            return ()
+    except ValueError:
+        # 판정 값 자체가 이상하면 그건 이쪽이 아니라 분류 검증이 말할 몫이다.
+        return notes
+
+    usable = []
+    for note in notes:
+        if isinstance(note, NearMissNote):
+            key: object = note.subclause_key
+        elif isinstance(note, dict):
+            key = note.get("subclause_key")
+            missing = note.get("missing")
+            if not isinstance(missing, str) or not missing.strip():
+                continue
+        else:
+            usable.append(note)
+            continue
+        try:
+            clause = clause_of_subclause(SubclauseKey(key))
+        except ValueError:
+            continue
+        if expected_classification(clause) is CsoClassification.S:
+            usable.append(note)
+    return tuple(usable)
+
+
+class ConsistencyAssessment(LegalClassification):
+    """생성물의 **법적** 분류만 독립 판정한다.
+
+    행정상태는 채점 대상이 아니다 — ``effective_classification()`` 참고.
+    """
+
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    #: O로 판정했을 때만 채운다. 기본값이 비어 있으므로 과거 산출물도 그대로
+    #: 읽힌다 — 계약 버전을 올리지 않는 이유다.
+    near_miss: tuple[NearMissNote, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unusable_near_miss(cls, data: object) -> object:
+        """쓸 수 없는 지적은 **버리되 판정은 살린다**(``_usable_near_miss``)."""
+
+        if not isinstance(data, dict) or "near_miss" not in data:
+            return data
+        usable = _usable_near_miss(data["near_miss"], data.get("classification"))
+        if usable is data["near_miss"]:
+            return data
+        return {**data, "near_miss": usable}
 
     def validate_against_document(self, document: GeneratedDocumentIR) -> None:
-        self.validate_evidence_against(document.block_text)
-        for finding in self.administrative_statuses:
-            finding.validate_evidence_against(document.block_text)
+        """근거 인용문이 **생성물 어딘가에** 있는지 본다.
+
+        판별기 evidence를 문서 전체 대조로 바꾼 것과 같은 처방이다
+        (``EvidenceSpan.require_in_document``). block 경계는 추출기와 삽입
+        로직이 만든 것이라 채점기가 지킬 이유가 없다.
+
+        실측(합성 마스킹 91건): 검증 단계 실패 12건이 전부 이 검사였다.
+        인용문은 맞는데 block만 어긋났다 — PDF가 한 문장을 여러 block으로
+        자르거나(``앞 24자는 이 block에 있다``), ``after`` 삽입이 만든 새 block
+        (``p6:b3+m1``)을 채점기가 모르거나.
+
+        ``SensitiveAssertion``의 세 span은 그대로 block 단위다. 거기서는
+        "식별 가능한 사람과 개인정보가 **같은 block**에 있는가"가 제6호 판정의
+        일부라 경계 자체가 의미를 갖는다.
+        """
+
+        for span in self.evidence_spans:
+            span.require_in_document(document.body_text)
+
+
+class SensitiveVerdict(str, Enum):
+    ACCEPTED_S = "accepted_s"
+    ASSESSED_O = "assessed_o"
+    HARD_CASE_REVIEW = "hard_case_review"
+
+
+class SensitivePipelineStatus(str, Enum):
+    ACCEPTED_S = "accepted_s"
+    HARD_CASE_REVIEW = "hard_case_review"
+    EXCLUDED_AFTER_RETRY = "excluded_after_retry"
+    PIPELINE_FAILED = "pipeline_failed"
+
+
+class SensitiveSubjectRole(str, Enum):
+    PETITIONER = "petitioner"
+    APPLICANT = "applicant"
+    JOB_APPLICANT = "job_applicant"
+    BENEFICIARY = "beneficiary"
+    EMPLOYEE = "employee"
+    INVESTIGATION_SUBJECT = "investigation_subject"
+    CASE_SUBJECT = "case_subject"
+    OTHER_EXTERNAL_PERSON = "other_external_person"
+
+
+class SensitiveAttributeKind(str, Enum):
+    PHONE = "phone"
+    EMAIL = "email"
+    ADDRESS = "address"
+    NATIONAL_ID = "national_id"
+    FOREIGNER_ID = "foreigner_id"
+    PASSPORT_ID = "passport_id"
+    DRIVER_LICENSE_ID = "driver_license_id"
+    ACCOUNT = "account"
+    SALARY = "salary"
+    HEALTH = "health"
+    DISABILITY = "disability"
+    WELFARE_CIRCUMSTANCE = "welfare_circumstance"
+    APPLICATION_CIRCUMSTANCE = "application_circumstance"
+    OTHER_PERSONAL_FACT = "other_personal_fact"
+    BUSINESS_IDENTITY = "business_identity"
+    BUSINESS_CONTACT = "business_contact"
+    PERSONNEL_EVALUATION = "personnel_evaluation"
+    DISCIPLINE = "discipline"
+
+
+class IdentificationStrength(str, Enum):
+    DIRECT = "direct"
+    INDIRECT = "indirect"
+    MASKED = "masked"
+
+
+SensitiveClause6Subclause = Literal[
+    SubclauseKey.PETITIONER_PII,
+    SubclauseKey.PERSONNEL_PII,
+    SubclauseKey.WELFARE_PII,
+    SubclauseKey.SUBJECT_PII,
+]
+
+
+class SensitiveMonitorAssertion(ContractModel):
+    """제6호 감시자가 찾은 하나의 의미상 주체-값 연결.
+
+    모델에게 ``EvidenceSpan`` 세 개를 각각 만들게 하면 같은 ``block_id``를 세 번
+    반복하면서 서로 일치시켜야 한다. 감시자 응답에서는 블록 ID를 한 번만 받고,
+    저장용 ``SensitiveAssertion``은 파이프라인 코드가 조립한다.
+    """
+
+    block_id: NonEmptyText
+    subject_role: SensitiveSubjectRole
+    subject_quote: NonEmptyText
+    attribute_kind: SensitiveAttributeKind
+    value_quote: NonEmptyText
+    link_quote: NonEmptyText
+    identification_strength: IdentificationStrength
+
+
+class SensitiveMonitorDecision(ContractModel):
+    """검사기가 반환하는 비차단 S/O 판정 기록.
+
+    문서 형식·조항·세부유형은 잠긴 계획에서 가져온다. ``rationale``은 감사용
+    기록일 뿐 비어 있어도 S/O 판정 자체를 무효화하지 않는다.
+
+    ``evidence_spans``만은 예외로 요구한다. 이 계약은 처음에 "정확한 인용문은
+    반환하지 않는다"로 시작했는데, 원문 보존율이 1%에서 99%로 올라가자 그
+    생략이 값을 치렀다 — 생성물의 대부분이 원문이 되면서 **검사기가 원문 쪽
+    문장을 근거로 S를 줄 수 있게 됐다.**
+
+    실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과 적용
+    임계값인데 검사기는 ``부정 행위 및 징계 처분에 대한 상세한 언급``을 근거로
+    들었다. 그건 이미 공표된 원문 내용이다. 라벨은 S로 맞았지만 이유가 원문
+    쪽이면 학습데이터로는 해롭다 — 공개된 감사 연차보고서를 S로 배운다.
+
+    인용문이 있으면 코드가 기계적으로 가른다. 그 문장이 삽입 구간 안에 있으면
+    우리가 만든 S이고, 밖에 있으면 원문이 원래 갖고 있던 것이다
+    (``evidence.evidence_from_inserted_text``).
+    """
+
+    classification: Literal[CsoClassification.S, CsoClassification.O]
+    rationale: str = ""
+    evidence_spans: tuple[EvidenceSpan, ...] = ()
+
+    @model_validator(mode="after")
+    def _s_requires_evidence(self) -> "SensitiveMonitorDecision":
+        if self.classification == CsoClassification.S and not self.evidence_spans:
+            raise ValueError("S decision requires at least one evidence span")
+        return self
+
+
+class SensitiveAssertion(ContractModel):
+    """S 판정을 성립시키는 주체-속성-값 연결을 구조화한 내부 근거."""
+
+    subject_role: SensitiveSubjectRole
+    subject_span: EvidenceSpan
+    attribute_kind: SensitiveAttributeKind
+    value_span: EvidenceSpan
+    link_span: EvidenceSpan
+    identification_strength: IdentificationStrength
+
+    def validate_against_document(self, document: GeneratedDocumentIR) -> None:
+        for span in (self.subject_span, self.value_span, self.link_span):
+            span.locate_in(document.block_text(span.block_id))
+        block_ids = {
+            self.subject_span.block_id,
+            self.value_span.block_id,
+            self.link_span.block_id,
+        }
+        if len(block_ids) != 1:
+            raise ValueError(
+                "sensitive assertion subject/value/link spans must use one block"
+            )
+        # 포함 검사도 공백을 무시한다 — ``EvidenceSpan``과 같은 이유다. link
+        # 인용문의 칸 사이 공백만 달라서 탈락하면 판정이 공백 운에 좌우된다.
+        link = condense_whitespace(self.link_span.quote)
+        if condense_whitespace(self.subject_span.quote) not in link:
+            raise ValueError("sensitive assertion link must contain the subject quote")
+        if condense_whitespace(self.value_span.quote) not in link:
+            raise ValueError("sensitive assertion link must contain the value quote")
+
+
+#: ``accepted_s``가 설 수 있는 조항. 이 파이프라인이 다루는 범위와 같다.
+_SENSITIVE_VERDICT_CLAUSES: frozenset[ClauseNumber] = frozenset(
+    {
+        ClauseNumber.CLAUSE_5,
+        ClauseNumber.CLAUSE_6,
+        ClauseNumber.CLAUSE_7,
+        ClauseNumber.CLAUSE_8,
+    }
+)
+
+
+class SensitiveConsistencyAssessment(ConsistencyAssessment):
+    """원문 참고 S 생성 경로의 blind S/O 관계 판정.
+
+    ``assertions``(주체 역할 + 개인속성 + 연결 span)는 **제6호 전용**이다.
+    식별 가능한 사람과 보호되는 개인정보가 같은 자리에 있는지가 제6호의 성립
+    요건이라 그걸 구조로 요구한다. 제5·7·8호는 그런 구조가 없다 — 예정가격
+    382,000,000원이 비공개인 이유에 '주체 역할'이 없다. 그래서 그 호에서는
+    ``assertions``가 비어 있는 것이 정상이고, 아래 검증도 비어 있을 때를
+    통과시킨다.
+    """
+
+    _requires_evidence_spans: ClassVar[bool] = False
+
+    sensitivity_verdict: SensitiveVerdict
+    assertions: tuple[SensitiveAssertion, ...] = ()
+
+    @model_validator(mode="after")
+    def _verdict_must_match_classification(
+        self,
+    ) -> "SensitiveConsistencyAssessment":
+        if self.classification == CsoClassification.C:
+            raise ValueError(
+                "source-sensitive consistency validation can only classify S or O"
+            )
+        if self.sensitivity_verdict == SensitiveVerdict.ACCEPTED_S:
+            if self.classification != CsoClassification.S:
+                raise ValueError("accepted_s requires classification S")
+            # 제5~8호를 모두 받는다. 이전에는 제6호만 허용했는데, 그건 이 계약이
+            # 제6호 개인정보 관계 판정 전용이던 때 남은 제약이다. 지금
+            # ``sensitive_validator``는 프롬프트 첫머리부터 제5~8호를 다루고
+            # (``[검사 범위: 정보공개법 제9조 제1항 제5~8호]``), 판별기도 그
+            # 범위에서 목표를 고른다.
+            #
+            # 실측: 목표 강제를 끄자 판별기가 제5호를 31건 골랐고, 생성까지
+            # 정상으로 끝난 문서 34건이 전부 이 한 줄에서 버려졌다. 버려진
+            # 문서를 열어 보면 감사·입찰 자료로 성립한다 — 계약이 채점 결과를
+            # 담지 못했을 뿐이다.
+            if self.clause_no not in _SENSITIVE_VERDICT_CLAUSES:
+                raise ValueError("accepted_s requires a clause 5-8 target")
+            if self.assertions and any(
+                item.identification_strength != IdentificationStrength.DIRECT
+                for item in self.assertions
+            ):
+                raise ValueError("accepted_s assertions must be directly identifying")
+            evidence = {
+                (span.block_id, span.quote) for span in self.evidence_spans
+            }
+            for assertion in self.assertions:
+                link = (assertion.link_span.block_id, assertion.link_span.quote)
+                if link not in evidence:
+                    raise ValueError(
+                        "accepted_s evidence_spans must include every assertion link"
+                    )
+        elif self.sensitivity_verdict == SensitiveVerdict.ASSESSED_O:
+            if self.classification != CsoClassification.O:
+                raise ValueError("assessed_o requires classification O")
+            if self.assertions:
+                raise ValueError("assessed_o cannot include sensitive assertions")
+        else:
+            if self.classification != CsoClassification.O:
+                raise ValueError("hard_case_review uses provisional classification O")
+            if not self.assertions:
+                raise ValueError("hard_case_review requires at least one assertion")
+            if all(
+                item.identification_strength == IdentificationStrength.DIRECT
+                for item in self.assertions
+            ):
+                raise ValueError(
+                    "hard_case_review requires a masked or indirect assertion"
+                )
+        return self
+
+    def validate_against_document(self, document: GeneratedDocumentIR) -> None:
+        """``assertions``만 대조한다. ``evidence_spans``는 대조하지 않는다.
+
+        상위(``ConsistencyAssessment``)와 다른 점이 이것이다. 이 계약의
+        ``evidence_spans``는 검사기가 **어느 문장을 보고 판단했는지의 기록**이지
+        그 문장이 생성물에 실재한다는 주장이 아니다 — 실재 검증은 판별기
+        evidence의 역할이고 거기서는 그대로 엄격하다.
+
+        실측(전 출처 91건): 검증 실패 7건이 전부 인용문 불일치였고 그중 5건은
+        앞 24자가 맞는데 뒤를 자기 말로 바꿔 쓴 경우였다. 어느 문장인지는
+        분명한데 문서가 통째로 버려졌다.
+
+        자리는 ``evidence.locate_quote``가 근사로 찾는다. 그래도 못 찾으면
+        귀속 판정이 ``False``가 되어 승인 게이트에서 걸린다 — 판정 실패가
+        아니라 등급 하락으로 다룬다.
+
+        ``assertions``는 그대로 대조한다. 거기서는 "식별 가능한 사람과
+        개인정보가 같은 block에 있는가"가 제6호 판정의 일부라 span이 기록이
+        아니라 근거 자체다.
+        """
+
+        for assertion in self.assertions:
+            assertion.validate_against_document(document)
 
 
 class FailureStage(str, Enum):
     MANIFEST = "manifest"
     SELECTION = "selection"
-    PASS1 = "pass1"
-    PASS2 = "pass2"
+    CLASSIFICATION = "classification"
+    PLANNING = "planning"
+    GENERATION = "generation"
+    VALIDATION = "validation"
     AUDIT = "audit"
 
 
@@ -668,7 +1492,10 @@ class FailureCode(str, Enum):
     STRUCTURED_OUTPUT_INVALID = "structured_output_invalid"
     SDK_ERROR = "sdk_error"
     EVIDENCE_INVALID = "evidence_invalid"
+    SENSITIVE_ASSERTION_INVALID = "sensitive_assertion_invalid"
     ROUTE_INVALID = "route_invalid"
+    SOURCE_INCOMPATIBLE = "source_incompatible"
+    CONTRACT_VERSION_CHANGED = "contract_version_changed"
     JOURNAL_CORRUPT = "journal_corrupt"
     WRITER_CONFLICT = "writer_conflict"
     AUDIT_CONTRACT_INVALID = "audit_contract_invalid"
@@ -683,8 +1510,10 @@ class StageFailure(ContractModel):
 
 
 class JournalStage(str, Enum):
-    PASS1_GENERATED = "pass1_generated"
-    PASS2_GRADED = "pass2_graded"
+    CLASSIFIED = "classified"
+    PLANNED = "planned"
+    GENERATED = "generated"
+    VALIDATED = "validated"
     AUDITED = "audited"
 
 
@@ -713,63 +1542,90 @@ class CallReceipt(ContractModel):
     token_usage: TokenUsage | None = None
 
 
-class GradeComparison(ContractModel):
-    document_type_match: bool
+class ConsistencyComparison(ContractModel):
+    document_form_match: bool
     classification_match: bool
     clause_match: bool
     subclause_match: bool
-    administrative_status_match: bool = True
+    subject_role_match: bool = True
 
     @computed_field
     @property
     def requires_review(self) -> bool:
         return not all(
             (
-                self.document_type_match,
+                self.document_form_match,
                 self.classification_match,
                 self.clause_match,
                 self.subclause_match,
-                self.administrative_status_match,
+                self.subject_role_match,
             )
         )
 
 
 class DocumentPipelineResult(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
-    pass1_result: Pass1Result | None = None
-    pass2_assessment: Pass2Assessment | None = None
-    pass1_receipt: CallReceipt | None = None
-    pass2_receipt: CallReceipt | None = None
-    generation_provenance: GenerationProvenance | None = None
-    comparison: GradeComparison | None = None
+    source_assessment: SourceAssessment | None = None
+    generation_plan: GenerationPlan | None = None
+    generation_artifact: GenerationArtifact | None = None
+    consistency_assessment: (
+        SensitiveConsistencyAssessment | ConsistencyAssessment | None
+    ) = None
+    classification_receipt: CallReceipt | None = None
+    generation_receipt: CallReceipt | None = None
+    validation_receipt: CallReceipt | None = None
+    comparison: ConsistencyComparison | None = None
     failure: StageFailure | None = None
 
     @model_validator(mode="after")
     def _partial_result_must_be_coherent(self) -> "DocumentPipelineResult":
-        if self.pass2_assessment is not None and self.pass1_result is None:
-            raise ValueError("Pass 2 assessment requires Pass 1 result")
-        if self.pass1_receipt is not None and self.pass1_result is None:
-            raise ValueError("Pass 1 receipt requires Pass 1 result")
-        if self.generation_provenance is not None and self.pass1_result is None:
-            raise ValueError("generation provenance requires Pass 1 result")
-        if self.pass2_receipt is not None and self.pass2_assessment is None:
-            raise ValueError("Pass 2 receipt requires Pass 2 assessment")
+        if self.generation_plan is not None and self.source_assessment is None:
+            raise ValueError("generation plan requires source assessment")
+        if self.generation_artifact is not None and self.generation_plan is None:
+            raise ValueError("generation artifact requires generation plan")
+        if self.consistency_assessment is not None and self.generation_artifact is None:
+            raise ValueError(
+                "consistency assessment requires a generation artifact"
+            )
+        if self.classification_receipt is not None and self.source_assessment is None:
+            raise ValueError("classification receipt requires source assessment")
+        if self.generation_receipt is not None and self.generation_artifact is None:
+            raise ValueError("generation receipt requires generation artifact")
+        if self.validation_receipt is not None and self.consistency_assessment is None:
+            raise ValueError("validation receipt requires consistency assessment")
         if self.comparison is not None:
             if (
-                self.pass1_result is None
-                or self.pass2_assessment is None
+                self.generation_plan is None
+                or self.consistency_assessment is None
                 or self.failure is not None
             ):
-                raise ValueError("comparison requires a successful two-pass result")
+                raise ValueError(
+                    "comparison requires a successful consistency validation"
+                )
         if self.failure is None and (
-            self.pass1_result is None
-            or self.pass2_assessment is None
-            or self.pass1_receipt is None
-            or self.pass2_receipt is None
+            self.source_assessment is None
+            or self.generation_plan is None
+            or self.generation_artifact is None
+            or self.consistency_assessment is None
+            or self.classification_receipt is None
+            or self.validation_receipt is None
             or self.comparison is None
         ):
-            raise ValueError("successful pipeline result requires both passes and receipts")
+            raise ValueError(
+                "successful pipeline result requires classification, generation, "
+                "validation, and comparison"
+            )
+        if (
+            self.failure is None
+            and self.generation_plan is not None
+            and self.generation_plan.generation_route
+            != GenerationRoute.FULLY_SYNTHETIC
+            and self.generation_receipt is None
+        ):
+            raise ValueError(
+                "source-referenced generation requires a generation receipt"
+            )
         return self
 
     @computed_field
@@ -778,57 +1634,80 @@ class DocumentPipelineResult(ContractModel):
         return self.failure is None
 
 
-class Pass1StageArtifact(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    pass1_result: Pass1Result
+class ClassificationStageArtifact(ContractModel):
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    source_assessment: SourceAssessment
     receipt: CallReceipt
-    generation_provenance: GenerationProvenance | None = None
 
     @model_validator(mode="after")
-    def _receipt_must_be_for_pass1(self) -> "Pass1StageArtifact":
-        if self.receipt.stage != FailureStage.PASS1:
-            raise ValueError("Pass 1 artifact requires a Pass 1 receipt")
-        if self.generation_provenance is not None:
-            provenance = self.generation_provenance
-            if (
-                provenance.generation_route
-                != self.pass1_result.generation_route
-                or provenance.final_target
-                != self.pass1_result.generation_target
-            ):
-                raise ValueError(
-                    "Pass 1 artifact provenance must match its Pass 1 result"
-                )
+    def _receipt_must_be_for_classification(
+        self,
+    ) -> "ClassificationStageArtifact":
+        if self.receipt.stage != FailureStage.CLASSIFICATION:
+            raise ValueError(
+                "classification artifact requires a classification receipt"
+            )
         return self
 
 
-class Pass2StageArtifact(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    pass2_assessment: Pass2Assessment
-    receipt: CallReceipt
-    comparison: GradeComparison
+class PlanningStageArtifact(ContractModel):
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    generation_plan: GenerationPlan
+
+
+class GenerationStageArtifact(ContractModel):
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    generation_artifact: GenerationArtifact
+    receipt: CallReceipt | None = None
 
     @model_validator(mode="after")
-    def _receipt_must_be_for_pass2(self) -> "Pass2StageArtifact":
-        if self.receipt.stage != FailureStage.PASS2:
-            raise ValueError("Pass 2 artifact requires a Pass 2 receipt")
+    def _receipt_must_be_for_generation(self) -> "GenerationStageArtifact":
+        if self.receipt is not None and self.receipt.stage != FailureStage.GENERATION:
+            raise ValueError("generation artifact requires a generation receipt")
+        route = self.generation_artifact.provenance.generation_route
+        if route == GenerationRoute.FULLY_SYNTHETIC:
+            if self.receipt is not None:
+                raise ValueError(
+                    "source-free fully synthetic generation cannot have an LLM receipt"
+                )
+        elif self.receipt is None:
+            raise ValueError(
+                "source-referenced generation requires a generation receipt"
+            )
+        return self
+
+
+class ValidationStageArtifact(ContractModel):
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    generated_document_sha256: Sha256Hex
+    consistency_assessment: SensitiveConsistencyAssessment | ConsistencyAssessment
+    receipt: CallReceipt
+    comparison: ConsistencyComparison
+    repair_codes: tuple[RepairCode, ...] = ()
+
+    @model_validator(mode="after")
+    def _receipt_must_be_for_validation(self) -> "ValidationStageArtifact":
+        if self.receipt.stage != FailureStage.VALIDATION:
+            raise ValueError("validation artifact requires a validation receipt")
+        if len(self.repair_codes) != len(set(self.repair_codes)):
+            raise ValueError("validation repair codes must be unique")
         return self
 
 
 class AuditStageArtifact(ContractModel):
     """정식 audit 산출물을 가리키는 작고 비민감한 journal artifact."""
 
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     audit_artifact_path: NonEmptyText
     audit_artifact_sha256: Sha256Hex
 
 
 class JournalRecord(ContractModel):
     # append-only 상태 전이:
-    # pass1_generated -> pass2_graded -> audited
+    # classified -> planned -> generated -> validated -> audited
     # 실패 record는 마지막 성공 artifact를 지우지 않으며, resume은 그 다음
     # stage부터 시작한다.
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
     run_id: NonEmptyText
     sequence: int = Field(ge=1)
     source_document_id: NonEmptyText
@@ -837,7 +1716,7 @@ class JournalRecord(ContractModel):
     recorded_at: datetime
     source_sha256: Sha256Hex
     selection_sha256: Sha256Hex
-    prompt_bundle_sha256: Sha256Hex | None = None
+    prompt_sha256: Sha256Hex | None = None
     model_id: NonEmptyText | None = None
     artifact_sha256: Sha256Hex | None = None
     artifact_path: NonEmptyText | None = None
@@ -861,8 +1740,10 @@ class JournalRecord(ContractModel):
             if self.failure is None:
                 raise ValueError("failed journal record requires StageFailure")
             expected_failure_stage = {
-                JournalStage.PASS1_GENERATED: FailureStage.PASS1,
-                JournalStage.PASS2_GRADED: FailureStage.PASS2,
+                JournalStage.CLASSIFIED: FailureStage.CLASSIFICATION,
+                JournalStage.PLANNED: FailureStage.PLANNING,
+                JournalStage.GENERATED: FailureStage.GENERATION,
+                JournalStage.VALIDATED: FailureStage.VALIDATION,
                 JournalStage.AUDITED: FailureStage.AUDIT,
             }[self.stage]
             if self.failure.stage != expected_failure_stage:
@@ -871,29 +1752,49 @@ class JournalRecord(ContractModel):
                     f"{expected_failure_stage.value}"
                 )
         if self.stage in {
-            JournalStage.PASS1_GENERATED,
-            JournalStage.PASS2_GRADED,
-        } and (self.prompt_bundle_sha256 is None or self.model_id is None):
+            JournalStage.CLASSIFIED,
+            JournalStage.VALIDATED,
+        } and (self.prompt_sha256 is None or self.model_id is None):
             raise ValueError(
                 f"{self.stage.value} journal record requires prompt hash and model ID"
             )
+        if self.stage == JournalStage.GENERATED and (
+            (self.prompt_sha256 is None) != (self.model_id is None)
+        ):
+            raise ValueError(
+                "generated journal record requires both prompt hash and model ID, "
+                "or neither for a source-free deterministic generator"
+            )
         if (
-            self.stage == JournalStage.PASS1_GENERATED
+            self.stage == JournalStage.CLASSIFIED
             and self.upstream_artifact_sha256 is not None
         ):
-            raise ValueError("Pass 1 journal record cannot have an upstream artifact")
+            raise ValueError(
+                "classified journal record cannot have an upstream artifact"
+            )
         if (
-            self.stage in {JournalStage.PASS2_GRADED, JournalStage.AUDITED}
+            self.stage
+            in {
+                JournalStage.PLANNED,
+                JournalStage.GENERATED,
+                JournalStage.VALIDATED,
+                JournalStage.AUDITED,
+            }
             and self.upstream_artifact_sha256 is None
         ):
             raise ValueError(
                 f"{self.stage.value} journal record requires an upstream artifact"
             )
-        if self.stage == JournalStage.AUDITED:
+        if self.stage in {JournalStage.PLANNED, JournalStage.AUDITED}:
             if self.stage_config_sha256 is None:
-                raise ValueError("audited journal record requires audit config hash")
+                raise ValueError(
+                    f"{self.stage.value} journal record requires a stage config hash"
+                )
             if self.model_id is not None:
-                raise ValueError("deterministic audit journal record cannot have model ID")
+                raise ValueError(
+                    f"deterministic {self.stage.value} journal record cannot have "
+                    "a model ID"
+                )
         return self
 
 
@@ -904,22 +1805,31 @@ class SecurityMode(str, Enum):
 
 
 class RunManifest(ContractModel):
-    contract_version: Literal["1.0.0"] = CONTRACT_SCHEMA_VERSION
-    taxonomy_version: Literal["source-generation-taxonomy-v1"] = TAXONOMY_VERSION
+    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    taxonomy_version: Literal["source-generation-taxonomy-v3"] = TAXONOMY_VERSION
     run_id: NonEmptyText
     created_at: datetime
+    classifier_model: NonEmptyText
     generator_model: NonEmptyText
-    grader_model: NonEmptyText
+    validator_model: NonEmptyText
     relevance_model: NonEmptyText | None = None
-    prompt_bundle_sha256: Sha256Hex
+    classifier_prompt_sha256: Sha256Hex
+    generator_prompt_sha256: Sha256Hex
+    validator_prompt_sha256: Sha256Hex
+    planner_policy_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
     security_mode: SecurityMode
     source_document_ids: tuple[NonEmptyText, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _models_and_documents_must_be_valid(self) -> "RunManifest":
-        if self.generator_model == self.grader_model:
-            raise ValueError("generator_model and grader_model must be different")
+        if self.validator_model in {
+            self.classifier_model,
+            self.generator_model,
+        }:
+            raise ValueError(
+                "validator_model must differ from classifier_model and generator_model"
+            )
         if len(self.source_document_ids) != len(set(self.source_document_ids)):
             raise ValueError("source_document_ids must be unique")
         return self

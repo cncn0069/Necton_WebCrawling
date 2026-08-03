@@ -1,5 +1,19 @@
 # TODOS
 
+### 행정상태를 본문 산문이 아니라 문서 구조로 표현 — 템플릿 작업으로 해결
+
+**What:** 지금은 P1 프롬프트가 행정상태를 `paragraph`의 자연스러운 문장으로 드러내라고 강제한다. 그 결과 "현재 담당 부서에서 내부 검토가 이루어지고 있습니다", "최종 결재는 아직 이루어지지 않았습니다" 같은 문장이 본문에 들어간다. **실제 공문은 자기 업무상태를 서술하지 않는다** — 결재란의 결재자 칸이 비어 있는 것, 문서번호가 없는 것, 제목에 "(안)"이 붙은 것으로 드러난다. 상태를 산문에서 빼고 문서 구조로 옮긴다.
+
+**Why:** 현실에 없는 형태의 문서가 대량 생성되면 RD-1 분류기가 "자기 업무상태를 서술하는 문서 = 민감"이라는 엉뚱한 패턴을 학습한다. TODOS의 분포 혼선 리스크가 이 경로로 들어온다. 또한 P1 프롬프트가 본문 내용에 대해서는 "문서가 무엇을 포함하거나 다룬다고 소개하지 말고 그 내용을 직접 작성한다"고 금지하면서 행정상태에 대해서만 정확히 그 메타 서술을 요구하는 내부 모순이 있다.
+
+**중요한 제약:** P2는 렌더링된 PDF가 아니라 `GeneratedDocumentIR`만 본다. 상태를 템플릿 층에만 두면 채점이 불가능해진다. 따라서 순수 메타데이터가 아니라 **IR에 표현되면서 렌더링도 되는 구조**여야 한다 — 예: 결재란을 `table` block으로 두고 결재자 칸을 공란으로. 이러면 렌더링은 실제 공문 형태가 되고 P2는 "결재자 칸이 비어 있다"를 근거 span으로 잡을 수 있다.
+
+**Context:** 2026-07-29 실측에서 12개 상태 중 어떤 것이 문서에 드러나고 어떤 것이 시스템 상태인지 나누려 했으나, 상태당 표본이 2~3개뿐이라 데이터로 경계를 정하지 못했다(같은 상태가 실행에 따라 탐지되기도 안 되기도 함). 재시도로 노이즈를 걷어낸 뒤 상태당 10회 이상 반복해 경계를 정할 것. 관련: `src/rd2/administrative_status.py`의 `ADMIN_STATUS_TEXT_POLICIES`, `src/rd2/source_generation/administrative.py`, `src/rd2/source_generation/prompts.py`의 P1 행정상태 지시. 새 block IR 기반 템플릿 체계(아래 항목)와 같은 작업이다.
+
+**Effort:** M~L
+**Priority:** P1 — 새 block IR 기반 템플릿·PDF 체계와 함께 진행
+**Depends on:** 재시도 효과 측정으로 노이즈 폭 축소, 상태별 반복 측정
+
 ### ALIO director_activity(개별 비상임이사 활동내용) downstream 처리 검증 — 채택 확정 후
 
 **What:** `AlioAdapter`에 `doc_type=DOC_TYPE_DIRECTOR_ACTIVITY`를 파라미터화해 추가하는 작업(2026-07-15 office-hours/plan-eng-review, 안정현-feat-open-go-kr-alternative-sources-design-20260715-103445.md)에서 plan-eng-review의 outside voice(Codex)가 지적했으나 이번 소량 검증(10~20건) 스코프 밖으로 명시적으로 미룬 3가지:
@@ -545,3 +559,47 @@
 **Effort:** S
 **Priority:** P3
 **Depends on:** naming.py 신설(위 리팩토링) 완료
+
+### 3단계 공문 생성 파이프라인 실제 LLM 품질 평가
+
+**What:** 유형 판별기 → 생성기 → 정합성 판별기로 분리된 v2 파이프라인을
+정보공개법 제9조 제5호부터 제8호까지의 대표 원문으로 실제 실행한다. 호별 호환
+원문과 비호환 역할 사례를 포함하고, 문서형식 유지·목표 세부조항 달성·직접 값 생성·
+마스킹 제거·독립 판정 일치를 이전 프롬프트 결과와 비교한다.
+
+**Why:** 가짜 게이트웨이를 사용하는 결정론적 테스트는 호출 순서, 계약, 실패·재개와
+캐시 무효화는 검증하지만 실제 모델이 프롬프트를 따라 자연스럽고 법적으로 일관된
+문서를 만드는지는 증명하지 못한다.
+
+**Context:** 2026-07-29 plan-eng-review에서 v2 구조 변경에는 코드 테스트만 포함하고
+실제 LLM 평가는 후속 작업으로 분리하기로 결정했다. 시작점은
+`tests/source_generation/`의 v2 회귀 테스트와 source-sensitive 배치 실행기다.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** 3단계 source-generation v2 파이프라인 및 journal·audit migration 완료
+
+### journal/RunManifest 기존 실행 기록과 document_form별 fingerprint 호환
+
+**What:** generator 프롬프트를 locked document_form별로 필터링하도록 바꾸면
+`JournalIdentity.generator_prompt_sha256`(journal.py)과
+`RunManifest.generator_prompt_sha256`(audit_bridge.py)의 의미가 "번들 전체의
+고정 해시 하나"에서 "문서형식별로 달라지는 해시"로 바뀐다. 이 변경 이전에 이미
+저장된 journal 기록·RunManifest가 새 비교 로직에서도 재개(resume) 가능한지는
+다루지 않았다.
+
+**Why:** 안 다루면 기존 실행 도중 배치를 새 코드로 재개할 때 예상치 못하게
+전체 재실행되거나(캐시 무효화), 반대로 다른 문서형식인데도 같은 것으로
+오인해 재개할 위험이 있다.
+
+**Context:** 2026-07-31 plan-eng-review에서 generator 프롬프트 document_form
+필터링 설계를 확정하면서(관련 논의: `src/rd2/source_generation/prompts.py`의
+`GENERATOR_SYSTEM_PROMPT`, `journal.py`의 `JournalIdentity.from_pipeline`,
+`audit_bridge.py`의 `bridge_document_to_audit` 내 `prompt_pairs` 비교) 실제로
+재개해야 할 대규모 기존 배치가 있는지 불확실해 이번 스코프에서는 제외했다.
+운영 규모 배치가 생기면 재검토.
+
+**Effort:** S~M
+**Priority:** P3
+**Depends on:** generator 프롬프트 document_form 필터링(journal/audit_bridge
+fingerprint 재구조화) 구현 완료

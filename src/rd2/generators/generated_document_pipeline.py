@@ -2,7 +2,7 @@
 
 데이터 흐름::
 
-    pass1 JSON
+    generation artifact JSON
         -> 계약/실패 검증
         -> blocks와 body_text 무결성 검증
         -> document_type별 템플릿 context
@@ -43,6 +43,7 @@ from rd2.generators.administrative_rule_rendering import (
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.verbatim_rendering import render_verbatim_document
 from rd2.generators.notice_rendering import render_notice_variations
 from rd2.generators.meeting_minutes_rendering import (
     MEETING_MINUTES_MAX_PAGES,
@@ -68,7 +69,13 @@ from rd2.generators.synthetic_approval_stamps import (
 )
 from rd2.source_generation.classification_taxonomy import SemanticDocumentType
 
-_CONTRACT_VERSION_RE = re.compile(r"^1\.\d+\.\d+$")
+#: 메이저 버전 2대만 받는다. 이 모듈은 ``rd2.source_generation.contracts``를
+#: import하지 않고 자체 ``GeneratedDocumentContract``로 IR 형태를 다시 선언한다
+#: — 그 소스 모듈의 ``CONTRACT_SCHEMA_VERSION``은 ``SourceAssessment`` 등 여러
+#: 계약이 공유하는 단일 상수라, ``GeneratedDocumentIR`` 자체의 필드가 안 바뀌어도
+#: (예: primary_subclause 추가로 2.0.0 -> 2.1.0) 이 정규식이 낡아 있으면 이유 없이
+#: 거부당한다. 마이너 버전은 자유롭게 받고, v1 같은 실제 구조 변경만 막는다.
+_CONTRACT_VERSION_RE = re.compile(r"^2\.\d+\.\d+$")
 _CONTENT_CONTEXT_KEYS = frozenset(
     {
         "title",
@@ -107,6 +114,24 @@ _ARTICLE_RE = re.compile(
 )
 _CHAPTER_RE = re.compile(r"^제\s*\d+\s*장(?:\s|$)")
 
+#: 이 route의 산출물만 템플릿 조립을 건너뛴다. 문자열로 두는 것은 이 모듈이
+#: ``rd2.source_generation.contracts``를 import하지 않기 때문이다 — 계약을
+#: 다시 선언해 느슨하게 검증하는 것이 이 모듈의 기존 방침이다.
+MASK_RESTORATION_ROUTE = "mask_restoration"
+
+#: 원문을 그대로 옮기는 생성 방식은 route로만 구분되지 않는다. 합성 마스킹은
+#: ``anchored``·``span_seeded`` 같은 기존 route 위에서 도는 **생성 방식**이라
+#: route만 보면 템플릿 조립으로 흘러가고, 원문 block이 200개 넘어 공문 템플릿이
+#: 받지 못한다(실측 91건 중 렌더 실패 23건). 그래서 생성 쪽이 payload에
+#: 표시를 남기고 여기서는 그 표시를 함께 본다.
+VERBATIM_RENDER_KEY = "verbatim_render"
+
+
+def _is_verbatim(envelope: "GenerationEnvelope") -> bool:
+    if envelope.result.generation_route == MASK_RESTORATION_ROUTE:
+        return True
+    return bool(getattr(envelope.result, VERBATIM_RENDER_KEY, False))
+
 
 class GeneratedDocumentPipelineError(ValueError):
     """생성 계약을 안전하게 렌더링할 수 없을 때 발생한다."""
@@ -121,7 +146,7 @@ class GeneratedDocumentContentMismatch(GeneratedDocumentPipelineError):
 
 
 class _ContractModel(BaseModel):
-    # 1.x 계약의 호환 가능한 메타데이터 확장은 보존하되, kind별 필수 내용과
+    # v2 계약의 호환 가능한 메타데이터 확장은 보존하되, kind별 필수 내용과
     # 표 형태는 아래 모델에서 계속 엄격하게 검증한다.
     model_config = ConfigDict(extra="allow")
 
@@ -430,7 +455,7 @@ class GenerationEnvelope(BaseModel):
             )
         if not _CONTRACT_VERSION_RE.fullmatch(result_version):
             raise ValueError(
-                f"Unsupported contract_version {result_version!r}; expected 1.x.x"
+                f"Unsupported contract_version {result_version!r}; expected 2.x.x"
             )
         return self
 
@@ -1359,7 +1384,11 @@ def render_generation_payload(
         if envelope.result.source_classification
         else None
     )
-    if document_type == "research_report":
+    if _is_verbatim(envelope):
+        # 원문을 그대로 옮긴 산출물이다 — 어느 템플릿 가족에도 속하지 않는다.
+        # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
+        renderer_family = "verbatim"
+    elif document_type == "research_report":
         renderer_family = "research_report"
     elif document_type == "press_release":
         renderer_family = "press_release"
@@ -1391,7 +1420,18 @@ def render_generation_payload(
         ).hexdigest(),
         "rendered_from_failed_input": envelope.failure is not None,
     }
-    if document_type == "research_report":
+    if _is_verbatim(envelope):
+        # 템플릿 조립을 건너뛴다 — mask_restoration 산출물은 기관명 행·수신란·
+        # 결재선 푸터가 이미 들어 있어 템플릿에 부으면 레터헤드가 두 번 생기고
+        # 자리 없는 원문 block이 빠져 missing source text로 떨어진다.
+        manifest = [
+            render_verbatim_document(
+                document,
+                output_dir,
+                required_source_texts=source_text_atoms(document),
+            )
+        ]
+    elif document_type == "research_report":
         context = build_research_report_context(envelope, seed=seed)
         manifest = render_research_report_variations(
             context,
@@ -1523,3 +1563,5 @@ def render_generation_payload(
         encoding="utf-8",
     )
     return manifest
+
+
