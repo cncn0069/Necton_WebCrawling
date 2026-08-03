@@ -18,6 +18,13 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
     render_generation_payload,
 )
+from rd2.generators.output_naming import (
+    rename_rendered_files,
+    requested_output_filename,
+)
+from rd2.generators.pdf_sensitive_evidence import (
+    verify_rendered_sensitive_evidence,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -43,6 +50,9 @@ def _load_payloads(input_path: Path) -> list[dict[str, Any]]:
 
 
 def _output_id(payload: dict[str, Any], index: int) -> str:
+    requested = requested_output_filename(payload, index)
+    if requested is not None:
+        return Path(requested).stem
     receipt = payload.get("receipt")
     request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
     raw = str(request_id or f"document-{index:05d}")
@@ -102,6 +112,67 @@ def _write_document_manifest(
     )
 
 
+def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다."""
+
+    if isinstance(payload.get("result"), dict):
+        return payload
+    artifact = payload.get("generation_artifact")
+    plan = payload.get("generation_plan")
+    if not isinstance(artifact, dict) or not isinstance(plan, dict):
+        return payload
+    document = artifact.get("generated_document")
+    if not isinstance(document, dict):
+        return payload
+    assessment = payload.get("source_assessment")
+    source_classification = (
+        assessment.get("source_classification")
+        if isinstance(assessment, dict)
+        else None
+    )
+    return {
+        **payload,
+        "result": {
+            "contract_version": artifact.get(
+                "contract_version",
+                document.get("contract_version"),
+            ),
+            "generation_route": plan.get("generation_route"),
+            "generation_target": plan.get("final_target"),
+            "generated_document": document,
+            "source_classification": source_classification,
+        },
+        "receipt": payload.get("generation_receipt"),
+        "provenance": artifact.get("provenance"),
+    }
+
+
+def _uses_verbatim_renderer(payload: dict[str, Any]) -> bool:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return False
+    return bool(
+        result.get("generation_route") == "mask_restoration"
+        or result.get("verbatim_render")
+    )
+
+
+def _finalize_rendered_document(
+    payload: dict[str, Any],
+    document_output_dir: Path,
+    rendered: list[dict[str, object]],
+    requested_filename: str | None,
+) -> None:
+    rename_rendered_files(rendered, requested_filename)
+    evidence_results = verify_rendered_sensitive_evidence(payload, rendered)
+    evidence_by_pdf = {str(item["pdf"]): item for item in evidence_results}
+    for entry in rendered:
+        evidence = evidence_by_pdf.get(str(entry["pdf"]))
+        if evidence is not None:
+            entry["sensitive_evidence"] = evidence
+    _write_document_manifest(document_output_dir, rendered)
+
+
 def render_input_file(
     input_path: Path,
     output_dir: Path,
@@ -117,6 +188,8 @@ def render_input_file(
     used_document_ids: set[str] = set()
 
     for index, payload in enumerate(payloads, start=1):
+        payload = _renderer_payload(payload)
+        requested_filename = requested_output_filename(payload, index)
         document_id = _output_id(payload, index)
         if document_id in used_document_ids:
             document_id = f"{document_id}-{index:05d}"
@@ -134,6 +207,12 @@ def render_input_file(
                     else None
                 ),
                 template_slugs=template_slugs,
+            )
+            _finalize_rendered_document(
+                payload,
+                document_output_dir,
+                rendered,
+                requested_filename,
             )
         except (
             GeneratedDocumentPipelineError,
@@ -154,6 +233,7 @@ def render_input_file(
             {
                 "document_id": document_id,
                 "status": "ok",
+                "output_filename": requested_filename,
                 "render_count": len(rendered),
                 "output_dir": str(document_output_dir),
             }
@@ -216,6 +296,11 @@ def render_input_directory(
 
         for payload_index, payload in enumerate(payloads, start=1):
             document_index += 1
+            payload = _renderer_payload(payload)
+            requested_filename = requested_output_filename(
+                payload,
+                document_index,
+            )
             document_id = _unique_document_id(
                 payload,
                 document_index,
@@ -225,6 +310,9 @@ def render_input_directory(
             assignment = selector.select(
                 document_type,
                 item_key=f"{source_file}:{payload_index}",
+                renderer_family=(
+                    "verbatim" if _uses_verbatim_renderer(payload) else None
+                ),
             )
             document_output_dir = output_dir / document_id
             selection = assignment.to_dict()
@@ -246,6 +334,14 @@ def render_input_directory(
                         "Balanced rendering must produce exactly one output, "
                         f"got {len(rendered)}"
                     )
+                for entry in rendered:
+                    entry["batch_selection"] = selection
+                _finalize_rendered_document(
+                    payload,
+                    document_output_dir,
+                    rendered,
+                    requested_filename,
+                )
             except (
                 GeneratedDocumentPipelineError,
                 RuntimeError,
@@ -266,9 +362,6 @@ def render_input_directory(
                 )
                 continue
 
-            for entry in rendered:
-                entry["batch_selection"] = selection
-            _write_document_manifest(document_output_dir, rendered)
             documents.append(
                 {
                     "document_id": document_id,
@@ -276,6 +369,7 @@ def render_input_directory(
                     "payload_index": payload_index,
                     "document_type": document_type,
                     "status": "ok",
+                    "output_filename": requested_filename,
                     "render_count": 1,
                     "output_dir": str(document_output_dir),
                     "selection": selection,

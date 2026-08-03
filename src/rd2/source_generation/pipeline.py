@@ -1,12 +1,14 @@
-"""서로 다른 모델을 쓰는 Pass 1 생성 + blind Pass 2 채점 pipeline."""
+"""유형 판별기 → 결정론적 플래너 → 생성기 → blind 정합성 판별기."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from hashlib import sha256
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar, cast
+from datetime import date
+from typing import Callable, Generic, Protocol, TypeVar, cast
 
 from openai import (
     APIConnectionError,
@@ -21,46 +23,108 @@ from openai import (
 )
 from pydantic import BaseModel, ValidationError
 
+from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.schema.models import CsoClassification
+from rd2.source_generation.classification_taxonomy import (
+    ClauseNumber,
+    clause_of_subclause,
+    expected_classification,
+)
 from rd2.source_generation.administrative import (
     administrative_status_generation_requirements,
+    validate_status_date_coherence,
 )
 from rd2.source_generation.contracts import (
+    AssessmentScope,
     CallReceipt,
+    ConsistencyAssessment,
+    ConsistencyComparison,
     DocumentPipelineResult,
     DocumentSelection,
+    EvidenceSpan,
     FailureCode,
     FailureStage,
-    AssessmentScope,
+    GeneratedDocumentIR,
+    GenerationArtifact,
+    GenerationMode,
+    GenerationPlan,
     GenerationProvenance,
     GenerationRoute,
-    GenerationMode,
     GenerationTarget,
-    GradeComparison,
-    GeneratedDocumentIR,
-    Pass1Result,
-    Pass2Assessment,
-    ParagraphBlock,
+    InsertionPlan,
+    MaskFillResponse,
+    PLANNER_POLICY_VERSION,
+    RepairCode,
+    SensitiveConsistencyAssessment,
+    SensitiveMonitorDecision,
+    SensitivePipelineStatus,
+    SensitiveVerdict,
+    SourceAssessment,
     SourceDocumentSnapshot,
+    SourceEvidenceLevel,
     StageFailure,
+    TargetClassification,
     TokenUsage,
+    document_form_matches,
+    effective_classification,
 )
 from rd2.source_generation.document_select import (
     DocumentSelectionError,
     SelectionConfig,
+    render_full_source,
     render_selected_source,
 )
-from rd2.source_generation.evidence import canonicalize_evidence_spans
+from rd2.source_generation.document_form_compatibility import (
+    FORM_SUBCLAUSE_COMPATIBILITY_VERSION,
+    FormSubclauseCompatibility,
+    form_subclause_compatibility,
+)
+from rd2.source_generation.evidence import (
+    evidence_from_inserted_text,
+    validate_evidence_quotes,
+    validate_evidence_quotes_in_document,
+)
 from rd2.source_generation.legacy_synthetic import (
     FullySyntheticContext,
     FullySyntheticDocumentGenerator,
 )
+from rd2.source_generation.seed_assembly import (
+    SEED_ASSEMBLY_VERSION,
+    build_sensitive_seed,
+)
+from rd2.source_generation.mask_restoration import (
+    MaskRestorationError,
+    RedactionEvidence,
+    apply_mask_fills,
+    detect_redaction_evidence,
+    render_mask_slot_table,
+    render_masked_source,
+    resolve_mask_restoration_subclause,
+)
+from rd2.source_generation.minimal_prompt import (
+    render_insertion_fill_system_prompt,
+    render_insertion_fill_user_prompt,
+    render_insertion_plan_system_prompt,
+    render_insertion_plan_user_prompt,
+    render_minimal_generator_system_prompt,
+    render_minimal_generator_user_prompt,
+)
+from rd2.source_generation.synthetic_mask import (
+    SyntheticMaskError,
+    apply_insertion_fills,
+    place_insertion_plan,
+    render_slot_table,
+    render_slotted_source,
+)
 from rd2.source_generation.prompts import (
     PromptBundle,
     build_prompt_bundle,
-    render_pass1_user_prompt,
-    render_pass2_user_prompt,
+    render_classifier_user_prompt,
+    render_generator_user_prompt,
+    render_mask_restoration_user_prompt,
+    render_validator_user_prompt,
 )
+from rd2.source_generation.sensitive_policy import validate_sensitive_assessment
 
 ParsedT = TypeVar("ParsedT", bound=BaseModel)
 
@@ -210,6 +274,70 @@ class OpenAIResponsesGateway:
         )
 
 
+#: 재시도가 의미 있는 실패. 모델이 확률적으로 자기모순 응답을 낼 때만 해당한다.
+#:
+#: 20건 fixture를 동일 조건으로 3회 돌린 결과 3회 모두 실패하는 케이스가
+#: 0건이었다 — 모든 실패가 실행마다 뒤집혔다. 즉 이 실패들은 결정론적 버그가
+#: 아니라 확률적 사건이고, 같은 입력을 한 번 더 보내는 것만으로 상당수가
+#: 해소된다. 설정·소스·모델 구성 문제처럼 다시 보내도 같은 결과인 실패는
+#: 여기 넣지 않는다.
+STOCHASTIC_FAILURE_CODES: frozenset[FailureCode] = frozenset(
+    {
+        FailureCode.STRUCTURED_OUTPUT_INVALID,
+        FailureCode.MODEL_RESPONSE_EMPTY,
+        FailureCode.SDK_ERROR,
+    }
+)
+
+
+class RetryingGateway:
+    """확률적 계약 위반에만 같은 요청을 다시 보내는 gateway decorator.
+
+    설계 문서의 "executor refusal/SDK transient error: 같은 route만 제한
+    재시도" 규칙을 따른다 — route나 target을 바꿔 조용히 우회하지 않고,
+    **완전히 같은 요청**을 정해진 횟수만큼만 다시 보낸다.
+    """
+
+    def __init__(
+        self,
+        inner: StructuredOutputGateway,
+        *,
+        max_attempts: int = 2,
+        retry_codes: frozenset[FailureCode] = STOCHASTIC_FAILURE_CODES,
+    ) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        self._inner = inner
+        self._max_attempts = max_attempts
+        self._retry_codes = retry_codes
+        #: (code, 시도횟수) 기록. 재시도가 조용히 일어나지 않게 남긴다.
+        self.retried: list[tuple[FailureCode, int]] = []
+
+    def parse(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ParsedT],
+        max_output_tokens: int,
+    ) -> StructuredCall[ParsedT]:
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                return self._inner.parse(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    max_output_tokens=max_output_tokens,
+                )
+            except StructuredCallError as exc:
+                if exc.code not in self._retry_codes or attempt == self._max_attempts:
+                    raise
+                self.retried.append((exc.code, attempt))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _validation_error_summary(exc: ValidationError, *, limit: int = 8) -> str:
     summaries: list[str] = []
     for error in exc.errors(include_input=False, include_url=False)[:limit]:
@@ -231,54 +359,98 @@ def _response_has_refusal(response: object) -> bool:
     return False
 
 
-def default_openai_gateway(*, api_key: str | None = None) -> OpenAIResponsesGateway:
+def default_openai_gateway(
+    *,
+    api_key: str | None = None,
+    max_attempts: int = 2,
+) -> StructuredOutputGateway:
+    """기본 gateway는 확률적 계약 위반을 한 번 재시도한다.
+
+    ``max_attempts=1``을 주면 재시도 없이 원래 동작으로 돌아간다.
+    """
+
     resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not resolved_key:
         raise RuntimeError(
             "OPENAI_API_KEY 환경변수가 설정되지 않았습니다 — .env 또는 실행 "
             "환경에 키를 설정하세요."
         )
-    return OpenAIResponsesGateway(OpenAI(api_key=resolved_key))
+    gateway = OpenAIResponsesGateway(OpenAI(api_key=resolved_key))
+    if max_attempts == 1:
+        return gateway
+    return RetryingGateway(gateway, max_attempts=max_attempts)
 
 
 @dataclass(frozen=True)
 class PipelineConfig:
+    """세 모델의 역할과 출력 한도를 고정하는 실행 설정.
+
+    판별기와 생성기는 같은 모델이어도 되지만, blind 정합성 판별기는 두 모델과
+    달라야 한다. 이 조건은 각 실행 함수에서도 typed failure로 다시 확인한다.
+    """
+
+    classifier_model: str
     generator_model: str
-    grader_model: str
-    max_pass1_output_tokens: int = 8_000
-    max_pass2_output_tokens: int = 4_000
+    validator_model: str
+    max_classifier_output_tokens: int = 4_000
+    max_generator_output_tokens: int = 8_000
+    max_validator_output_tokens: int = 4_000
+    source_sensitive_mode: bool = False
+    reference_date: date | None = None
+    #: 생성 단계에서 현행 프롬프트 대신 최소판(레드팀)을 쓴다.
+    #:
+    #: 두 프롬프트가 답하는 것은 같지만 크기가 다르다 — 현행은 형식별
+    #: 3,500~4,000자에 판별 결과 JSON·계획 JSON·seed·repair code가 user prompt로
+    #: 더 붙고, 최소판은 system 1,127~1,754자에 원문 하나다.
+    #:
+    #: 설정으로 두는 것은 둘을 같은 파이프라인에서 바꿔 끼우며 재기 위해서다.
+    #: 프롬프트만 다르고 판별·계획·채점·렌더가 모두 같아야 차이를 프롬프트에
+    #: 돌릴 수 있다.
+    minimal_generator_prompt: bool = False
+    #: 문서를 다시 쓰지 않고 **자리를 만들어 값만 채운다**(2단계 합성 마스킹).
+    #:
+    #: 실측 52건의 원문 보존율 중앙값이 1.0%였다. 프롬프트 문구가 아니라 출력
+    #: 계약 때문이다 — 문서 전체를 반환하라고 하면 모델은 원문을 재타이핑하는
+    #: 대신 요약한다. 값만 반환하는 ``mask_restoration``은 같은 코퍼스에서
+    #: 91%였다. 이 옵션은 그 구조를 마스킹이 없는 원문에도 적용한다.
+    synthetic_mask_generation: bool = False
 
     def __post_init__(self) -> None:
-        if not self.generator_model.strip() or not self.grader_model.strip():
-            raise ValueError("generator_model and grader_model must not be blank")
-        if self.max_pass1_output_tokens < 1 or self.max_pass2_output_tokens < 1:
+        model_ids = (
+            self.classifier_model,
+            self.generator_model,
+            self.validator_model,
+        )
+        if any(not model_id.strip() for model_id in model_ids):
+            raise ValueError("classifier, generator, and validator models must not be blank")
+        token_limits = (
+            self.max_classifier_output_tokens,
+            self.max_generator_output_tokens,
+            self.max_validator_output_tokens,
+        )
+        if any(limit < 1 for limit in token_limits):
             raise ValueError("max output tokens must be positive")
 
 
 @dataclass(frozen=True)
-class Pass1Execution:
-    result: Pass1Result | None = None
+class ClassificationExecution:
+    assessment: SourceAssessment | None = None
     receipt: CallReceipt | None = None
-    provenance: GenerationProvenance | None = None
     failure: StageFailure | None = None
 
     def __post_init__(self) -> None:
-        if self.receipt is not None and self.result is None:
-            raise ValueError("Pass 1 receipt requires a Pass 1 result")
-        if self.provenance is not None and self.result is None:
-            raise ValueError("Pass 1 provenance requires a Pass 1 result")
-        if self.failure is None and (
-            self.result is None or self.receipt is None or self.provenance is None
-        ):
+        if self.receipt is not None and self.assessment is None:
+            raise ValueError("classification receipt requires a source assessment")
+        if self.failure is None and (self.assessment is None or self.receipt is None):
             raise ValueError(
-                "successful Pass 1 execution requires result, receipt, and provenance"
+                "successful classification requires an assessment and receipt"
             )
         if self.failure is not None and self.failure.stage not in {
             FailureStage.MANIFEST,
             FailureStage.SELECTION,
-            FailureStage.PASS1,
+            FailureStage.CLASSIFICATION,
         }:
-            raise ValueError("Pass 1 execution has an invalid failure stage")
+            raise ValueError("classification execution has an invalid failure stage")
 
     @property
     def succeeded(self) -> bool:
@@ -286,31 +458,95 @@ class Pass1Execution:
 
 
 @dataclass(frozen=True)
-class Pass2Execution:
-    assessment: Pass2Assessment | None = None
+class GenerationExecution:
+    artifact: GenerationArtifact | None = None
     receipt: CallReceipt | None = None
-    comparison: GradeComparison | None = None
+    failure: StageFailure | None = None
+
+    def __post_init__(self) -> None:
+        if self.receipt is not None and self.artifact is None:
+            raise ValueError("generation receipt requires a generation artifact")
+        if self.failure is None and self.artifact is None:
+            raise ValueError("successful generation requires a generation artifact")
+        if self.failure is not None and self.failure.stage not in {
+            FailureStage.MANIFEST,
+            FailureStage.SELECTION,
+            FailureStage.GENERATION,
+        }:
+            raise ValueError("generation execution has an invalid failure stage")
+
+    @property
+    def succeeded(self) -> bool:
+        return self.failure is None
+
+
+@dataclass(frozen=True)
+class ConsistencyValidationExecution:
+    assessment: ConsistencyAssessment | None = None
+    receipt: CallReceipt | None = None
+    comparison: ConsistencyComparison | None = None
+    repair_codes: tuple[RepairCode, ...] = ()
     failure: StageFailure | None = None
 
     def __post_init__(self) -> None:
         if self.receipt is not None and self.assessment is None:
-            raise ValueError("Pass 2 receipt requires a Pass 2 assessment")
+            raise ValueError("validation receipt requires a consistency assessment")
         if self.comparison is not None and self.assessment is None:
-            raise ValueError("Pass 2 comparison requires a Pass 2 assessment")
+            raise ValueError("comparison requires a consistency assessment")
         if self.failure is None and (
             self.assessment is None
             or self.receipt is None
             or self.comparison is None
         ):
             raise ValueError(
-                "successful Pass 2 execution requires assessment, receipt, and comparison"
+                "successful validation requires assessment, receipt, and comparison"
             )
-        if self.failure is not None and self.failure.stage != FailureStage.PASS2:
-            raise ValueError("Pass 2 execution requires a Pass 2 failure")
+        if self.failure is not None and self.failure.stage not in {
+            FailureStage.MANIFEST,
+            FailureStage.VALIDATION,
+        }:
+            raise ValueError("validation execution has an invalid failure stage")
+        if len(self.repair_codes) != len(set(self.repair_codes)):
+            raise ValueError("validation repair codes must be unique")
 
     @property
     def succeeded(self) -> bool:
         return self.failure is None
+
+
+@dataclass(frozen=True)
+class SourceSensitivePipelineRun:
+    """제6호 생성 재시도의 전체 lineage.
+
+    유형 판별과 계획은 한 번만 실행하며, ``attempts``에는 생성·검증 결과만
+    차례로 쌓인다.
+    """
+
+    status: SensitivePipelineStatus
+    attempts: tuple[DocumentPipelineResult, ...]
+
+    def __post_init__(self) -> None:
+        if not self.attempts:
+            raise ValueError("source-sensitive run requires at least one attempt")
+
+    @property
+    def final_result(self) -> DocumentPipelineResult:
+        return self.attempts[-1]
+
+
+class GenerationPlanningError(ValueError):
+    """결정론적 계획 단계에서 발생한 typed 오류."""
+
+    def __init__(
+        self,
+        code: FailureCode,
+        message: str,
+        *,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
 
 
 def _failure(
@@ -343,41 +579,72 @@ def _receipt(
     )
 
 
+def _configuration_failure(
+    config: PipelineConfig,
+    *,
+    stage: FailureStage,
+) -> StageFailure | None:
+    if config.validator_model in {
+        config.classifier_model,
+        config.generator_model,
+    }:
+        return _failure(
+            stage=stage,
+            code=FailureCode.MODEL_CONFIGURATION_INVALID,
+            message=(
+                "validator_model must differ from classifier_model and "
+                "generator_model"
+            ),
+        )
+    return None
+
+
+def _resolved_prompt_bundle(
+    selection_config: SelectionConfig,
+    prompt_bundle: PromptBundle | None,
+) -> PromptBundle:
+    resolved = prompt_bundle or build_prompt_bundle(selection_config)
+    if resolved.selection_config != selection_config:
+        raise ValueError(
+            "prompt bundle selection config does not match pipeline config"
+        )
+    return resolved
+
+
 def _selected_source_resolver(
     snapshot: SourceDocumentSnapshot,
     selection: DocumentSelection,
-):
+) -> Callable[[str], str]:
     selected_ids = set(selection.selected_block_ids)
 
     def resolve(block_id: str) -> str:
         if block_id not in selected_ids:
-            raise ValueError(f"source evidence references unselected block {block_id!r}")
+            raise ValueError(
+                f"source evidence references unselected block {block_id!r}"
+            )
         return snapshot.block_text(block_id)
 
     return resolve
 
 
-def _generation_plan_json(counterfactual_target: GenerationTarget) -> str:
-    payload = {
-        "when_source_is_c_or_s": {
-            "generation_mode": GenerationMode.SOURCE_ALIGNED.value,
-            "instruction": "분류한 source C/S label과 정확히 같은 target을 사용한다.",
-        },
-        "when_source_is_o": {
-            "suggested_target": counterfactual_target.model_dump(mode="json"),
-            "instruction": (
-                "제안 target을 우선 검토하되 source evidence와 taxonomy상 더 적합한 "
-                "유효한 C/S target이 있으면 법적 target만 변경할 수 있다. "
-                "administrative_statuses는 고정값이므로 변경하지 않는다."
-            ),
-        },
-        "administrative_status_generation_requirements": (
-            administrative_status_generation_requirements(
-                counterfactual_target.administrative_statuses
-            )
-        ),
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+def _selected_source_text(
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+) -> str:
+    """판별기가 실제로 본 범위의 텍스트만 이어 붙인다.
+
+    선택되지 않은 block까지 대조 대상에 넣으면, 보지도 않은 뒷부분에서 우연히
+    같은 문구를 찾아 통과시킬 수 있다. 범위 제한은 유지하고 block 경계만
+    지운다.
+    """
+
+    selected_ids = set(selection.selected_block_ids)
+    return "\n".join(
+        block.text
+        for page in snapshot.pages
+        for block in page.blocks
+        if block.block_id in selected_ids
+    )
 
 
 def _assessment_scope(selection: DocumentSelection) -> AssessmentScope:
@@ -386,121 +653,621 @@ def _assessment_scope(selection: DocumentSelection) -> AssessmentScope:
     return AssessmentScope.FULL_DOCUMENT
 
 
-def _canonicalize_pass1_evidence(
-    result: Pass1Result,
+def _model_payload(model: BaseModel) -> dict[str, object]:
+    return model.model_dump(
+        mode="json",
+        exclude_computed_fields=True,
+    )
+
+
+def model_sha256(model: BaseModel) -> str:
+    """Pydantic 계약 산출물의 canonical content hash."""
+
+    return canonical_sha256(
+        _model_payload(model),
+        normalization_version=NORMALIZATION_VERSION,
+    )
+
+
+_PLANNER_POLICY_PAYLOAD = {
+    "version": PLANNER_POLICY_VERSION,
+    "source_s": {
+        "route": GenerationRoute.SOURCE_ALIGNED.value,
+        "required_evidence": SourceEvidenceLevel.DIRECT_LEGAL_EVIDENCE.value,
+    },
+    "source_o": {
+        SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN.value: (
+            GenerationRoute.SPAN_SEEDED.value
+        ),
+        SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY.value: (
+            GenerationRoute.ANCHORED.value
+        ),
+        SourceEvidenceLevel.NO_USABLE_PUBLIC_SOURCE.value: (
+            GenerationRoute.FULLY_SYNTHETIC.value
+        ),
+    },
+    "admin_only": GenerationRoute.ADMINISTRATIVE_AUGMENTED.value,
+    # 부분공개 원문은 evidence_level 표보다 먼저 걸린다. 근거가 판별기 추정이
+    # 아니라 원문에 찍힌 푸터 라벨과 마스킹 스팬이기 때문이다.
+    "redacted_source": {
+        "route": GenerationRoute.MASK_RESTORATION.value,
+        "precedence": "before_evidence_level_table",
+        "clause_from": "disclosure_footer_label",
+        "subclause_from": "requested_then_primary_then_compatible",
+        "administrative_statuses": "dropped",
+        "no_subclause_in_clause": "fall_through_to_evidence_level_table",
+    },
+    "compatible_subclause_required": True,
+    # ``primary_subclause``는 원문에 가장 가까운 세부유형이지 생성 목표가 아니다.
+    # 반사실 생성은 원문 판별 결과와 다른 목표를 의도적으로 구현하므로, 두 값이
+    # 달라도 요청 목표를 그대로 유지한다.
+    "incompatible_request": "preserve_requested_target",
+    "form_subclause_compatibility": {
+        "version": FORM_SUBCLAUSE_COMPATIBILITY_VERSION,
+        "conflict": "substitute_first_non_conflicting_source_candidate",
+        "no_candidate": FailureCode.SOURCE_INCOMPATIBLE.value,
+    },
+    "seed_assembly": SEED_ASSEMBLY_VERSION,
+}
+
+PLANNER_POLICY_SHA256 = canonical_sha256(
+    _PLANNER_POLICY_PAYLOAD,
+    normalization_version=NORMALIZATION_VERSION,
+)
+
+
+def _source_aligned_target(
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+) -> GenerationTarget:
+    source = assessment.source_classification
+    if source.classification != CsoClassification.S:
+        raise GenerationPlanningError(
+            FailureCode.SOURCE_INCOMPATIBLE,
+            "this pipeline supports only S/O source assessments",
+        )
+    assert source.clause_no is not None
+    assert source.subclause_key is not None
+    return GenerationTarget(
+        classification=source.classification.value,
+        clause_no=source.clause_no,
+        subclause_key=source.subclause_key,
+        administrative_statuses=requested_target.administrative_statuses,
+        generation_mode=GenerationMode.SOURCE_ALIGNED,
+    )
+
+
+def _resolve_form_subclause_conflict(
     *,
-    block_text,
-) -> Pass1Result:
-    source_classification = result.source_classification.model_copy(
+    assessment: SourceAssessment,
+    target: GenerationTarget,
+) -> GenerationTarget:
+    """Keep an impossible form/target pair out of the generator prompt.
+
+    For an O-source counterfactual route, the classifier has already ranked the
+    subclauses that fit the source context.  Choose the first candidate that is
+    not a hard form conflict.  For an S-source route the source subclause is the
+    legal evidence itself, so silently changing it would falsify provenance;
+    reject that source instead.
+    """
+
+    subclause_key = target.subclause_key
+    if subclause_key is None:
+        return target
+
+    document_form = assessment.source_classification.document_form
+    if (
+        form_subclause_compatibility(document_form, subclause_key)
+        is not FormSubclauseCompatibility.CONFLICT
+    ):
+        return target
+
+    if assessment.source_classification.classification == CsoClassification.S:
+        raise GenerationPlanningError(
+            FailureCode.SOURCE_INCOMPATIBLE,
+            (
+                "source legal target conflicts with its locked document form: "
+                f"{document_form.value} × {subclause_key.value}"
+            ),
+        )
+
+    for candidate in assessment.candidate_subclauses:
+        if (
+            form_subclause_compatibility(document_form, candidate)
+            is FormSubclauseCompatibility.CONFLICT
+        ):
+            continue
+        candidate_clause = clause_of_subclause(candidate)
+        return GenerationTarget(
+            classification=TargetClassification(
+                expected_classification(candidate_clause).value
+            ),
+            clause_no=candidate_clause,
+            subclause_key=candidate,
+            administrative_statuses=target.administrative_statuses,
+            generation_mode=target.generation_mode,
+        )
+
+    raise GenerationPlanningError(
+        FailureCode.SOURCE_INCOMPATIBLE,
+        (
+            "no source-compatible subclause can preserve locked document form "
+            f"{document_form.value}; rejected target={subclause_key.value}"
+        ),
+    )
+
+
+def _mask_restoration_target(
+    evidence: RedactionEvidence,
+    *,
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+) -> GenerationTarget | None:
+    """푸터가 정한 호로 목표를 다시 세운다. 세부유형을 못 고르면 ``None``.
+
+    호는 사람이 문서에 적어 둔 값이므로 요청 목표를 이긴다 — 요청이 제6호인데
+    푸터가 제5호면 그 문서에서 만들 수 있는 것은 제5호다.
+
+    행정상태는 버린다. 이 route는 원문 본문을 건드리지 않으므로 "초안으로
+    만들라" 같은 요구를 이행할 수단이 없고, 이행하지 않은 목표를 계획에
+    남기면 journal이 거짓을 기록한다.
+
+    세부유형이 그 호 안에서 하나도 안 잡히면 ``None``을 돌려 기존 route로
+    보낸다. 세부유형 없는 목표는 ``GenerationTarget``이 행정상태 단독 목표로만
+    허용하므로 여기서 표현할 수 없고, 아무 값이나 끼워 넣으면 학습데이터에
+    틀린 라벨이 남는다.
+    """
+
+    subclause = resolve_mask_restoration_subclause(
+        evidence,
+        candidates=(
+            requested_target.subclause_key,
+            assessment.primary_subclause,
+            *assessment.compatible_subclauses,
+        ),
+    )
+    if subclause is None:
+        return None
+    return GenerationTarget(
+        classification=TargetClassification(
+            expected_classification(evidence.clause_no).value
+        ),
+        clause_no=evidence.clause_no,
+        subclause_key=subclause,
+        administrative_statuses=(),
+        generation_mode=requested_target.generation_mode,
+    )
+
+
+def build_generation_plan(
+    *,
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+    sensitive_seed: str | None = None,
+    has_synthetic_generator: bool = False,
+) -> GenerationPlan:
+    """분류 사실과 실행 가능 조건만으로 생성 목표와 경로를 하나로 잠근다."""
+
+    if requested_target.generation_mode != GenerationMode.COUNTERFACTUAL:
+        raise GenerationPlanningError(
+            FailureCode.MANIFEST_INVALID,
+            "requested fallback target requires generation_mode=counterfactual",
+        )
+    if assessment.source_classification.classification == CsoClassification.C:
+        raise GenerationPlanningError(
+            FailureCode.SOURCE_INCOMPATIBLE,
+            "clauses 1-4 are outside this S/O pipeline",
+        )
+
+    source = assessment.source_classification
+    suitability = assessment.source_suitability
+    if source.classification == CsoClassification.S:
+        route = GenerationRoute.SOURCE_ALIGNED
+        final_target = _source_aligned_target(assessment, requested_target)
+        final_target = _resolve_form_subclause_conflict(
+            assessment=assessment,
+            target=final_target,
+        )
+    else:
+        final_target = requested_target
+        admin_only = requested_target.clause_no is None
+
+        # 부분공개 원문이면 다른 어떤 route보다 먼저 잡는다. 이 문서에는 어느
+        # 호에 걸리는지와 그 정보가 어느 자리에 있었는지가 사람 손으로 표시돼
+        # 있고, 그 둘은 판별기가 추정한 어떤 값보다 강한 근거다. 행정상태 단독
+        # 목표만 예외다 — 채울 조항이 없으면 마스킹을 무엇으로 채울지도 정할 수
+        # 없다.
+        redaction = None if admin_only else detect_redaction_evidence(snapshot)
+        mask_target = (
+            _mask_restoration_target(
+                redaction,
+                assessment=assessment,
+                requested_target=requested_target,
+            )
+            if redaction is not None
+            else None
+        )
+        if mask_target is not None:
+            # 형식 충돌 해소를 걸지 않는다. 그 함수는 새로 쓸 문서의 형식과
+            # 세부유형을 맞추는 일인데, 여기서는 원문 서식을 그대로 두므로
+            # 맞출 것이 없다.
+            return _finalize_plan(
+                assessment=assessment,
+                requested_target=requested_target,
+                final_target=mask_target,
+                route=GenerationRoute.MASK_RESTORATION,
+                snapshot=snapshot,
+                selection=selection,
+            )
+
+        final_target = _resolve_form_subclause_conflict(
+            assessment=assessment,
+            target=final_target,
+        )
+
+        if admin_only:
+            if (
+                suitability.evidence_level
+                != SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY
+            ):
+                raise GenerationPlanningError(
+                    FailureCode.ROUTE_INVALID,
+                    "admin-only generation requires contextual_anchor_only evidence",
+                )
+            route = GenerationRoute.ADMINISTRATIVE_AUGMENTED
+        elif (
+            suitability.evidence_level
+            == SourceEvidenceLevel.DIRECT_SENSITIVE_SPAN
+        ):
+            route = GenerationRoute.SPAN_SEEDED
+        elif (
+            suitability.evidence_level
+            == SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY
+        ):
+            # seed는 호출자가 줄 수도 있고, 없으면 판별 결과와 목표만으로
+            # 기계적으로 조립한다(``seed_assembly``). 조립이 항상 가능하므로
+            # "seed가 없어서 실패"는 조항 없는 목표에서만 남는다.
+            if (sensitive_seed is None or not sensitive_seed.strip()) and (
+                build_sensitive_seed(assessment, final_target) is None
+            ):
+                raise GenerationPlanningError(
+                    FailureCode.ROUTE_INVALID,
+                    "contextual_anchor_only generation requires a sensitive seed",
+                )
+            route = GenerationRoute.ANCHORED
+        elif (
+            suitability.evidence_level
+            == SourceEvidenceLevel.NO_USABLE_PUBLIC_SOURCE
+        ):
+            if not has_synthetic_generator:
+                raise GenerationPlanningError(
+                    FailureCode.ROUTE_INVALID,
+                    (
+                        "no_usable_public_source requires a source-free "
+                        "synthetic generator"
+                    ),
+                )
+            route = GenerationRoute.FULLY_SYNTHETIC
+        else:
+            raise GenerationPlanningError(
+                FailureCode.ROUTE_INVALID,
+                (
+                    "O source cannot use evidence level "
+                    f"{suitability.evidence_level.value!r}"
+                ),
+            )
+
+    return _finalize_plan(
+        assessment=assessment,
+        requested_target=requested_target,
+        final_target=final_target,
+        route=route,
+        snapshot=snapshot,
+        selection=selection,
+    )
+
+
+def _finalize_plan(
+    *,
+    assessment: SourceAssessment,
+    requested_target: GenerationTarget,
+    final_target: GenerationTarget,
+    route: GenerationRoute,
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+) -> GenerationPlan:
+    plan = GenerationPlan(
+        requested_target=requested_target,
+        final_target=final_target,
+        generation_route=route,
+        source_assessment_sha256=model_sha256(assessment),
+        source_sha256=snapshot.source_sha256,
+        selection_sha256=selection.selection_sha256,
+        planner_policy_sha256=PLANNER_POLICY_SHA256,
+    )
+    try:
+        plan.validate_against(assessment)
+    except ValueError as exc:
+        raise GenerationPlanningError(
+            FailureCode.ROUTE_INVALID,
+            str(exc),
+        ) from exc
+    return plan
+
+
+def _canonicalize_source_assessment(
+    assessment: SourceAssessment,
+    *,
+    document_text: str,
+) -> SourceAssessment:
+    source_classification = assessment.source_classification.model_copy(
         update={
-            "evidence_spans": canonicalize_evidence_spans(
-                result.source_classification.evidence_spans,
-                block_text,
+            "evidence_spans": validate_evidence_quotes_in_document(
+                assessment.source_classification.evidence_spans,
+                document_text,
             )
         }
     )
-    source_suitability = result.source_suitability.model_copy(
+    source_suitability = assessment.source_suitability.model_copy(
         update={
-            "evidence_spans": canonicalize_evidence_spans(
-                result.source_suitability.evidence_spans,
-                block_text,
+            "evidence_spans": validate_evidence_quotes_in_document(
+                assessment.source_suitability.evidence_spans,
+                document_text,
             )
         }
     )
-    return Pass1Result.model_validate(
+    validated_slot_spans = validate_evidence_quotes_in_document(
+        (slot.evidence_span for slot in assessment.available_slots),
+        document_text,
+    )
+    available_slots = tuple(
+        slot.model_copy(update={"evidence_span": span})
+        for slot, span in zip(
+            assessment.available_slots,
+            validated_slot_spans,
+            strict=True,
+        )
+    )
+    canonicalized = SourceAssessment.model_validate(
         {
-            **result.model_dump(
+            **assessment.model_dump(
                 mode="python",
-                exclude={"source_classification", "source_suitability"},
+                exclude={
+                    "source_classification",
+                    "source_suitability",
+                    "available_slots",
+                },
                 exclude_computed_fields=True,
             ),
             "source_classification": source_classification,
             "source_suitability": source_suitability,
+            "available_slots": available_slots,
         }
     )
+    canonicalized.validate_evidence_in_document(document_text)
+    return canonicalized
 
 
-def _canonicalize_pass2_evidence(
-    assessment: Pass2Assessment,
+def execute_classification(
     *,
-    block_text,
-) -> Pass2Assessment:
-    administrative_statuses = tuple(
-        finding.model_copy(
-            update={
-                "evidence_spans": canonicalize_evidence_spans(
-                    finding.evidence_spans,
-                    block_text,
-                )
-            }
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+    gateway: StructuredOutputGateway,
+    config: PipelineConfig,
+    selection_config: SelectionConfig | None = None,
+    prompt_bundle: PromptBundle | None = None,
+) -> ClassificationExecution:
+    """선택된 원문만 보고 문서형식과 S/O 원문 사실을 판정한다."""
+
+    configuration_failure = _configuration_failure(
+        config,
+        stage=FailureStage.CLASSIFICATION,
+    )
+    if configuration_failure is not None:
+        return ClassificationExecution(failure=configuration_failure)
+
+    resolved_selection_config = selection_config or SelectionConfig()
+    try:
+        resolved_prompt_bundle = _resolved_prompt_bundle(
+            resolved_selection_config,
+            prompt_bundle,
         )
-        for finding in assessment.administrative_statuses
+    except ValueError as exc:
+        return ClassificationExecution(
+            failure=_failure(
+                stage=FailureStage.MANIFEST,
+                code=FailureCode.MODEL_CONFIGURATION_INVALID,
+                message=str(exc),
+            )
+        )
+
+    try:
+        source_document = render_selected_source(
+            snapshot,
+            selection,
+            resolved_selection_config,
+        )
+    except DocumentSelectionError as exc:
+        return ClassificationExecution(
+            failure=_failure(
+                stage=FailureStage.SELECTION,
+                code=exc.code,
+                message=str(exc),
+            )
+        )
+
+    definition = resolved_prompt_bundle.definition("classifier")
+    try:
+        call = gateway.parse(
+            model=config.classifier_model,
+            system_prompt=definition.system_prompt,
+            user_prompt=render_classifier_user_prompt(
+                source_document,
+                assessment_scope=_assessment_scope(selection).value,
+            ),
+            response_model=SourceAssessment,
+            max_output_tokens=config.max_classifier_output_tokens,
+        )
+    except StructuredCallError as exc:
+        return ClassificationExecution(
+            failure=_failure(
+                stage=FailureStage.CLASSIFICATION,
+                code=exc.code,
+                message=str(exc),
+                retryable=exc.retryable,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - isolate one source document
+        return ClassificationExecution(
+            failure=_failure(
+                stage=FailureStage.CLASSIFICATION,
+                code=FailureCode.SDK_ERROR,
+                message=f"{type(exc).__name__}: structured-output gateway failed",
+            )
+        )
+
+    if not isinstance(call.parsed, SourceAssessment):
+        return ClassificationExecution(
+            failure=_failure(
+                stage=FailureStage.CLASSIFICATION,
+                code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                message="classifier gateway returned the wrong contract type",
+            )
+        )
+    assessment = cast(SourceAssessment, call.parsed)
+    receipt = _receipt(
+        stage=FailureStage.CLASSIFICATION,
+        model_id=config.classifier_model,
+        call=call,
     )
-    return Pass2Assessment.model_validate(
-        {
-            **assessment.model_dump(
-                mode="python",
-                exclude={"evidence_spans", "administrative_statuses"},
-                exclude_computed_fields=True,
+    try:
+        assessment = _canonicalize_source_assessment(
+            assessment,
+            document_text=_selected_source_text(snapshot, selection),
+        )
+        expected_scope = _assessment_scope(selection)
+        if assessment.source_suitability.assessment_scope != expected_scope:
+            raise ValueError(
+                "source suitability assessment_scope does not match selection"
+            )
+        if assessment.source_classification.classification == CsoClassification.C:
+            raise ValueError(
+                "classifier must use only S/O for clauses 5-8 in this pipeline"
+            )
+    except ValueError as exc:
+        return ClassificationExecution(
+            assessment=assessment,
+            receipt=receipt,
+            failure=_failure(
+                stage=FailureStage.CLASSIFICATION,
+                code=FailureCode.EVIDENCE_INVALID,
+                message=str(exc),
             ),
-            "evidence_spans": canonicalize_evidence_spans(
-                assessment.evidence_spans,
-                block_text,
-            ),
-            "administrative_statuses": administrative_statuses,
-        }
+        )
+
+    return ClassificationExecution(
+        assessment=assessment,
+        receipt=receipt,
     )
 
 
-def _discard_source_seeing_generated_document(
-    result: Pass1Result,
-) -> Pass1Result:
-    """fully_synthetic 실패 결과에도 P1의 source-derived 초안을 남기지 않는다."""
-
-    return Pass1Result.model_validate(
-        {
-            **result.model_dump(
-                mode="python",
-                exclude={"generated_document"},
-                exclude_computed_fields=True,
-            ),
-            "generated_document": GeneratedDocumentIR(
-                title="완전 합성 문서 생성 대기",
-                blocks=(
-                    ParagraphBlock(
-                        block_id="g1",
-                        text="원문 비사용 합성 생성이 완료되지 않았습니다.",
-                    ),
-                ),
-            ),
-        }
-    )
-
-
-def _build_provenance(
+def _validate_locked_plan(
     *,
-    result: Pass1Result,
-    requested_target: GenerationTarget,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+) -> None:
+    if plan.source_assessment_sha256 != model_sha256(assessment):
+        raise ValueError("generation plan assessment hash no longer matches")
+    if plan.source_sha256 != snapshot.source_sha256:
+        raise ValueError("generation plan source hash no longer matches")
+    if plan.selection_sha256 != selection.selection_sha256:
+        raise ValueError("generation plan selection hash no longer matches")
+    if plan.planner_policy_sha256 != PLANNER_POLICY_SHA256:
+        raise ValueError("generation plan policy hash no longer matches")
+    plan.validate_against(assessment)
+
+
+def _generation_plan_prompt_json(
+    plan: GenerationPlan,
+    *,
+    reference_date: date | None,
+) -> str:
+    payload = {
+        "locked_plan": _model_payload(plan),
+        "administrative_status_generation_requirements": (
+            administrative_status_generation_requirements(
+                plan.final_target.administrative_statuses,
+                reference_date=reference_date,
+            )
+        ),
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _build_generation_provenance(
+    *,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
     selection: DocumentSelection,
     sensitive_seed: str | None,
     fully_synthetic_context: FullySyntheticContext | None,
+    redaction: RedactionEvidence | None = None,
 ) -> GenerationProvenance:
-    route = result.generation_route
+    route = plan.generation_route
+    uses_source_evidence = route != GenerationRoute.FULLY_SYNTHETIC
     seed_hash = None
+    if route == GenerationRoute.MASK_RESTORATION:
+        if redaction is None:
+            raise ValueError("mask_restoration provenance requires redaction evidence")
+        # 이 route의 근거는 판별기가 고른 span이 아니라 원문 푸터다. 판별기
+        # span을 그대로 적으면 실제로 무엇을 보고 route를 골랐는지가 감사에서
+        # 사라지고, 판별기가 span을 하나도 못 냈을 때는 provenance가 성립조차
+        # 하지 않는다.
+        return GenerationProvenance(
+            generation_route=route,
+            source_evidence_level=assessment.source_suitability.evidence_level,
+            reason_code=(
+                f"redaction_footer:{redaction.label_quote}:"
+                f"{len(redaction.mask_spans)}_masked_spans"
+            ),
+            requested_target=plan.requested_target,
+            final_target=plan.final_target,
+            selection_sha256=selection.selection_sha256,
+            uses_source_evidence=True,
+            validated_evidence_spans=(
+                EvidenceSpan(
+                    block_id=redaction.label_block_id,
+                    quote=redaction.label_quote,
+                ),
+            ),
+        )
     if route == GenerationRoute.ANCHORED:
         if sensitive_seed is None or not sensitive_seed.strip():
-            raise ValueError("anchored route requires a separately provided sensitive seed")
+            raise ValueError("anchored generation requires a sensitive seed")
         seed_hash = sha256(sensitive_seed.encode("utf-8")).hexdigest()
-    uses_source_evidence = route != GenerationRoute.FULLY_SYNTHETIC
+
     return GenerationProvenance(
         generation_route=route,
-        source_evidence_level=result.source_suitability.evidence_level,
-        reason_code=result.source_suitability.reason_code,
-        requested_target=requested_target,
-        final_target=result.generation_target,
+        source_evidence_level=assessment.source_suitability.evidence_level,
+        reason_code=assessment.source_suitability.reason_code,
+        requested_target=plan.requested_target,
+        final_target=plan.final_target,
         selection_sha256=selection.selection_sha256,
         uses_source_evidence=uses_source_evidence,
-        validated_evidence_spans=result.source_suitability.evidence_spans,
+        validated_evidence_spans=(
+            assessment.source_suitability.evidence_spans
+            if uses_source_evidence
+            else ()
+        ),
         sensitive_seed_sha256=seed_hash,
         synthetic_scenario_id=(
             fully_synthetic_context.scenario_id
@@ -511,29 +1278,12 @@ def _build_provenance(
     )
 
 
-def _compare_grade(pass1: Pass1Result, pass2: Pass2Assessment) -> GradeComparison:
-    target = pass1.generation_target
-    return GradeComparison(
-        document_type_match=(
-            pass2.document_type == pass1.source_classification.document_type
-        ),
-        classification_match=(
-            pass2.effective_classification.value == target.classification.value
-        ),
-        clause_match=(pass2.clause_no == target.clause_no),
-        subclause_match=(pass2.subclause_key == target.subclause_key),
-        administrative_status_match=(
-            {finding.status for finding in pass2.administrative_statuses}
-            == set(target.administrative_statuses)
-        ),
-    )
-
-
-def execute_pass1(
+def execute_generation(
     *,
     snapshot: SourceDocumentSnapshot,
     selection: DocumentSelection,
-    counterfactual_target: GenerationTarget,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
     gateway: StructuredOutputGateway,
     config: PipelineConfig,
     selection_config: SelectionConfig | None = None,
@@ -541,323 +1291,696 @@ def execute_pass1(
     sensitive_seed: str | None = None,
     fully_synthetic_generator: FullySyntheticDocumentGenerator | None = None,
     fully_synthetic_context: FullySyntheticContext | None = None,
-) -> Pass1Execution:
-    """문서 하나를 처리한다. 실패는 예외 대신 typed partial result로 반환한다."""
+    attempt_index: int = 1,
+    parent_generation_sha256: str | None = None,
+    repair_codes: tuple[RepairCode, ...] = (),
+) -> GenerationExecution:
+    """잠긴 계획을 바꾸지 않고 ``GeneratedDocumentIR`` 하나만 만든다."""
 
-    if config.generator_model == config.grader_model:
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.PASS1,
-                code=FailureCode.MODEL_CONFIGURATION_INVALID,
-                message="generator_model and grader_model must be different",
-            ),
-        )
-    if counterfactual_target.generation_mode != GenerationMode.COUNTERFACTUAL:
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.MANIFEST,
-                code=FailureCode.MANIFEST_INVALID,
-                message="O fallback target requires generation_mode=counterfactual",
-            ),
-        )
+    configuration_failure = _configuration_failure(
+        config,
+        stage=FailureStage.GENERATION,
+    )
+    if configuration_failure is not None:
+        return GenerationExecution(failure=configuration_failure)
 
     resolved_selection_config = selection_config or SelectionConfig()
-    resolved_prompt_bundle = prompt_bundle or build_prompt_bundle(
-        resolved_selection_config
-    )
-    if resolved_prompt_bundle.selection_config != resolved_selection_config:
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.MANIFEST,
-                code=FailureCode.MODEL_CONFIGURATION_INVALID,
-                message="prompt bundle selection config does not match pipeline config",
-            ),
-        )
-
     try:
-        source_document = render_selected_source(
-            snapshot,
-            selection,
+        resolved_prompt_bundle = _resolved_prompt_bundle(
             resolved_selection_config,
+            prompt_bundle,
         )
+        # 생성기는 전체 원문을 보지만 selection과 source가 중간에 바뀌지
+        # 않았는지는 먼저 검증한다.
+        render_selected_source(snapshot, selection, resolved_selection_config)
+        _validate_locked_plan(
+            assessment=assessment,
+            plan=plan,
+            snapshot=snapshot,
+            selection=selection,
+        )
+        if attempt_index < 1:
+            raise ValueError("attempt_index must be at least 1")
+        if attempt_index == 1 and (
+            parent_generation_sha256 is not None or repair_codes
+        ):
+            raise ValueError(
+                "first generation attempt cannot have parent hash or repair codes"
+            )
+        if attempt_index > 1 and (
+            parent_generation_sha256 is None or not repair_codes
+        ):
+            raise ValueError(
+                "retry generation requires parent hash and repair codes"
+            )
     except DocumentSelectionError as exc:
-        return Pass1Execution(
+        return GenerationExecution(
             failure=_failure(
                 stage=FailureStage.SELECTION,
                 code=exc.code,
                 message=str(exc),
-            ),
-        )
-
-    pass1_prompt = resolved_prompt_bundle.definition("pass1")
-    try:
-        pass1_call = gateway.parse(
-            model=config.generator_model,
-            system_prompt=pass1_prompt.system_prompt,
-            user_prompt=render_pass1_user_prompt(
-                source_document,
-                generation_plan=_generation_plan_json(counterfactual_target),
-                assessment_scope=_assessment_scope(selection).value,
-                sensitive_seed=sensitive_seed,
-            ),
-            response_model=Pass1Result,
-            max_output_tokens=config.max_pass1_output_tokens,
-        )
-    except StructuredCallError as exc:
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.PASS1,
-                code=exc.code,
-                message=str(exc),
-                retryable=exc.retryable,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001 - gateway boundary must isolate one document
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.PASS1,
-                code=FailureCode.SDK_ERROR,
-                message=f"{type(exc).__name__}: structured-output gateway failed",
-            ),
-        )
-
-    if not isinstance(pass1_call.parsed, Pass1Result):
-        return Pass1Execution(
-            failure=_failure(
-                stage=FailureStage.PASS1,
-                code=FailureCode.STRUCTURED_OUTPUT_INVALID,
-                message="Pass 1 gateway returned the wrong contract type",
-            ),
-        )
-    pass1_result = cast(Pass1Result, pass1_call.parsed)
-    pass1_receipt = _receipt(
-        stage=FailureStage.PASS1,
-        model_id=config.generator_model,
-        call=pass1_call,
-    )
-    try:
-        pass1_result = _canonicalize_pass1_evidence(
-            pass1_result,
-            block_text=_selected_source_resolver(snapshot, selection),
-        )
-        pass1_result.source_classification.validate_evidence_against(
-            _selected_source_resolver(snapshot, selection)
-        )
-        pass1_result.source_suitability.validate_evidence_against(
-            _selected_source_resolver(snapshot, selection)
-        )
-        expected_scope = _assessment_scope(selection)
-        if pass1_result.source_suitability.assessment_scope != expected_scope:
-            raise ValueError(
-                "source suitability assessment_scope does not match document selection"
             )
+        )
     except ValueError as exc:
-        return Pass1Execution(
-            result=pass1_result,
-            receipt=pass1_receipt,
+        return GenerationExecution(
             failure=_failure(
-                stage=FailureStage.PASS1,
-                code=FailureCode.EVIDENCE_INVALID,
-                message=str(exc),
-            ),
-        )
-
-    if (
-        pass1_result.generation_target.administrative_statuses
-        != counterfactual_target.administrative_statuses
-    ):
-        return Pass1Execution(
-            result=pass1_result,
-            receipt=pass1_receipt,
-            failure=_failure(
-                stage=FailureStage.PASS1,
+                stage=FailureStage.GENERATION,
                 code=FailureCode.ROUTE_INVALID,
-                message=(
-                    "Pass 1 must preserve the requested administrative statuses "
-                    "exactly and in order"
-                ),
-            ),
+                message=str(exc),
+            )
         )
 
-    if pass1_result.generation_route == GenerationRoute.FULLY_SYNTHETIC:
-        pass1_result = _discard_source_seeing_generated_document(pass1_result)
+    generated_document: GeneratedDocumentIR
+    receipt: CallReceipt | None = None
+    redaction_evidence: RedactionEvidence | None = None
+    if plan.generation_route == GenerationRoute.FULLY_SYNTHETIC:
         if fully_synthetic_generator is None or fully_synthetic_context is None:
-            return Pass1Execution(
-                result=pass1_result,
-                receipt=pass1_receipt,
+            return GenerationExecution(
                 failure=_failure(
-                    stage=FailureStage.PASS1,
+                    stage=FailureStage.GENERATION,
                     code=FailureCode.ROUTE_INVALID,
                     message=(
                         "fully_synthetic route requires a source-free generator "
                         "and execution context"
                     ),
-                ),
+                )
             )
         try:
             generated_document = fully_synthetic_generator.generate(
-                target=pass1_result.generation_target,
+                target=plan.final_target,
                 context=fully_synthetic_context,
             )
-            pass1_result = Pass1Result.model_validate(
-                {
-                    **pass1_result.model_dump(
-                        mode="python",
-                        exclude={"generated_document"},
-                        exclude_computed_fields=True,
-                    ),
-                    "generated_document": generated_document,
-                }
-            )
         except ValueError as exc:
-            return Pass1Execution(
-                result=pass1_result,
-                receipt=pass1_receipt,
+            return GenerationExecution(
                 failure=_failure(
-                    stage=FailureStage.PASS1,
+                    stage=FailureStage.GENERATION,
                     code=FailureCode.ROUTE_INVALID,
-                    message=f"fully_synthetic generator rejected the route: {exc}",
-                ),
+                    message=f"fully_synthetic generator rejected the plan: {exc}",
+                )
             )
-        except Exception as exc:  # noqa: BLE001 - generator boundary isolates one document
-            return Pass1Execution(
-                result=pass1_result,
-                receipt=pass1_receipt,
+        except Exception as exc:  # noqa: BLE001 - isolate one generator
+            return GenerationExecution(
                 failure=_failure(
-                    stage=FailureStage.PASS1,
+                    stage=FailureStage.GENERATION,
                     code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: fully_synthetic generator failed",
+                )
+            )
+    elif plan.generation_route == GenerationRoute.MASK_RESTORATION:
+        # 계획을 세울 때 본 것과 같은 근거를 snapshot에서 다시 뽑는다. 계획에
+        # 스팬을 실어 나르지 않는 것은 ``plan.source_sha256``이 이미 원문을
+        # 고정하고 있어 검출이 결정론적이기 때문이다.
+        evidence = redaction_evidence = detect_redaction_evidence(snapshot)
+        if evidence is None or plan.final_target.clause_no != evidence.clause_no:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.ROUTE_INVALID,
                     message=(
-                        f"{type(exc).__name__}: fully_synthetic generator failed"
+                        "mask_restoration plan no longer matches the source "
+                        "redaction evidence"
                     ),
+                )
+            )
+        definition = resolved_prompt_bundle.mask_restoration_definition(
+            evidence.clause_no,
+            label_quote=evidence.label_quote,
+            subclause_key=plan.final_target.subclause_key,
+        )
+        try:
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=definition.system_prompt,
+                user_prompt=render_mask_restoration_user_prompt(
+                    render_masked_source(snapshot, evidence),
+                    mask_slots=render_mask_slot_table(evidence),
                 ),
+                response_model=MaskFillResponse,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
             )
 
+        if not isinstance(call.parsed, MaskFillResponse):
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message="mask restoration gateway returned the wrong contract type",
+                )
+            )
+        try:
+            generated_document = apply_mask_fills(
+                snapshot,
+                evidence,
+                cast(MaskFillResponse, call.parsed),
+            )
+        except (MaskRestorationError, ValueError) as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message=str(exc),
+                    retryable=True,
+                )
+            )
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
+    elif config.synthetic_mask_generation:
+        if sensitive_seed is None or not sensitive_seed.strip():
+            sensitive_seed = build_sensitive_seed(assessment, plan.final_target)
+        subclause = plan.final_target.subclause_key
+        # block 머리표(``[BLOCK p9:b0]``)를 **붙여서** 준다. 1단계가 자리를
+        # block ID로 지목하므로 그 표시가 곧 답이다. 한때 머리표를 뺐는데,
+        # 그건 문장을 anchor로 받던 때 모델이 머리표까지 인용에 넣어서였다 —
+        # 주소를 ID로 바꾼 지금은 오히려 반드시 있어야 한다.
+        try:
+            plan_call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_insertion_plan_system_prompt(subclause),
+                user_prompt=render_insertion_plan_user_prompt(
+                    render_full_source(snapshot)
+                ),
+                response_model=InsertionPlan,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+            slots = place_insertion_plan(
+                snapshot,
+                cast(InsertionPlan, plan_call.parsed),
+            )
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_insertion_fill_system_prompt(subclause),
+                user_prompt=render_insertion_fill_user_prompt(
+                    render_slotted_source(snapshot, slots),
+                    slot_table=render_slot_table(slots),
+                ),
+                response_model=MaskFillResponse,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+            generated_document = apply_insertion_fills(
+                snapshot,
+                slots,
+                cast(MaskFillResponse, call.parsed),
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except (SyntheticMaskError, ValueError) as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message=str(exc),
+                    retryable=True,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
+    elif config.minimal_generator_prompt:
+        # 최소판은 판별 결과 JSON·계획 JSON·seed·repair code를 **프롬프트로**
+        # 받지 않는다. 그것들을 뺀 상태에서 조항 사례만으로 되는지 보는 것이 이
+        # 프롬프트의 요점이라, 편의로 일부만 되돌리면 비교가 무의미해진다.
+        #
+        # 다만 seed는 조립해 둔다. 모델에게 보내지 않을 뿐 ``anchored`` route의
+        # provenance가 seed 해시를 요구하기 때문이다 — route의 정당성은
+        # 프롬프트와 무관하고, 여기서 비워 두면 실제로는 anchored인 문서가
+        # "seed 없는 anchored"로 기록돼 계약이 깨진다.
+        if sensitive_seed is None or not sensitive_seed.strip():
+            sensitive_seed = build_sensitive_seed(assessment, plan.final_target)
+        try:
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=render_minimal_generator_system_prompt(
+                    plan.final_target.subclause_key
+                ),
+                user_prompt=render_minimal_generator_user_prompt(
+                    render_full_source(snapshot)
+                ),
+                response_model=GeneratedDocumentIR,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+        if not isinstance(call.parsed, GeneratedDocumentIR):
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message="generator gateway returned the wrong contract type",
+                )
+            )
+        generated_document = cast(GeneratedDocumentIR, call.parsed)
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
+    else:
+        sensitive = plan.final_target.clause_no == ClauseNumber.CLAUSE_6
+        # document_form은 classifier가 이미 잠갔다(assessment.document_form).
+        # 17개 형식을 전부 담은 정적 definition("generator") 대신, 그 하나로
+        # 필터링된 정의를 매 호출마다 만든다 — fingerprint가 실제로 보낸
+        # 프롬프트와 항상 일치하도록.
+        definition = resolved_prompt_bundle.generator_definition_for_form(
+            assessment.source_classification.document_form,
+            sensitive=sensitive,
+            subclause_key=plan.final_target.subclause_key,
+        )
+        # 호출자가 seed를 주지 않으면 잠긴 판별 결과와 최종 목표만으로 조립한다.
+        # 계획 hash가 그 두 입력을 이미 고정하므로 조립 결과도 재현 가능하다.
+        if sensitive_seed is None or not sensitive_seed.strip():
+            sensitive_seed = build_sensitive_seed(assessment, plan.final_target)
+        try:
+            call = gateway.parse(
+                model=config.generator_model,
+                system_prompt=definition.system_prompt,
+                user_prompt=render_generator_user_prompt(
+                    render_full_source(snapshot),
+                    source_assessment=json.dumps(
+                        _model_payload(assessment),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    generation_plan=_generation_plan_prompt_json(
+                        plan,
+                        reference_date=config.reference_date,
+                    ),
+                    repair_codes=json.dumps(
+                        [code.value for code in repair_codes],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    sensitive_seed=sensitive_seed,
+                ),
+                response_model=GeneratedDocumentIR,
+                max_output_tokens=config.max_generator_output_tokens,
+            )
+        except StructuredCallError as exc:
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one source document
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.SDK_ERROR,
+                    message=f"{type(exc).__name__}: structured-output gateway failed",
+                )
+            )
+
+        if not isinstance(call.parsed, GeneratedDocumentIR):
+            return GenerationExecution(
+                failure=_failure(
+                    stage=FailureStage.GENERATION,
+                    code=FailureCode.STRUCTURED_OUTPUT_INVALID,
+                    message="generator gateway returned the wrong contract type",
+                )
+            )
+        generated_document = cast(GeneratedDocumentIR, call.parsed)
+        receipt = _receipt(
+            stage=FailureStage.GENERATION,
+            model_id=config.generator_model,
+            call=call,
+        )
+
     try:
-        provenance = _build_provenance(
-            result=pass1_result,
-            requested_target=counterfactual_target,
+        provenance = _build_generation_provenance(
+            assessment=assessment,
+            plan=plan,
             selection=selection,
             sensitive_seed=sensitive_seed,
             fully_synthetic_context=fully_synthetic_context,
+            redaction=redaction_evidence,
         )
+        artifact = GenerationArtifact(
+            plan_sha256=model_sha256(plan),
+            generated_document=generated_document,
+            attempt_index=attempt_index,
+            parent_generation_sha256=parent_generation_sha256,
+            repair_codes=repair_codes,
+            provenance=provenance,
+        )
+        if config.reference_date is not None:
+            validate_status_date_coherence(
+                generated_document.body_text,
+                plan.final_target.administrative_statuses,
+                reference_date=config.reference_date,
+            )
     except ValueError as exc:
-        return Pass1Execution(
-            result=pass1_result,
-            receipt=pass1_receipt,
+        return GenerationExecution(
             failure=_failure(
-                stage=FailureStage.PASS1,
+                stage=FailureStage.GENERATION,
                 code=FailureCode.ROUTE_INVALID,
                 message=str(exc),
-            ),
+            )
         )
 
-    return Pass1Execution(
-        result=pass1_result,
-        receipt=pass1_receipt,
-        provenance=provenance,
+    return GenerationExecution(
+        artifact=artifact,
+        receipt=receipt,
     )
 
 
-def execute_pass2(
+def _canonicalize_consistency_assessment(
+    assessment: ConsistencyAssessment,
     *,
-    pass1_result: Pass1Result,
+    document: GeneratedDocumentIR,
+) -> ConsistencyAssessment:
+    assessment_type = type(assessment)
+    canonicalized = assessment_type.model_validate(
+        {
+            **assessment.model_dump(
+                mode="python",
+                exclude={"evidence_spans"},
+                exclude_computed_fields=True,
+            ),
+            # 민감 검사기의 인용문은 대조하지 않고 그대로 보관한다 —
+            # 판정 근거의 **기록**이라 자리를 못 찾아도 판정을 버릴 이유가
+            # 없다(``SensitiveConsistencyAssessment.validate_against_document``).
+            # 일반 검증기는 그대로 엄격하다.
+            "evidence_spans": (
+                assessment.evidence_spans
+                if isinstance(assessment, SensitiveConsistencyAssessment)
+                else validate_evidence_quotes_in_document(
+                    assessment.evidence_spans,
+                    document.body_text,
+                )
+            ),
+        }
+    )
+    canonicalized.validate_against_document(document)
+    return canonicalized
+
+
+def _materialize_sensitive_monitor_decision(
+    decision: SensitiveMonitorDecision,
+    *,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
+) -> SensitiveConsistencyAssessment:
+    """S/O를 저장 계약으로 감싸되 판정 외 메타데이터는 잠긴 입력에서 가져온다."""
+
+    source_form = assessment.source_classification
+    target = plan.final_target
+    is_sensitive = decision.classification == CsoClassification.S
+    return SensitiveConsistencyAssessment(
+        document_form=source_form.document_form,
+        other_document_form=source_form.other_document_form,
+        classification=decision.classification,
+        clause_no=target.clause_no if is_sensitive else None,
+        subclause_key=target.subclause_key if is_sensitive else None,
+        # 검사기가 낸 근거를 그대로 옮긴다. 여기서 버리면 "어느 문장을 보고
+        # S라 했는가"가 사라지고, 그건 원문 때문인지 삽입 때문인지 가릴 유일한
+        # 단서다.
+        evidence_spans=decision.evidence_spans,
+        rationale=decision.rationale.strip() or "부가 근거 기록 없음",
+        sensitivity_verdict=(
+            SensitiveVerdict.ACCEPTED_S
+            if is_sensitive
+            else SensitiveVerdict.ASSESSED_O
+        ),
+    )
+
+
+def _compare_consistency(
+    *,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
+    consistency: ConsistencyAssessment,
+) -> ConsistencyComparison:
+    source_form = assessment.source_classification
+    document_form_match = document_form_matches(consistency, source_form)
+
+    subject_role_match = True
+    if isinstance(consistency, SensitiveConsistencyAssessment):
+        allowed_roles = {role.value for role in assessment.subject_roles}
+        subject_role_match = all(
+            assertion.subject_role.value in allowed_roles
+            for assertion in consistency.assertions
+        )
+
+    target = plan.final_target
+    return ConsistencyComparison(
+        document_form_match=document_form_match,
+        classification_match=(
+            effective_classification(
+                consistency.classification,
+                target.administrative_statuses,
+            ).value
+            == target.classification.value
+        ),
+        clause_match=consistency.clause_no == target.clause_no,
+        subclause_match=consistency.subclause_key == target.subclause_key,
+        subject_role_match=subject_role_match,
+    )
+
+
+_MASK_PATTERN = re.compile(r"(?:\*|○|●|□|X|x){2,}")
+
+
+def _repair_codes_for_validation(
+    *,
+    comparison: ConsistencyComparison,
+    plan: GenerationPlan,
+    artifact: GenerationArtifact,
+    assessment: ConsistencyAssessment,
+) -> tuple[RepairCode, ...]:
+    if isinstance(assessment, SensitiveConsistencyAssessment):
+        if assessment.sensitivity_verdict == SensitiveVerdict.ASSESSED_O:
+            return (RepairCode.DIRECT_VALUE_MISSING,)
+        return ()
+
+    codes: list[RepairCode] = []
+    if not comparison.document_form_match:
+        codes.append(RepairCode.FORM_MISMATCH)
+    if not comparison.classification_match:
+        codes.append(RepairCode.CLASSIFICATION_MISMATCH)
+    if not comparison.clause_match:
+        codes.append(RepairCode.CLAUSE_MISMATCH)
+    if not comparison.subclause_match:
+        codes.append(RepairCode.SUBCLAUSE_MISMATCH)
+    if not comparison.subject_role_match:
+        codes.append(RepairCode.ROLE_INCOMPATIBLE)
+    if _MASK_PATTERN.search(artifact.generated_document.body_text):
+        codes.append(RepairCode.MASK_REMAINS)
+    return tuple(dict.fromkeys(codes))
+
+
+def execute_consistency_validation(
+    *,
+    assessment: SourceAssessment,
+    plan: GenerationPlan,
+    artifact: GenerationArtifact,
     gateway: StructuredOutputGateway,
     config: PipelineConfig,
     selection_config: SelectionConfig | None = None,
     prompt_bundle: PromptBundle | None = None,
-) -> Pass2Execution:
-    """Pass 2만 실행한다. 생성 IR 외의 Pass 1 판단은 입력하지 않는다."""
+) -> ConsistencyValidationExecution:
+    """생성 IR만 보여 주고 목표·원문·판별 결과와 독립적으로 채점한다."""
 
-    if config.generator_model == config.grader_model:
-        return Pass2Execution(
-            failure=_failure(
-                stage=FailureStage.PASS2,
-                code=FailureCode.MODEL_CONFIGURATION_INVALID,
-                message="generator_model and grader_model must be different",
-            )
-        )
-    resolved_selection_config = selection_config or SelectionConfig()
-    resolved_prompt_bundle = prompt_bundle or build_prompt_bundle(
-        resolved_selection_config
+    configuration_failure = _configuration_failure(
+        config,
+        stage=FailureStage.VALIDATION,
     )
-    if resolved_prompt_bundle.selection_config != resolved_selection_config:
-        return Pass2Execution(
-            failure=_failure(
-                stage=FailureStage.PASS2,
-                code=FailureCode.MODEL_CONFIGURATION_INVALID,
-                message="prompt bundle selection config does not match pipeline config",
-            )
-        )
+    if configuration_failure is not None:
+        return ConsistencyValidationExecution(failure=configuration_failure)
 
-    pass2_prompt = resolved_prompt_bundle.definition("pass2")
-    generated_ir_json = pass1_result.generated_document.model_dump_json(
-        exclude_computed_fields=True
-    )
     try:
-        pass2_call = gateway.parse(
-            model=config.grader_model,
-            system_prompt=pass2_prompt.system_prompt,
-            user_prompt=render_pass2_user_prompt(generated_ir_json),
-            response_model=Pass2Assessment,
-            max_output_tokens=config.max_pass2_output_tokens,
+        if artifact.plan_sha256 != model_sha256(plan):
+            raise ValueError("generation artifact plan hash no longer matches")
+        plan.validate_against(assessment)
+        resolved_prompt_bundle = _resolved_prompt_bundle(
+            selection_config or SelectionConfig(),
+            prompt_bundle,
+        )
+        # 어느 채점기를 쓸지는 **모드**가 정한다. 이전에는 목표가 제6호인지로
+        # 정하고 "source_sensitive_mode는 제6호 목표를 요구한다"고 거부했는데,
+        # ``sensitive_validator`` 프롬프트 자체는 제5~8호를 모두 다룬다
+        # (``[검사 범위: 정보공개법 제9조 제1항 제5~8호]``). 제6호 제한은 그
+        # 프롬프트가 제6호 전용이던 때 남은 것이다.
+        #
+        # 실측: 목표 강제를 끄자 60건 중 32건이 이 게이트에서 종료됐다 —
+        # 판별기가 제5·7·8호를 골랐다는 이유만으로.
+        sensitive_contract = config.source_sensitive_mode
+    except ValueError as exc:
+        return ConsistencyValidationExecution(
+            failure=_failure(
+                stage=FailureStage.MANIFEST,
+                code=FailureCode.MODEL_CONFIGURATION_INVALID,
+                message=str(exc),
+            )
+        )
+
+    definition = resolved_prompt_bundle.definition(
+        "sensitive_validator" if sensitive_contract else "validator"
+    )
+    response_model = definition.response_model
+
+    try:
+        call = gateway.parse(
+            model=config.validator_model,
+            system_prompt=definition.system_prompt,
+            user_prompt=render_validator_user_prompt(
+                artifact.generated_document.model_dump_json(
+                    exclude_computed_fields=True
+                )
+            ),
+            response_model=response_model,
+            max_output_tokens=config.max_validator_output_tokens,
         )
     except StructuredCallError as exc:
-        return Pass2Execution(
+        return ConsistencyValidationExecution(
+            repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
-                stage=FailureStage.PASS2,
+                stage=FailureStage.VALIDATION,
                 code=exc.code,
                 message=str(exc),
                 retryable=exc.retryable,
             ),
         )
-    except Exception as exc:  # noqa: BLE001 - gateway boundary must isolate one document
-        return Pass2Execution(
+    except Exception as exc:  # noqa: BLE001 - isolate one generated document
+        return ConsistencyValidationExecution(
+            repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
-                stage=FailureStage.PASS2,
+                stage=FailureStage.VALIDATION,
                 code=FailureCode.SDK_ERROR,
                 message=f"{type(exc).__name__}: structured-output gateway failed",
             ),
         )
 
-    if not isinstance(pass2_call.parsed, Pass2Assessment):
-        return Pass2Execution(
+    # ``SensitiveConsistencyAssessment`` 허용은 새 입력 계약 이전의 테스트·내부
+    # gateway와 저장된 호출을 위한 읽기 호환성이다. 실제 OpenAI 호출은 위의
+    # ``SensitiveMonitorDecision`` JSON schema만 받을 수 있다.
+    legacy_sensitive_result = sensitive_contract and isinstance(
+        call.parsed,
+        SensitiveConsistencyAssessment,
+    )
+    if not isinstance(call.parsed, response_model) and not legacy_sensitive_result:
+        return ConsistencyValidationExecution(
+            repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
-                stage=FailureStage.PASS2,
+                stage=FailureStage.VALIDATION,
                 code=FailureCode.STRUCTURED_OUTPUT_INVALID,
-                message="Pass 2 gateway returned the wrong contract type",
+                message="validator gateway returned the wrong contract type",
             ),
         )
-    pass2_assessment = cast(Pass2Assessment, pass2_call.parsed)
-    pass2_receipt = _receipt(
-        stage=FailureStage.PASS2,
-        model_id=config.grader_model,
-        call=pass2_call,
+    receipt = _receipt(
+        stage=FailureStage.VALIDATION,
+        model_id=config.validator_model,
+        call=call,
     )
+    consistency: ConsistencyAssessment | None = None
     try:
-        pass2_assessment = _canonicalize_pass2_evidence(
-            pass2_assessment,
-            block_text=pass1_result.generated_document.block_text,
+        if isinstance(call.parsed, SensitiveMonitorDecision):
+            consistency = _materialize_sensitive_monitor_decision(
+                call.parsed,
+                assessment=assessment,
+                plan=plan,
+            )
+        else:
+            consistency = cast(ConsistencyAssessment, call.parsed)
+        consistency = _canonicalize_consistency_assessment(
+            consistency,
+            document=artifact.generated_document,
         )
-        pass2_assessment.validate_against_document(pass1_result.generated_document)
+        if (
+            isinstance(consistency, SensitiveConsistencyAssessment)
+            and consistency.assertions
+        ):
+            validate_sensitive_assessment(consistency)
     except ValueError as exc:
-        return Pass2Execution(
-            assessment=pass2_assessment,
-            receipt=pass2_receipt,
+        code = (
+            FailureCode.SENSITIVE_ASSERTION_INVALID
+            if sensitive_contract
+            else FailureCode.EVIDENCE_INVALID
+        )
+        return ConsistencyValidationExecution(
+            assessment=consistency,
+            receipt=receipt if consistency is not None else None,
+            repair_codes=(RepairCode.EVIDENCE_INVALID,),
             failure=_failure(
-                stage=FailureStage.PASS2,
-                code=FailureCode.EVIDENCE_INVALID,
+                stage=FailureStage.VALIDATION,
+                code=code,
                 message=str(exc),
             ),
         )
 
-    return Pass2Execution(
-        assessment=pass2_assessment,
-        receipt=pass2_receipt,
-        comparison=_compare_grade(pass1_result, pass2_assessment),
+    comparison = _compare_consistency(
+        assessment=assessment,
+        plan=plan,
+        consistency=consistency,
+    )
+    return ConsistencyValidationExecution(
+        assessment=consistency,
+        receipt=receipt,
+        comparison=comparison,
+        repair_codes=_repair_codes_for_validation(
+            comparison=comparison,
+            plan=plan,
+            artifact=artifact,
+            assessment=consistency,
+        ),
     )
 
 
-def run_two_pass(
+def run_three_stage_pipeline(
     *,
     snapshot: SourceDocumentSnapshot,
     selection: DocumentSelection,
@@ -870,12 +1993,56 @@ def run_two_pass(
     fully_synthetic_generator: FullySyntheticDocumentGenerator | None = None,
     fully_synthetic_context: FullySyntheticContext | None = None,
 ) -> DocumentPipelineResult:
-    """문서 하나를 처리한다. 실패는 예외 대신 typed partial result로 반환한다."""
+    """문서 하나를 판별 → 계획 → 생성 → blind 검사 순서로 처리한다."""
 
-    pass1 = execute_pass1(
+    classification = execute_classification(
         snapshot=snapshot,
         selection=selection,
-        counterfactual_target=counterfactual_target,
+        gateway=gateway,
+        config=config,
+        selection_config=selection_config,
+        prompt_bundle=prompt_bundle,
+    )
+    if classification.failure is not None:
+        return DocumentPipelineResult(
+            source_document_id=snapshot.source_document_id,
+            source_assessment=classification.assessment,
+            classification_receipt=classification.receipt,
+            failure=classification.failure,
+        )
+    assert classification.assessment is not None
+    assert classification.receipt is not None
+
+    try:
+        plan = build_generation_plan(
+            assessment=classification.assessment,
+            requested_target=counterfactual_target,
+            snapshot=snapshot,
+            selection=selection,
+            sensitive_seed=sensitive_seed,
+            has_synthetic_generator=(
+                fully_synthetic_generator is not None
+                and fully_synthetic_context is not None
+            ),
+        )
+    except GenerationPlanningError as exc:
+        return DocumentPipelineResult(
+            source_document_id=snapshot.source_document_id,
+            source_assessment=classification.assessment,
+            classification_receipt=classification.receipt,
+            failure=_failure(
+                stage=FailureStage.PLANNING,
+                code=exc.code,
+                message=str(exc),
+                retryable=exc.retryable,
+            ),
+        )
+
+    generation = execute_generation(
+        snapshot=snapshot,
+        selection=selection,
+        assessment=classification.assessment,
+        plan=plan,
         gateway=gateway,
         config=config,
         selection_config=selection_config,
@@ -884,43 +2051,352 @@ def run_two_pass(
         fully_synthetic_generator=fully_synthetic_generator,
         fully_synthetic_context=fully_synthetic_context,
     )
-    if pass1.failure is not None:
+    if generation.failure is not None:
         return DocumentPipelineResult(
             source_document_id=snapshot.source_document_id,
-            pass1_result=pass1.result,
-            pass1_receipt=pass1.receipt,
-            failure=pass1.failure,
+            source_assessment=classification.assessment,
+            generation_plan=plan,
+            generation_artifact=generation.artifact,
+            classification_receipt=classification.receipt,
+            generation_receipt=generation.receipt,
+            failure=generation.failure,
         )
-    assert pass1.result is not None
-    assert pass1.receipt is not None
-    assert pass1.provenance is not None
+    assert generation.artifact is not None
 
-    pass2 = execute_pass2(
-        pass1_result=pass1.result,
+    validation = execute_consistency_validation(
+        assessment=classification.assessment,
+        plan=plan,
+        artifact=generation.artifact,
         gateway=gateway,
         config=config,
         selection_config=selection_config,
         prompt_bundle=prompt_bundle,
     )
-    if pass2.failure is not None:
+    if validation.failure is not None:
         return DocumentPipelineResult(
             source_document_id=snapshot.source_document_id,
-            pass1_result=pass1.result,
-            pass2_assessment=pass2.assessment,
-            pass1_receipt=pass1.receipt,
-            pass2_receipt=pass2.receipt,
-            generation_provenance=pass1.provenance,
-            failure=pass2.failure,
+            source_assessment=classification.assessment,
+            generation_plan=plan,
+            generation_artifact=generation.artifact,
+            consistency_assessment=validation.assessment,
+            classification_receipt=classification.receipt,
+            generation_receipt=generation.receipt,
+            validation_receipt=validation.receipt,
+            failure=validation.failure,
         )
-    assert pass2.assessment is not None
-    assert pass2.receipt is not None
-    assert pass2.comparison is not None
+    assert validation.assessment is not None
+    assert validation.receipt is not None
+    assert validation.comparison is not None
     return DocumentPipelineResult(
         source_document_id=snapshot.source_document_id,
-        pass1_result=pass1.result,
-        pass2_assessment=pass2.assessment,
-        pass1_receipt=pass1.receipt,
-        pass2_receipt=pass2.receipt,
-        generation_provenance=pass1.provenance,
-        comparison=pass2.comparison,
+        source_assessment=classification.assessment,
+        generation_plan=plan,
+        generation_artifact=generation.artifact,
+        consistency_assessment=validation.assessment,
+        classification_receipt=classification.receipt,
+        generation_receipt=generation.receipt,
+        validation_receipt=validation.receipt,
+        comparison=validation.comparison,
     )
+
+
+def _source_sensitive_terminal_run(
+    *,
+    status: SensitivePipelineStatus,
+    attempts: list[DocumentPipelineResult],
+) -> SourceSensitivePipelineRun:
+    return SourceSensitivePipelineRun(
+        status=status,
+        attempts=tuple(attempts),
+    )
+
+
+#: 이 파이프라인이 다루는 범위. 이전에는 제6호 하나였는데, 그 제약이 배치가
+#: 제6호만 요청하던 것과 겹쳐 제5·7·8호 목표가 계획 단계에서 전부 막혔다.
+#: 부분공개 원문 실측(hwpx 1,684건)에서 푸터 라벨은 제6호 557 / 제5호 340 /
+#: 제7호 147로 갈리는데, 제6호만 받으면 그중 절반을 쓰지 못한다.
+#:
+#: 제6호 전용 처리(``SensitiveConsistencyAssessment``의 assertion 계약)는 이미
+#: ``sensitive_contract = clause_no == CLAUSE_6``으로 분기돼 있어 범위만 넓히면
+#: 된다.
+_SENSITIVE_PIPELINE_CLAUSES: frozenset[ClauseNumber] = frozenset(
+    {
+        ClauseNumber.CLAUSE_5,
+        ClauseNumber.CLAUSE_6,
+        ClauseNumber.CLAUSE_7,
+        ClauseNumber.CLAUSE_8,
+    }
+)
+
+
+def _target_from_assessment(assessment: SourceAssessment) -> GenerationTarget:
+    """판별기가 고른 ``primary_subclause``를 그대로 생성 목표로 삼는다.
+
+    호를 밖에서 강제하지 않기 위한 것이다. 강제하면 원문에 없는 것을 만들라는
+    요구가 되고(실측: 고시·통계 문서에 제6호를 요구해 24건이 계획 단계에서
+    종료), 부분공개 원문에서는 푸터가 말한 호와 어긋나 마스킹 route가 풀린다.
+
+    ``primary_subclause``는 필수 필드라 항상 존재하고 제5~8호로 제한돼 있다
+    (``SourceAssessment`` 계약).
+    """
+
+    clause = clause_of_subclause(assessment.primary_subclause)
+    return GenerationTarget(
+        classification=TargetClassification(
+            expected_classification(clause).value
+        ),
+        clause_no=clause,
+        subclause_key=assessment.primary_subclause,
+        generation_mode=GenerationMode.COUNTERFACTUAL,
+    )
+
+
+def _evidence_came_from_us(
+    *,
+    snapshot: SourceDocumentSnapshot,
+    artifact: GenerationArtifact,
+    assessment: ConsistencyAssessment,
+) -> bool:
+    """검사기의 S 근거가 **우리가 넣은 자리**에서 왔는지.
+
+    원문 보존율이 1%일 때는 물을 필요가 없었다 — 원문이 거의 안 남으니 근거가
+    될 만한 것은 우리가 쓴 것뿐이었다. 보존율이 93%가 되면서 생성물의 대부분이
+    원문이 됐고, 검사기가 **원문 쪽** 문장을 근거로 S를 줄 수 있게 됐다.
+
+    실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과 적용
+    임계값인데 검사기는 ``부정 행위 및 징계 처분에 대한 상세한 언급``을 들었다.
+    그건 ALIO에 공표된 원문 내용이다. 라벨은 S로 맞았지만 이유가 원문 쪽이면
+    학습데이터로는 해롭다 — 공개된 감사 연차보고서를 S로 배운다. 전 출처 92개
+    근거 중 28개가 이랬다.
+
+    근거가 하나도 삽입 쪽이 아니면 통과시키지 않는다. 재생성으로 한 번 더
+    기회를 주고, 그래도 안 되면 ``EXCLUDED_AFTER_RETRY``로 끝난다 — 라벨을
+    붙이지 않는 편이 틀린 라벨보다 낫다.
+    """
+
+    quotes = [span.quote for span in assessment.evidence_spans]
+    if not quotes:
+        return False
+    return any(
+        evidence_from_inserted_text(
+            snapshot.full_text,
+            artifact.generated_document.body_text,
+            quotes,
+        )
+    )
+
+
+def run_source_sensitive_pipeline(
+    *,
+    snapshot: SourceDocumentSnapshot,
+    selection: DocumentSelection,
+    counterfactual_target: GenerationTarget | None = None,
+    gateway: StructuredOutputGateway,
+    config: PipelineConfig,
+    selection_config: SelectionConfig | None = None,
+    prompt_bundle: PromptBundle | None = None,
+    sensitive_seed: str | None = None,
+    fully_synthetic_generator: FullySyntheticDocumentGenerator | None = None,
+    fully_synthetic_context: FullySyntheticContext | None = None,
+    max_generation_attempts: int = 2,
+) -> SourceSensitivePipelineRun:
+    """제6호 결과가 O이면 판별·계획은 유지하고 생성 단계만 한 번 다시 실행한다."""
+
+    if max_generation_attempts < 1:
+        raise ValueError("max_generation_attempts must be at least 1")
+
+    attempts: list[DocumentPipelineResult] = []
+    classification = execute_classification(
+        snapshot=snapshot,
+        selection=selection,
+        gateway=gateway,
+        config=config,
+        selection_config=selection_config,
+        prompt_bundle=prompt_bundle,
+    )
+    if classification.failure is not None:
+        attempts.append(
+            DocumentPipelineResult(
+                source_document_id=snapshot.source_document_id,
+                source_assessment=classification.assessment,
+                classification_receipt=classification.receipt,
+                failure=classification.failure,
+            )
+        )
+        return _source_sensitive_terminal_run(
+            status=SensitivePipelineStatus.PIPELINE_FAILED,
+            attempts=attempts,
+        )
+    assert classification.assessment is not None
+    assert classification.receipt is not None
+
+    # 호출자가 목표를 주지 않으면 판별기가 고른 것을 쓴다. 판별 결과가 나온
+    # 뒤에야 정할 수 있으므로 여기서 채운다.
+    requested_target = counterfactual_target or _target_from_assessment(
+        classification.assessment
+    )
+
+    try:
+        plan = build_generation_plan(
+            assessment=classification.assessment,
+            requested_target=requested_target,
+            snapshot=snapshot,
+            selection=selection,
+            sensitive_seed=sensitive_seed,
+            has_synthetic_generator=(
+                fully_synthetic_generator is not None
+                and fully_synthetic_context is not None
+            ),
+        )
+        if plan.final_target.clause_no not in _SENSITIVE_PIPELINE_CLAUSES:
+            raise GenerationPlanningError(
+                FailureCode.SOURCE_INCOMPATIBLE,
+                (
+                    "source-sensitive pipeline requires a final clause 5-8 "
+                    "target"
+                ),
+            )
+    except GenerationPlanningError as exc:
+        attempts.append(
+            DocumentPipelineResult(
+                source_document_id=snapshot.source_document_id,
+                source_assessment=classification.assessment,
+                classification_receipt=classification.receipt,
+                failure=_failure(
+                    stage=FailureStage.PLANNING,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                ),
+            )
+        )
+        return _source_sensitive_terminal_run(
+            status=SensitivePipelineStatus.PIPELINE_FAILED,
+            attempts=attempts,
+        )
+
+    parent_generation_sha256: str | None = None
+    next_repair_codes: tuple[RepairCode, ...] = ()
+    for attempt_index in range(1, max_generation_attempts + 1):
+        generation = execute_generation(
+            snapshot=snapshot,
+            selection=selection,
+            assessment=classification.assessment,
+            plan=plan,
+            gateway=gateway,
+            config=config,
+            selection_config=selection_config,
+            prompt_bundle=prompt_bundle,
+            sensitive_seed=sensitive_seed,
+            fully_synthetic_generator=fully_synthetic_generator,
+            fully_synthetic_context=fully_synthetic_context,
+            attempt_index=attempt_index,
+            parent_generation_sha256=parent_generation_sha256,
+            repair_codes=next_repair_codes,
+        )
+        if generation.failure is not None:
+            attempts.append(
+                DocumentPipelineResult(
+                    source_document_id=snapshot.source_document_id,
+                    source_assessment=classification.assessment,
+                    generation_plan=plan,
+                    generation_artifact=generation.artifact,
+                    classification_receipt=classification.receipt,
+                    generation_receipt=generation.receipt,
+                    failure=generation.failure,
+                )
+            )
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.PIPELINE_FAILED,
+                attempts=attempts,
+            )
+        assert generation.artifact is not None
+
+        validation = execute_consistency_validation(
+            assessment=classification.assessment,
+            plan=plan,
+            artifact=generation.artifact,
+            gateway=gateway,
+            config=config,
+            selection_config=selection_config,
+            prompt_bundle=prompt_bundle,
+        )
+        if validation.failure is not None:
+            attempts.append(
+                DocumentPipelineResult(
+                    source_document_id=snapshot.source_document_id,
+                    source_assessment=classification.assessment,
+                    generation_plan=plan,
+                    generation_artifact=generation.artifact,
+                    consistency_assessment=validation.assessment,
+                    classification_receipt=classification.receipt,
+                    generation_receipt=generation.receipt,
+                    validation_receipt=validation.receipt,
+                    failure=validation.failure,
+                )
+            )
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.PIPELINE_FAILED,
+                attempts=attempts,
+            )
+
+        assert isinstance(
+            validation.assessment,
+            SensitiveConsistencyAssessment,
+        )
+        assert validation.receipt is not None
+        assert validation.comparison is not None
+        result = DocumentPipelineResult(
+            source_document_id=snapshot.source_document_id,
+            source_assessment=classification.assessment,
+            generation_plan=plan,
+            generation_artifact=generation.artifact,
+            consistency_assessment=validation.assessment,
+            classification_receipt=classification.receipt,
+            generation_receipt=generation.receipt,
+            validation_receipt=validation.receipt,
+            comparison=validation.comparison,
+        )
+        attempts.append(result)
+
+        verdict = validation.assessment.sensitivity_verdict
+        if plan.generation_route == GenerationRoute.MASK_RESTORATION:
+            # 이 route의 S 근거는 검증기의 재판독이 아니라 원문에 남은 사람의
+            # 판단이다 — 실무자가 그 자리를 제N호로 가렸고 우리는 그 자리만
+            # 채웠다. 그래서 검증기가 O를 내도 라벨은 S로 둔다.
+            #
+            # 다만 검증기 판정은 위 ``result``에 그대로 남는다. 채운 값이 약해
+            # 본문이 실제로는 요건에 못 미치는 경우가 있고(실측: 마스킹 자리가
+            # 이름·짧은 사유 두 칸뿐이라 O), 그 문서까지 S로 학습시키면 분류기가
+            # 오탐 쪽으로 기운다. 라벨과 근거를 함께 남겨 나중에 걸러낼 수 있게
+            # 한다.
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.ACCEPTED_S,
+                attempts=attempts,
+            )
+        if verdict == SensitiveVerdict.ACCEPTED_S and _evidence_came_from_us(
+            snapshot=snapshot,
+            artifact=generation.artifact,
+            assessment=validation.assessment,
+        ):
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.ACCEPTED_S,
+                attempts=attempts,
+            )
+        if verdict == SensitiveVerdict.HARD_CASE_REVIEW:
+            return _source_sensitive_terminal_run(
+                status=SensitivePipelineStatus.HARD_CASE_REVIEW,
+                attempts=attempts,
+            )
+        if attempt_index < max_generation_attempts:
+            parent_generation_sha256 = model_sha256(generation.artifact)
+            next_repair_codes = validation.repair_codes
+            if not next_repair_codes:
+                next_repair_codes = (RepairCode.DIRECT_VALUE_MISSING,)
+            continue
+        return _source_sensitive_terminal_run(
+            status=SensitivePipelineStatus.EXCLUDED_AFTER_RETRY,
+            attempts=attempts,
+        )
+
+    raise AssertionError("unreachable")  # pragma: no cover

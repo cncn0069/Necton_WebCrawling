@@ -52,6 +52,10 @@ JSONL이다. 확장자가 `.txt`여도 내용 전체가 완전한 JSON 객체이
 수 있다. 일반 원문만 있는 `.txt`는 먼저 `result.generated_document` 계약 JSON으로
 감싼 뒤 실행한다.
 
+현재 생성 파이프라인의 v2 결과인 `source_assessment`, `generation_plan`,
+`generation_artifact` 구조도 바로 입력할 수 있다. 렌더러가 내부적으로
+`result` envelope로 투영하며 원문 내용은 변경하지 않는다.
+
 ## 디렉터리 안의 텍스트 파일 전부 실행
 
 디렉터리를 입력하면 `.json`, `.jsonl`, `.txt`를 하위 디렉터리까지 찾아
@@ -97,7 +101,7 @@ python scripts/render_generated_documents.py data/render_inputs \
 - 지원 block: `paragraph`, `key_value`, `bullet_list`, `table`,
   `attachment_reference`
 - `result.contract_version`과
-  `result.generated_document.contract_version`은 같은 `1.x.x` 값이어야 한다.
+  `result.generated_document.contract_version`은 같은 `2.x.x` 값이어야 한다.
 - `blocks`가 내용의 기준이다.
 - `body_text`를 같이 넣으면 blocks를 평탄화한 결과와 같아야 한다.
 - 입력의 `failure`가 null이 아니면 기본적으로 거부한다.

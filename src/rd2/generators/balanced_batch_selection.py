@@ -58,11 +58,13 @@ _TEMPLATE_SLUGS_BY_FAMILY = {
         variant["slug"] for variant in MEETING_MINUTES_TEMPLATE_VARIANTS
     ),
     "notice": tuple(variant["slug"] for variant in NOTICE_TEMPLATE_VARIANTS),
+    "verbatim": ("00_verbatim",),
 }
 
 ALL_TEMPLATE_SLUGS = tuple(
     slug
-    for family_slugs in _TEMPLATE_SLUGS_BY_FAMILY.values()
+    for family, family_slugs in _TEMPLATE_SLUGS_BY_FAMILY.items()
+    if family != "verbatim"
     for slug in family_slugs
 )
 
@@ -112,20 +114,28 @@ class BalancedTemplateSelector:
             )
         self.seed = seed
         self.variation_count = variation_count
-        self._document_type_positions: dict[str, int] = {}
-        self._template_positions: dict[tuple[str, str], int] = {}
+        self._document_type_positions: dict[tuple[str, str], int] = {}
+        self._template_positions: dict[tuple[str, str, str], int] = {}
 
     def select(
         self,
         document_type: str | None,
         *,
         item_key: str,
+        renderer_family: str | None = None,
     ) -> BalancedTemplateAssignment:
         type_key = document_type or "__unclassified__"
-        renderer_family = renderer_family_for_document_type(document_type)
-        template_slugs = _TEMPLATE_SLUGS_BY_FAMILY[renderer_family]
+        resolved_family = (
+            renderer_family
+            if renderer_family is not None
+            else renderer_family_for_document_type(document_type)
+        )
+        if resolved_family not in _TEMPLATE_SLUGS_BY_FAMILY:
+            raise ValueError(f"Unknown renderer family: {resolved_family}")
+        template_slugs = _TEMPLATE_SLUGS_BY_FAMILY[resolved_family]
 
-        type_position = self._document_type_positions.get(type_key, 0)
+        document_type_key = (type_key, resolved_family)
+        type_position = self._document_type_positions.get(document_type_key, 0)
         template_epoch, template_offset = divmod(
             type_position,
             len(template_slugs),
@@ -135,9 +145,9 @@ class BalancedTemplateSelector:
             _stable_seed(self.seed, type_key, "template", template_epoch)
         ).shuffle(template_cycle)
         template_slug = template_cycle[template_offset]
-        self._document_type_positions[type_key] = type_position + 1
+        self._document_type_positions[document_type_key] = type_position + 1
 
-        template_key = (type_key, template_slug)
+        template_key = (type_key, resolved_family, template_slug)
         variation_position = self._template_positions.get(template_key, 0)
         variation_epoch, variation_offset = divmod(
             variation_position,
@@ -158,7 +168,7 @@ class BalancedTemplateSelector:
 
         return BalancedTemplateAssignment(
             document_type=document_type,
-            renderer_family=renderer_family,
+            renderer_family=resolved_family,
             template_slug=template_slug,
             variation_index=variation_index,
             selection_seed=self.seed,

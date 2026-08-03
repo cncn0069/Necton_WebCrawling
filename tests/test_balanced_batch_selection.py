@@ -134,6 +134,25 @@ def test_document_types_are_balanced_independently() -> None:
     assert max(regulation_counts.values()) - min(regulation_counts.values()) <= 1
 
 
+def test_verbatim_selection_does_not_shift_template_balance() -> None:
+    selector = BalancedTemplateSelector(seed=88, variation_count=3)
+
+    verbatim = selector.select(
+        "guide",
+        item_key="verbatim",
+        renderer_family="verbatim",
+    )
+    templated = [
+        selector.select("guide", item_key=f"guide-{index}")
+        for index in range(4)
+    ]
+
+    assert verbatim.template_slug == "00_verbatim"
+    assert {item.template_slug for item in templated} == set(
+        template_slugs_for_document_type("guide")
+    )
+
+
 def test_directory_batch_renders_one_balanced_assignment_per_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -141,12 +160,31 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()
-    for index in range(12):
+    for index in range(13):
+        generation_route = (
+            "mask_restoration" if index == 0 else "fully_synthetic"
+        )
         payload = {
-            "result": {
+            "output_filename": f"문서-{index:02d}.pdf",
+            "source_assessment": {
                 "source_classification": {"document_type": "guide"},
             },
-            "receipt": {"request_id": f"request-{index:02d}"},
+            "generation_plan": {
+                "generation_route": generation_route,
+                "final_target": {},
+            },
+            "generation_artifact": {
+                "contract_version": "2.2.0",
+                "generated_document": {
+                    "contract_version": "2.2.0",
+                    "title": f"문서 {index}",
+                    "blocks": [],
+                },
+                "provenance": {},
+            },
+            "generation_receipt": {
+                "request_id": f"request-{index:02d}",
+            },
         }
         (input_dir / f"{index:02d}.txt").write_text(
             json.dumps(payload),
@@ -158,14 +196,24 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
         document_output_dir: Path,
         **kwargs: object,
     ) -> list[dict[str, object]]:
-        document_output_dir.mkdir(parents=True)
+        assert payload["result"]["source_classification"] == {
+            "document_type": "guide"
+        }
         template_slug = next(iter(kwargs["template_slugs"]))
         variation_offset = int(kwargs["variation_offset"])
+        template_dir = document_output_dir / template_slug
+        template_dir.mkdir(parents=True)
+        pdf_path = template_dir / "generated.pdf"
+        html_path = template_dir / "generated.html"
+        pdf_path.write_bytes(b"%PDF")
+        html_path.write_text("<html></html>", encoding="utf-8")
         return [
             {
                 "status": "ok",
                 "template_slug": template_slug,
                 "variation_slug": f"{variation_offset + 1:02d}_test",
+                "pdf": str(pdf_path),
+                "html": str(html_path),
             }
         ]
 
@@ -178,16 +226,20 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
         variation_count=3,
     )
 
-    assert manifest["document_count"] == 12
-    assert manifest["success_count"] == 12
+    assert manifest["document_count"] == 13
+    assert manifest["success_count"] == 13
     assert manifest["rejected_count"] == 0
     selections = [entry["selection"] for entry in manifest["documents"]]
+    assert selections[0]["renderer_family"] == "verbatim"
+    assert selections[0]["template_slug"] == "00_verbatim"
     template_counts = Counter(
-        selection["template_slug"] for selection in selections
+        selection["template_slug"]
+        for selection in selections
+        if selection["renderer_family"] == "guide"
     )
     assert set(template_counts.values()) == {3}
     per_template_variations: dict[str, set[int]] = defaultdict(set)
-    for selection in selections:
+    for selection in selections[1:]:
         per_template_variations[selection["template_slug"]].add(
             selection["variation_index"]
         )
@@ -195,6 +247,7 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
         variations == {1, 2, 3}
         for variations in per_template_variations.values()
     )
+    assert (output_dir / "문서-00" / "00_verbatim" / "문서-00.pdf").exists()
     saved = json.loads(
         (output_dir / "batch_manifest.json").read_text(encoding="utf-8")
     )

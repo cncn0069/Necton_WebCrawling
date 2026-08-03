@@ -21,14 +21,14 @@ from scripts.render_generated_documents import render_input_file
 def _research_payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "research_report",
                 "classification": "O",
             },
             "generation_route": "fully_synthetic",
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "장기 정책 효과와 현장 적용 가능성에 관한 종합 연구",
                 "agency_name": None,
                 "document_metadata": {

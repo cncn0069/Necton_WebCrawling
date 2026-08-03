@@ -20,7 +20,7 @@ from rd2.generators.interpretation_compilation_rendering import (
 def _payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "interpretation_compilation",
                 "classification": "O",
@@ -33,7 +33,7 @@ def _payload() -> dict:
                 "generation_mode": "counterfactual",
             },
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "휴게시설 공동사용 시 설치 의무에 관한 검토",
                 "blocks": [
                     {
