@@ -275,7 +275,7 @@ def test_legacy_contract_is_retained_but_never_reused(tmp_path):
     )
     records = read_journal(tmp_path / "journal.jsonl")
     assert records[0].sequence == 2
-    assert all(record.contract_version == "2.2.0" for record in records)
+    assert all(record.contract_version == "2.3.0" for record in records)
 
 
 def test_tampered_artifact_returns_typed_journal_failure(tmp_path):

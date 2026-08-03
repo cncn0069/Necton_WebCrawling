@@ -28,36 +28,33 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from rd2.generators.guide_rendering import (
-    GUIDE_MAX_PAGES,
-    render_guide_variations,
-)
+from rd2.generators.guide_rendering import render_guide_variations
 from rd2.generators.interpretation_compilation_rendering import (
-    INTERPRETATION_COMPILATION_MAX_PAGES,
     render_interpretation_compilation_variations,
 )
 from rd2.generators.administrative_rule_rendering import (
-    ADMINISTRATIVE_RULE_MAX_PAGES,
     render_administrative_rule_variations,
+)
+from rd2.generators.document_security_marking import (
+    apply_security_marking_to_manifest,
+    resolve_security_marking,
 )
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
 )
+from rd2.generators.paged_output import finalize_manifest_page_limits
 from rd2.generators.verbatim_rendering import render_verbatim_document
 from rd2.generators.notice_rendering import render_notice_variations
 from rd2.generators.meeting_minutes_rendering import (
-    MEETING_MINUTES_MAX_PAGES,
     render_meeting_minutes_variations,
 )
 from rd2.generators.research_report_rendering import (
     render_research_report_variations,
 )
 from rd2.generators.status_report_rendering import (
-    STATUS_REPORT_MAX_PAGES,
     render_status_report_variations,
 )
 from rd2.generators.press_release_rendering import (
-    PRESS_RELEASE_MAX_PAGES,
     PRESS_RELEASE_WIDE_TABLE_MIN_COLUMNS,
     render_press_release_variations,
 )
@@ -68,14 +65,14 @@ from rd2.generators.synthetic_approval_stamps import (
     generate_synthetic_approval_stamp,
 )
 from rd2.source_generation.classification_taxonomy import SemanticDocumentType
-
-#: 메이저 버전 2대만 받는다. 이 모듈은 ``rd2.source_generation.contracts``를
-#: import하지 않고 자체 ``GeneratedDocumentContract``로 IR 형태를 다시 선언한다
-#: — 그 소스 모듈의 ``CONTRACT_SCHEMA_VERSION``은 ``SourceAssessment`` 등 여러
-#: 계약이 공유하는 단일 상수라, ``GeneratedDocumentIR`` 자체의 필드가 안 바뀌어도
-#: (예: primary_subclause 추가로 2.0.0 -> 2.1.0) 이 정규식이 낡아 있으면 이유 없이
-#: 거부당한다. 마이너 버전은 자유롭게 받고, v1 같은 실제 구조 변경만 막는다.
+#: 메이저 버전 2대만 받는다. ``GeneratedDocumentContract``는 렌더러가 필요한 IR
+#: 부분만 호환 계약으로 다시 선언해 소스 계약의 마이너 변경을 자유롭게 받는다.
+#: ``generation_target``도 과거 산출물의 부가 메타데이터를 보존하는 느슨한 계약을
+#: 유지하고, 보안표지 후처리에서 필요한 분류와 군사기밀 등급만 검증한다.
+#: v1 같은 실제 구조 변경만 여기서 막는다.
 _CONTRACT_VERSION_RE = re.compile(r"^2\.\d+\.\d+$")
+GENERATED_DOCUMENT_MAX_PAGES = 10
+_UNTRUNCATED_RENDER_PAGE_BUDGET = 1_000
 _CONTENT_CONTEXT_KEYS = frozenset(
     {
         "title",
@@ -752,6 +749,31 @@ def _build_document_metadata_context(
     }
 
 
+def _preview_text(value: str, *, limit: int) -> str:
+    normalized = value.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + "…"
+
+
+def _needs_official_continuation(
+    document: GeneratedDocumentContract,
+) -> bool:
+    text_characters = sum(len(value) for value in source_text_atoms(document))
+    return (
+        len(document.blocks) > 12
+        or text_characters > 6_000
+        or any(
+            isinstance(block, ParagraphBlock) and len(block.text) > 1_500
+            for block in document.blocks
+        )
+        or any(
+            isinstance(block, TableBlock) and len(block.rows) > 18
+            for block in document.blocks
+        )
+    )
+
+
 def build_template_context(
     envelope: GenerationEnvelope,
     *,
@@ -870,6 +892,65 @@ def build_template_context(
             }
         )
 
+    pagination_continuation = _needs_official_continuation(document)
+    source_blocks = [
+        block.model_dump(mode="json") for block in document.blocks
+    ]
+    intro = intro_block.text if intro_block else ""
+    if pagination_continuation:
+        intro = _preview_text(intro, limit=320)
+        sections = [
+            {
+                "text": _preview_text(str(section["text"]), limit=280),
+                "items": [
+                    {
+                        "label": str(item["label"]),
+                        "text": _preview_text(str(item["text"]), limit=180),
+                    }
+                    for item in section["items"][:4]
+                ],
+            }
+            for section in sections[:2]
+        ]
+        long_sections = [
+            {
+                "title": _preview_text(str(section["title"]), limit=80),
+                "items": [
+                    _preview_text(str(item), limit=220)
+                    for item in section["items"][:4]
+                ],
+            }
+            for section in long_sections[:4]
+        ]
+        details = [
+            {
+                "label": _preview_text(str(detail["label"]), limit=40),
+                "value": _preview_text(str(detail["value"]), limit=100),
+            }
+            for detail in details[:6]
+        ]
+        primary_table = {
+            "headers": [
+                _preview_text(str(header), limit=40)
+                for header in primary_table["headers"]
+            ],
+            "rows": [
+                [_preview_text(str(cell), limit=80) for cell in row]
+                for row in primary_table["rows"][:8]
+            ],
+        }
+        attachments = [
+            _preview_text(str(attachment), limit=120)
+            for attachment in attachments[:4]
+        ]
+        checklist_items = [
+            {
+                **item,
+                "text": _preview_text(str(item["text"]), limit=160),
+            }
+            for item in checklist_items[:10]
+        ]
+
     return {
         "emblem": "",
         "slogan": "",
@@ -882,7 +963,7 @@ def build_template_context(
         "recipient": "",
         "via": "",
         "title": document.title,
-        "intro": intro_block.text if intro_block else "",
+        "intro": intro,
         "sections": sections,
         "long_sections": long_sections,
         "details": details,
@@ -914,6 +995,8 @@ def build_template_context(
         "form_subtitle": "",
         "guide_text": "",
         "summary_text": "",
+        "pagination_continuation": pagination_continuation,
+        "source_blocks": source_blocks,
     }
 
 
@@ -1410,6 +1493,20 @@ def render_generation_payload(
         if envelope.result.source_classification
         else None
     )
+    content_sha256 = sha256(
+        blocks_to_body_text(document.blocks).encode("utf-8")
+    ).hexdigest()
+    generation_target = (
+        dict(envelope.result.generation_target)
+        if envelope.result.generation_target is not None
+        else None
+    )
+    if generation_target is not None:
+        generation_target.setdefault("military_secret_grade", None)
+    security_marking = resolve_security_marking(
+        generation_target,
+        agency_name=document.agency_name,
+    )
     if _is_verbatim(envelope):
         # 원문을 그대로 옮긴 산출물이다 — 어느 템플릿 가족에도 속하지 않는다.
         # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
@@ -1421,13 +1518,11 @@ def render_generation_payload(
         "document_type": document_type,
         "renderer_family": renderer_family,
         "generation_route": envelope.result.generation_route,
-        "generation_target": envelope.result.generation_target,
+        "generation_target": generation_target,
         "request_id": envelope.receipt.request_id if envelope.receipt else None,
         "response_id": envelope.receipt.response_id if envelope.receipt else None,
         "model_id": envelope.receipt.model_id if envelope.receipt else None,
-        "content_sha256": sha256(
-            blocks_to_body_text(document.blocks).encode("utf-8")
-        ).hexdigest(),
+        "content_sha256": content_sha256,
         "rendered_from_failed_input": envelope.failure is not None,
     }
     if _is_verbatim(envelope):
@@ -1438,7 +1533,7 @@ def render_generation_payload(
             render_verbatim_document(
                 document,
                 output_dir,
-                required_source_texts=source_text_atoms(document),
+                required_source_texts=(),
             )
         ]
     elif document_type == "research_report":
@@ -1450,11 +1545,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(
-                document,
-                include_administrative_event_dates=True,
-            ),
-            max_pages=10,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
     elif document_type == "press_release":
@@ -1466,11 +1558,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(
-                document,
-                include_administrative_event_dates=True,
-            ),
-            max_pages=PRESS_RELEASE_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
     elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
@@ -1482,8 +1571,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(document),
-            max_pages=ADMINISTRATIVE_RULE_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type_enum == SemanticDocumentType.INTERPRETATION_COMPILATION:
         context = build_interpretation_compilation_context(envelope, seed=seed)
@@ -1494,8 +1583,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(document),
-            max_pages=INTERPRETATION_COMPILATION_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type_enum == SemanticDocumentType.GUIDE:
         context = build_guide_context(envelope, seed=seed)
@@ -1506,8 +1595,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(document),
-            max_pages=GUIDE_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type == "status_report":
         context = build_status_report_context(envelope, seed=seed)
@@ -1518,11 +1607,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(
-                document,
-                include_administrative_event_dates=True,
-            ),
-            max_pages=STATUS_REPORT_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
     elif document_type == "meeting_minutes":
@@ -1534,11 +1620,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(
-                document,
-                include_administrative_event_dates=True,
-            ),
-            max_pages=MEETING_MINUTES_MAX_PAGES,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
     elif document_type in _NOTICE_DOCUMENT_TYPES:
@@ -1550,11 +1633,8 @@ def render_generation_payload(
             base_seed=seed,
             variation_offset=variation_offset,
             template_slugs=template_slugs,
-            required_source_texts=source_text_atoms(
-                document,
-                include_administrative_event_dates=True,
-            ),
-            max_pages=10,
+            required_source_texts=(),
+            max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
     else:
@@ -1568,10 +1648,49 @@ def render_generation_payload(
             identity_seed=seed,
             template_slugs=template_slugs,
             protected_context_keys=_CONTENT_CONTEXT_KEYS,
-            required_source_texts=source_text_atoms(document),
+            required_source_texts=(),
             enforce_expected_pages=False,
             reject_legacy_identity=False,
         )
+
+    include_administrative_event_dates = renderer_family in {
+        "meeting_minutes",
+        "notice",
+        "press_release",
+        "research_report",
+        "status_report",
+    }
+    required_source_texts = (
+        document.title,
+        *source_text_atoms(
+            document,
+            include_administrative_event_dates=(
+                include_administrative_event_dates
+            ),
+        ),
+    )
+    try:
+        finalize_manifest_page_limits(
+            manifest,
+            max_pages=GENERATED_DOCUMENT_MAX_PAGES,
+            render_page_budget=_UNTRUNCATED_RENDER_PAGE_BUDGET,
+            required_source_texts=required_source_texts,
+        )
+
+        apply_security_marking_to_manifest(
+            manifest,
+            target=generation_target,
+            agency_name=document.agency_name,
+            content_sha256=content_sha256,
+        )
+    except Exception:
+        if security_marking is not None:
+            for entry in manifest:
+                for key in ("pdf", "html"):
+                    artifact_path = entry.get(key)
+                    if isinstance(artifact_path, str) and artifact_path:
+                        Path(artifact_path).unlink(missing_ok=True)
+        raise
 
     for entry in manifest:
         entry.setdefault("renderer_family", renderer_family)

@@ -1,0 +1,54 @@
+<main class="pagination-continuation">
+  <header class="pagination-continuation-header">
+    <span>{{ agency_name }}</span>
+    <strong>본문 연속본</strong>
+  </header>
+  <h1>{{ title }}</h1>
+
+  {% set attachment = namespace(index=0) %}
+  {% for block in source_blocks %}
+  <section
+    class="pagination-block pagination-block-{{ block.kind|replace('_', '-') }}"
+    data-block-id="{{ block.block_id }}"
+  >
+    <span class="pagination-block-index">{{ "%02d"|format(loop.index) }}</span>
+    <div class="pagination-block-content">
+      {% if block.kind == "paragraph" %}
+      <p>{{ block.text }}</p>
+      {% elif block.kind == "key_value" %}
+      <dl>
+        {% for entry in block.entries %}
+        <div><dt>{{ entry.key }}</dt><dd>{{ entry.value }}</dd></div>
+        {% endfor %}
+      </dl>
+      {% elif block.kind == "bullet_list" %}
+      <ul>{% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}</ul>
+      {% elif block.kind == "table" %}
+      <table>
+        <thead><tr>{% for column in block.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in block.rows %}
+          <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% elif block.kind == "attachment_reference" %}
+      {% set attachment.index = attachment.index + 1 %}
+      <p>
+        <strong>붙임 {{ attachment.index }}.</strong>
+        {{ block.label }} ({{ block.attachment_id }})
+        {% if block.description %}: {{ block.description }}{% endif %}
+      </p>
+      {% endif %}
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if administrative_events %}
+  <section class="pagination-administrative-events">
+    {% for event in administrative_events %}
+    <p><time>{{ event.date }}</time> {{ event.text }}</p>
+    {% endfor %}
+  </section>
+  {% endif %}
+</main>

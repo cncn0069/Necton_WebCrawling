@@ -117,7 +117,7 @@ p, li, dd, td, th {
   padding-left: 6mm;
 }
 .status-list li {
-  break-inside: avoid;
+  break-inside: auto;
   margin-bottom: 1.8mm;
 }
 .list-columns-2 .status-list {
@@ -134,7 +134,7 @@ table {
   width: 100%;
 }
 thead { display: table-header-group; }
-tr { break-inside: avoid; }
+tr { break-inside: auto; }
 th, td {
   line-height: 1.45;
   padding: var(--status-table-padding, 2.2mm) 1.8mm;
@@ -464,14 +464,18 @@ td:first-child { text-align: left; }
   width: 18mm;
 }
 .status-chapter .status-block {
-  display: grid;
-  gap: 5mm;
-  grid-template-columns: 17mm minmax(0, 1fr);
+  display: block;
   margin-bottom: var(--status-block-gap, 6mm);
+  padding-left: 22mm;
+  position: relative;
 }
 .status-chapter .block-index {
   display: block;
+  left: 0;
   padding-top: .5mm;
+  position: absolute;
+  top: 0;
+  width: 17mm;
 }
 .status-chapter .block-content > p {
   line-height: 1.8;
@@ -479,13 +483,16 @@ td:first-child { text-align: left; }
 .status-chapter .key-value-grid {
   border-bottom: .2mm solid #aeb6bc;
   border-top: .4mm solid #202c36;
+  display: block;
 }
 .status-chapter .key-value-grid > div {
-  border-right: .2mm solid #d0d4d7;
-  min-height: 15mm;
+  border-bottom: .2mm solid #d0d4d7;
+  border-right: 0;
+  break-inside: auto;
+  min-height: 0;
   padding: 3.5mm;
 }
-.status-chapter .key-value-grid > div:last-child { border-right: 0; }
+.status-chapter .key-value-grid > div:last-child { border-bottom: 0; }
 .status-chapter .status-list {
   list-style: none;
   padding-left: 0;

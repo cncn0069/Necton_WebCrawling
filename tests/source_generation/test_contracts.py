@@ -21,9 +21,11 @@ from rd2.source_generation.contracts import (
     FailureStage,
     GeneratedDocumentIR,
     GenerationArtifact,
+    GenerationMode,
     GenerationProvenance,
     GenerationRoute,
     GenerationStageArtifact,
+    GenerationTarget,
     JournalRecord,
     JournalStage,
     JournalStatus,
@@ -106,12 +108,42 @@ def _generation_artifact() -> GenerationArtifact:
 
 
 def test_contract_version_is_v2_and_models_forbid_extra_fields():
-    assert CONTRACT_SCHEMA_VERSION == "2.2.0"
+    assert CONTRACT_SCHEMA_VERSION == "2.3.0"
     with pytest.raises(ValidationError):
         GeneratedDocumentIR(
             title="문서",
             blocks=(ParagraphBlock(block_id="g1", text="본문"),),
             unknown="금지",
+        )
+
+
+def test_generation_target_carries_only_valid_military_secret_grades():
+    target = GenerationTarget(
+        classification=TargetClassification.C,
+        clause_no=ClauseNumber.CLAUSE_2,
+        subclause_key=SubclauseKey.SECURITY_DEFENSE,
+        generation_mode=GenerationMode.COUNTERFACTUAL,
+        military_secret_grade="2급",
+    )
+    assert target.military_secret_grade == "2급"
+    assert target.model_dump(mode="json")["military_secret_grade"] == "2급"
+
+    with pytest.raises(ValidationError, match="only allowed for C targets"):
+        GenerationTarget(
+            classification=TargetClassification.S,
+            clause_no=ClauseNumber.CLAUSE_5,
+            subclause_key=SubclauseKey.BID_CONTRACT,
+            generation_mode=GenerationMode.COUNTERFACTUAL,
+            military_secret_grade="2급",
+        )
+
+    with pytest.raises(ValidationError):
+        GenerationTarget(
+            classification=TargetClassification.C,
+            clause_no=ClauseNumber.CLAUSE_2,
+            subclause_key=SubclauseKey.SECURITY_DEFENSE,
+            generation_mode=GenerationMode.COUNTERFACTUAL,
+            military_secret_grade="4급",
         )
 
 

@@ -7,6 +7,42 @@ from rd2.generators.output_naming import (
     rename_rendered_files,
     requested_output_filename,
 )
+from scripts.render_generated_documents import _renderer_payload
+
+
+def test_renderer_projection_preserves_military_secret_grade():
+    payload = {
+        "generation_plan": {
+            "generation_route": "fully_synthetic",
+            "final_target": {
+                "classification": "C",
+                "clause_no": "2",
+                "subclause_key": "security_defense",
+                "generation_mode": "counterfactual",
+                "military_secret_grade": "1급",
+            },
+        },
+        "generation_artifact": {
+            "contract_version": "2.3.0",
+            "generated_document": {
+                "contract_version": "2.3.0",
+                "title": "군사기밀 문서",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "block_id": "g1",
+                        "text": "합성 본문",
+                    }
+                ],
+            },
+        },
+    }
+
+    projected = _renderer_payload(payload)
+
+    assert projected["result"]["generation_target"][
+        "military_secret_grade"
+    ] == "1급"
 
 
 def test_requested_filename_preserves_korean_source_stem():

@@ -175,7 +175,7 @@ class HoldoutManifest(ContractModel):
     평가가 학습셋을 채점하게 되므로 계약 수준에서 막는다.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: Literal["holdout-classification-eval-v2"] = HOLDOUT_POLICY_VERSION
     taxonomy_version: Literal["source-generation-taxonomy-v3"] = TAXONOMY_VERSION
     manifest_id: NonEmptyText
@@ -370,7 +370,7 @@ class HoldoutEvalReport(ContractModel):
     낡은 것이다 — 세부조항의 의미나 판정 지침이 달라졌기 때문이다.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: Literal["holdout-classification-eval-v2"] = HOLDOUT_POLICY_VERSION
     manifest_sha256: Sha256Hex
     taxonomy_version: NonEmptyText
