@@ -3,7 +3,7 @@
 `result.generated_document`가 들어 있는 JSON을 Jinja2 + WeasyPrint
 문서 유형별 템플릿으로 렌더링한다. 현재 공문 계열 10종,
 `research_report` 전용 3종, `press_release` 전용 3종,
-`meeting_minutes` 전용 회의록 4종, 공고 계열 전용 3종을 지원한다.
+회의록·현황자료·가이드·질의회시집 전용 각 4종, 공고 계열 전용 3종을 지원한다.
 `directive`(훈령), `regulation`(예규), `notification`(고시)은
 행정규칙 전용 서식 4종을 공유하고 입력 분류값에 따라 유형명만 달라진다.
 
@@ -109,6 +109,58 @@ python scripts/render_generated_documents.py data/render_inputs \
   `generated_document.document_metadata`에 있을 때만 렌더링한다.
 - `pending`, `rejected`, `not_required` 결재 슬롯에는 도장이나 결재일을 넣지 않는다.
 
+### 장문 배치와 10페이지 제한
+
+최종 PDF는 모든 문서 유형에서 최대 10페이지다. 10페이지를 생성 상한으로
+사용하지 않고, 먼저 입력 block 전체를 자연스럽게 페이지에 배치해 원문 보존을
+검증한 뒤 첫 10페이지만 남긴다. 11페이지 이후는 의도적으로 폐기하며 이 경우도
+정상 출력(`status: ok`)이다. 보안표지는 이 절단이 끝난 최종 10페이지에 적용된다.
+
+`manifest.json`에는 최종 `actual_pages`와 함께 다음 값이 기록된다.
+
+- `truncated`: 11페이지 이후를 폐기했는지 여부
+- `original_page_count`: 절단 전 자연 배치 페이지 수
+- `retained_page_count`: 최종 보존 페이지 수
+- `discarded_page_count`: 폐기한 페이지 수
+- `source_text_validation_scope: pre_truncation_pdf`: 원문 검증이 절단 전 PDF를
+  기준으로 수행됐다는 뜻
+
+고정 1~2페이지 공문 서식에 장문이나 block이 많이 들어오면 표지·요약은 기존
+서식으로 유지하고, 원문 block은 페이지 분할 가능한 `본문 연속본`으로 이어진다.
+따라서 고정 높이 영역에서 본문이 겹치거나 잘리지 않는다.
+
+### C 문서 보안표지
+
+보안표지는 템플릿 HTML이 아니라 최종 PDF 공통 후처리 단계에서 적용한다.
+`generation_target.classification`이 `C`일 때만 표시되며 `S`와 `O`에는
+표지를 추가하지 않는다.
+
+일반기관 C 문서는 `logo/대외비.png`를 사용한다. 본문 SHA-256으로 페이지
+상·하단 둘레의 10개 후보 중 시작 위치를 정하고, 모든 페이지에서 비어 있는
+첫 위치를 선택한다. 한 PDF 안에서는 모든 페이지가 같은 위치를 사용한다.
+
+국방부·국가정보원 C 문서는 기존 등급 선택 로직이 정한 값을
+`generation_target.military_secret_grade`로 전달해야 한다.
+
+```json
+{
+  "result": {
+    "generation_target": {
+      "classification": "C",
+      "clause_no": "2",
+      "subclause_key": "security_defense",
+      "generation_mode": "counterfactual",
+      "military_secret_grade": "2급"
+    }
+  }
+}
+```
+
+허용 등급은 `1급`, `2급`, `3급`이며 해당 `logo/*급_비밀.png`를 모든 페이지의
+상·하단 중앙에 표시한다. 페이지 번호나 본문이 있으면 모든 페이지에 공통으로
+적용 가능한 범위 안에서 수직 이동한다. 군사기관 C에 등급이 없거나 일반기관에
+군사 등급이 있거나, 모든 후보 위치가 본문과 겹치면 해당 출력을 거부한다.
+
 공문 계열 템플릿 slug:
 
 ```text
@@ -138,9 +190,8 @@ research_03_academic_flow
 표지와 페이지 번호 외에 입력에 없는 목차·장 제목·날짜·보고서 번호·로고도
 추가하지 않는다. 8열 이상 표는 가로 A4 페이지로 전환한다.
 
-연구보고서는 표지를 포함해 최대 10쪽까지만 허용한다. 원문을 잘라 10쪽에
-맞추지 않으며, 10쪽을 넘으면 해당 출력을 거부하고 manifest에 실제 쪽수를
-남긴다.
+연구보고서도 전체 원문을 먼저 자연 배치하고 검증한 뒤 첫 10쪽만 남긴다.
+절단 여부와 절단 전·후 쪽수는 공통 manifest 필드에 기록된다.
 
 과대 입력이 PDF 생성 과정의 메모리와 CPU를 소진하지 않도록 렌더 시작 전에
 안전 한도를 검사한다. 연구보고서 1건의 한도는 제목 300자, block 160개,
@@ -173,8 +224,8 @@ press_03_joint_modular
 추가하는 문자열은 `보도자료`와 페이지 번호뿐이다.
 
 보도자료 변주는 템플릿별 최대 10개까지 만들 수 있으며, 기본 검증은 제목이
-첫 페이지에 있는지, 모든 원문 텍스트가 PDF에 남았는지, 전체가 10페이지
-이하인지 확인한다. 렌더 전에 입력 복잡도와 예상 페이지 비용도 검사한다.
+첫 페이지에 있는지와 절단 전 PDF에 모든 원문 텍스트가 남았는지 확인한다.
+렌더 전에 입력 복잡도와 예상 페이지 비용도 검사한다.
 검증에 실패하면 해당 문서의 HTML/PDF는 출력하지 않고 `manifest.json`에
 거부 상태를 남긴다.
 
@@ -189,8 +240,8 @@ notice_03_record_rail
 `bid_notice`, `bid_renotice`, `pre_spec_notice`, `public_offering`,
 `notice`는 위 `notice_*` 3종만 선택할 수 있다. 입력 block 순서와
 표·붙임을 보존하고 기관명이 없을 때 가상 기관명을 채우지 않는다.
-기관·공고번호·담당 부서·공고일도 입력에 없으면 추가하지 않는다. 최대
-10쪽을 넘으면 원문을 자르지 않고 해당 출력을 거부한다.
+기관·공고번호·담당 부서·공고일도 입력에 없으면 추가하지 않는다. 최종 출력은
+공통 규칙에 따라 첫 10쪽만 보존한다.
 
 회의록 템플릿 slug:
 
@@ -205,7 +256,7 @@ meeting_04_docket
 `meeting_*` 4종만 선택할 수 있다. 공문과 같은 5종 block을 입력 순서대로
 렌더링하며 회의명·일시·참석자·안건·의결결과를 추론하지 않는다. 입력에 없는
 수신란·시행번호·결재선도 추가하지 않는다. 7열 이상 표는 가로 A4 페이지로
-전환하고 전체 출력은 최대 10쪽까지만 허용한다.
+전환하고 전체 원문 배치 후 첫 10쪽만 보존한다.
 
 현황·통계자료 템플릿 slug:
 
@@ -219,7 +270,7 @@ status_04_chapter
 `result.source_classification.document_type`이 `status_report`이면 위
 `status_*` 4종만 선택할 수 있다. 별도 현황 지표나 차트를 추론하지 않고
 공문과 같은 5종 block을 입력 순서대로 렌더링한다. 7열 이상 표는 가로 A4
-페이지로 전환하며 전체 출력은 최대 10쪽까지만 허용한다.
+페이지로 전환하며 전체 원문 배치 후 첫 10쪽만 보존한다.
 
 가이드·매뉴얼·지침 템플릿 slug:
 
@@ -262,8 +313,8 @@ rule_04_notice_frame
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
 `manifest.json`에는 seed, 입력 해시, 기관명 선택, 원문 포함 검증,
-합성 도장 파라미터가 기록된다. 배치 입력의 문서별 성공·실패는
-`batch_manifest.json`에서 확인한다.
+합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. 배치 입력의
+문서별 성공·실패는 `batch_manifest.json`에서 확인한다.
 
 실패 입력을 조사 목적으로만 렌더링할 때는
 `--allow-failed-input`을 명시한다.
@@ -278,6 +329,7 @@ python scripts/render_generated_documents.py input.json \
 
 - `scripts/render_generated_documents.py`
 - `src/rd2/generators/generated_document_pipeline.py`
+- `src/rd2/generators/document_security_marking.py`
 - `src/rd2/generators/official_document_rendering.py`
 - `src/rd2/generators/research_report_rendering.py`
 - `src/rd2/generators/press_release_rendering.py`

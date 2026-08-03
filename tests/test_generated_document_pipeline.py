@@ -1,9 +1,12 @@
 from pathlib import Path
+import re
 from typing import Annotated, get_args, get_origin
 
 import fitz
 import pytest
 from pydantic import ValidationError
+import rd2.generators.document_security_marking as security_marking
+import rd2.generators.paged_output as paged_output
 
 from rd2.generators.generated_document_pipeline import (
     AttachmentReferenceBlock,
@@ -16,6 +19,35 @@ from rd2.generators.generated_document_pipeline import (
     parse_generation_payload,
     render_generation_payload,
     source_text_atoms,
+)
+from rd2.generators.administrative_rule_rendering import (
+    ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS,
+)
+from rd2.generators.document_security_marking import SecurityMarkingError
+from rd2.generators.guide_rendering import GUIDE_TEMPLATE_VARIANTS
+from rd2.generators.interpretation_compilation_rendering import (
+    INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+)
+from rd2.generators.meeting_minutes_rendering import (
+    MEETING_MINUTES_TEMPLATE_VARIANTS,
+)
+from rd2.generators.notice_rendering import NOTICE_TEMPLATE_VARIANTS
+from rd2.generators.official_document_variations import EXPECTED_PAGE_COUNTS
+from rd2.generators.paged_output import (
+    RenderedSourceTextError,
+    _fragmentation_tolerant_text_present,
+    _normalized,
+    finalize_manifest_page_limits,
+    validate_pdf_source_texts,
+)
+from rd2.generators.press_release_rendering import (
+    PRESS_RELEASE_TEMPLATE_VARIANTS,
+)
+from rd2.generators.research_report_rendering import (
+    RESEARCH_REPORT_TEMPLATE_VARIANTS,
+)
+from rd2.generators.status_report_rendering import (
+    STATUS_REPORT_TEMPLATE_VARIANTS,
 )
 from rd2.source_generation.contracts import DocumentBlock
 
@@ -110,6 +142,77 @@ def _payload() -> dict:
         },
         "provenance": None,
         "failure": None,
+    }
+
+
+_PAGINATION_TEMPLATE_CASES = tuple(
+    (document_type, str(variant["slug"]))
+    for document_type, variants in (
+        ("directive", ADMINISTRATIVE_RULE_TEMPLATE_VARIANTS),
+        ("guide", GUIDE_TEMPLATE_VARIANTS),
+        (
+            "interpretation_compilation",
+            INTERPRETATION_COMPILATION_TEMPLATE_VARIANTS,
+        ),
+        ("meeting_minutes", MEETING_MINUTES_TEMPLATE_VARIANTS),
+        ("bid_notice", NOTICE_TEMPLATE_VARIANTS),
+        ("press_release", PRESS_RELEASE_TEMPLATE_VARIANTS),
+        ("research_report", RESEARCH_REPORT_TEMPLATE_VARIANTS),
+        ("status_report", STATUS_REPORT_TEMPLATE_VARIANTS),
+    )
+    for variant in variants
+) + tuple(("policy_material", slug) for slug in EXPECTED_PAGE_COUNTS)
+
+
+def _dense_mixed_block(index: int, repeated: str) -> dict:
+    marker = f"[블록{index:03d}]"
+    important = " ※ 중요내용 ※" if index == 20 else ""
+    kind = index % 5
+    if kind == 0:
+        return {
+            "kind": "paragraph",
+            "block_id": f"stress-{index:03d}",
+            "text": f"{marker}{important} {repeated * 4}",
+        }
+    if kind == 1:
+        return {
+            "kind": "key_value",
+            "block_id": f"stress-{index:03d}",
+            "entries": [
+                {
+                    "key": f"{marker} 핵심항목",
+                    "value": f"{important} {repeated * 3}",
+                },
+                {"key": "검증상태", "value": "전체 원문 유지"},
+            ],
+        }
+    if kind == 2:
+        return {
+            "kind": "bullet_list",
+            "block_id": f"stress-{index:03d}",
+            "items": [
+                f"{marker}{important} {repeated * 2}",
+                f"후속 항목 {repeated * 2}",
+                "마지막 항목도 페이지 경계에서 유지됩니다.",
+            ],
+        }
+    if kind == 3:
+        return {
+            "kind": "table",
+            "block_id": f"stress-{index:03d}",
+            "columns": ["구분", "내용"],
+            "rows": [
+                [f"{marker}{important}", repeated * 2],
+                ["추가", repeated * 2],
+                ["확인", "셀 전체가 페이지 안에 유지됩니다."],
+            ],
+        }
+    return {
+        "kind": "attachment_reference",
+        "block_id": f"stress-{index:03d}",
+        "attachment_id": f"ATT-{index:03d}",
+        "label": f"{marker}{important} 장문 붙임",
+        "description": repeated * 3,
     }
 
 
@@ -468,6 +571,7 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
     assert all(entry["input"]["content_sha256"] for entry in manifest)
     assert all(Path(str(entry["pdf"])).is_file() for entry in manifest)
     assert all(Path(str(entry["html"])).is_file() for entry in manifest)
+    assert all("security_marking" not in entry for entry in manifest)
     assert len(
         {entry["identity"]["agency_name"] for entry in manifest}
     ) == 1
@@ -511,6 +615,307 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
         "재점검",
     ):
         assert synthetic_text not in rendered_text
+
+
+def test_c_payload_gets_general_confidential_mark_after_template_render(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    payload["result"]["generation_target"] = {
+        "classification": "C",
+        "clause_no": "2",
+        "subclause_key": "security_defense",
+        "generation_mode": "counterfactual",
+    }
+    payload["result"]["generated_document"]["agency_name"] = "행정안전부"
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={"01_classic_municipal"},
+    )
+
+    assert manifest[0]["security_marking"]["kind"] == "confidential"
+    assert manifest[0]["security_marking"]["asset"] == "logo/대외비.png"
+    assert manifest[0]["input"]["generation_target"][
+        "military_secret_grade"
+    ] is None
+    with fitz.open(str(manifest[0]["pdf"])) as document:
+        assert all(page.get_images(full=True) for page in document)
+
+
+def test_pipeline_keeps_first_ten_pages_after_natural_layout(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    payload["result"]["source_classification"]["document_type"] = "guide"
+    payload["result"]["generation_target"] = {
+        "classification": "C",
+        "clause_no": "2",
+        "subclause_key": "security_defense",
+        "generation_mode": "counterfactual",
+    }
+    document = payload["result"]["generated_document"]
+    document["agency_name"] = "행정안전부"
+    repeated = (
+        "장문 블록은 페이지 경계에서 문장 순서를 유지해야 하며 "
+        "앞뒤 블록과 겹치지 않고 다음 페이지로 자연스럽게 이어져야 합니다. "
+    )
+    document["title"] = "10페이지 절단 회귀 테스트"
+    document["body_text"] = None
+    document["blocks"] = [
+        {
+            "kind": "paragraph",
+            "block_id": f"stress-{index:03d}",
+            "text": (
+                f"[블록{index:03d}시작] {repeated * 5} "
+                f"[블록{index:03d}종료]"
+            ),
+        }
+        for index in range(1, 81)
+    ]
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={"guide_01_classic"},
+    )
+
+    assert len(manifest) == 1
+    entry = manifest[0]
+    assert entry["status"] == "ok"
+    assert entry["truncated"] is True
+    assert entry["original_page_count"] > 10
+    assert entry["retained_page_count"] == 10
+    assert entry["discarded_page_count"] == entry["original_page_count"] - 10
+    assert entry["actual_pages"] == 10
+    with fitz.open(str(entry["pdf"])) as document_pdf:
+        assert document_pdf.page_count == 10
+        assert all(page.get_images(full=True) for page in document_pdf)
+
+
+@pytest.mark.parametrize(
+    ("document_type", "template_slug"),
+    _PAGINATION_TEMPLATE_CASES,
+    ids=[slug for _, slug in _PAGINATION_TEMPLATE_CASES],
+)
+def test_every_template_keeps_dense_blocks_inside_page_bounds(
+    tmp_path: Path,
+    document_type: str,
+    template_slug: str,
+) -> None:
+    payload = _payload()
+    payload["result"]["source_classification"][
+        "document_type"
+    ] = document_type
+    document = payload["result"]["generated_document"]
+    repeated = (
+        "다중 블록 본문은 페이지 경계에서 순서를 유지해야 하며 "
+        "앞뒤 블록과 겹치거나 페이지 바깥으로 잘리면 안 됩니다. "
+    )
+    document["title"] = f"{template_slug} 전수 페이지 분할 테스트"
+    document["body_text"] = None
+    document["blocks"] = [
+        _dense_mixed_block(index, repeated)
+        for index in range(1, 81)
+    ]
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={template_slug},
+    )
+
+    assert len(manifest) == 1
+    entry = manifest[0]
+    assert entry["status"] == "ok"
+    assert entry["source_text_present"] is True
+    assert entry["source_text_validation_scope"] == "pre_truncation_pdf"
+    assert entry["truncated"] is True
+    assert entry["original_page_count"] > 10
+    assert entry["retained_page_count"] == 10
+    assert entry["discarded_page_count"] > 0
+
+    with fitz.open(str(entry["pdf"])) as rendered:
+        assert rendered.page_count == 10
+        retained_text = "\n".join(page.get_text() for page in rendered)
+        assert "중요내용" in retained_text
+        for page in rendered:
+            marker_blocks = [
+                block
+                for block in page.get_text("blocks", sort=False)
+                if int(block[6]) == 0
+                and re.search(r"\[블록\d{3}\]", str(block[4]))
+            ]
+            for block in marker_blocks:
+                rectangle = fitz.Rect(*block[:4])
+                assert rectangle.x0 >= -1
+                assert rectangle.y0 >= -1
+                assert rectangle.x1 <= page.rect.x1 + 1
+                assert rectangle.y1 <= page.rect.y1 + 1
+            for index, left in enumerate(marker_blocks):
+                left_rect = fitz.Rect(*left[:4])
+                for right in marker_blocks[index + 1 :]:
+                    right_rect = fitz.Rect(*right[:4])
+                    intersection = left_rect & right_rect
+                    if intersection.is_empty:
+                        continue
+                    overlap_ratio = intersection.get_area() / min(
+                        left_rect.get_area(),
+                        right_rect.get_area(),
+                    )
+                    assert overlap_ratio < 0.08
+
+
+def test_military_c_payload_requires_and_renders_explicit_grade(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    payload["result"]["generation_target"] = {
+        "classification": "C",
+        "clause_no": "2",
+        "subclause_key": "security_defense",
+        "generation_mode": "counterfactual",
+        "military_secret_grade": "2급",
+    }
+    payload["result"]["generated_document"]["agency_name"] = "국방부"
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={"03_internal_approval"},
+    )
+
+    marking = manifest[0]["security_marking"]
+    assert marking["kind"] == "military_secret"
+    assert marking["military_secret_grade"] == "2급"
+    assert marking["placement"]["strategy"] == "top_bottom_center"
+    with fitz.open(str(manifest[0]["pdf"])) as document:
+        assert all(len(page.get_images(full=True)) >= 2 for page in document)
+
+    payload["result"]["generation_target"].pop("military_secret_grade")
+    with pytest.raises(SecurityMarkingError, match="military_secret_grade"):
+        render_generation_payload(
+            payload,
+            tmp_path / "missing-grade",
+            per_template=1,
+            base_seed=20260803,
+            template_slugs={"03_internal_approval"},
+        )
+    assert not list((tmp_path / "missing-grade").rglob("*.pdf"))
+
+
+def test_long_source_validation_rejects_middle_corruption() -> None:
+    source = "가" * 48 + "원문중간구간" * 40 + "나" * 48
+    corrupted = "가" * 48 + "변조된중간구간" * 40 + "나" * 48
+
+    assert not _fragmentation_tolerant_text_present(
+        source,
+        _normalized(corrupted),
+    )
+
+
+def test_missing_source_error_does_not_echo_confidential_text(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "missing-source.pdf"
+    document = fitz.open()
+    page = document.new_page(width=595, height=842)
+    page.insert_text((72, 100), "렌더링된 공개 문장")
+    document.save(pdf_path)
+    document.close()
+    secret = "외부 로그에 남으면 안 되는 기밀 원문"
+
+    with pytest.raises(RenderedSourceTextError) as error:
+        validate_pdf_source_texts(pdf_path, (secret,))
+
+    assert secret not in str(error.value)
+
+
+def test_c_marking_failure_removes_unmarked_rendered_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    payload["result"]["generation_target"] = {
+        "classification": "C",
+        "clause_no": "2",
+        "subclause_key": "security_defense",
+        "generation_mode": "counterfactual",
+    }
+    payload["result"]["generated_document"]["agency_name"] = "행정안전부"
+    output_dir = tmp_path / "failed-marking"
+    monkeypatch.setattr(
+        security_marking,
+        "_CONFIDENTIAL_MARK_ASSET",
+        tmp_path / "missing-confidential-mark.png",
+    )
+
+    with pytest.raises(SecurityMarkingError, match="이미지가 없습니다"):
+        render_generation_payload(
+            payload,
+            output_dir,
+            per_template=1,
+            base_seed=20260803,
+            template_slugs={"01_classic_municipal"},
+        )
+
+    assert not list(output_dir.rglob("*.pdf"))
+    assert not list(output_dir.rglob("*.html"))
+
+
+def test_page_limit_batch_validates_all_pdfs_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_paths: list[Path] = []
+    for index in range(2):
+        pdf_path = tmp_path / f"batch-{index}.pdf"
+        document = fitz.open()
+        for page_number in range(12):
+            page = document.new_page(width=595, height=842)
+            page.insert_text((72, 100), f"batch {index} page {page_number}")
+        document.save(pdf_path)
+        document.close()
+        pdf_paths.append(pdf_path)
+
+    original_bytes = [path.read_bytes() for path in pdf_paths]
+    calls = 0
+
+    def validate_then_fail(_path: Path, _texts: tuple[str, ...]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RenderedSourceTextError("missing source")
+
+    monkeypatch.setattr(
+        paged_output,
+        "validate_pdf_source_texts",
+        validate_then_fail,
+    )
+    manifest = [
+        {"status": "ok", "pdf": str(pdf_path)}
+        for pdf_path in pdf_paths
+    ]
+
+    with pytest.raises(RenderedSourceTextError, match="missing source"):
+        finalize_manifest_page_limits(
+            manifest,
+            max_pages=10,
+            render_page_budget=1_000,
+            required_source_texts=("원문",),
+        )
+
+    assert [path.read_bytes() for path in pdf_paths] == original_bytes
+    assert all("truncated" not in entry for entry in manifest)
 
 
 def test_all_templates_render_typed_approval_stamps(tmp_path: Path) -> None:

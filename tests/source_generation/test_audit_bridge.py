@@ -411,7 +411,7 @@ def test_full_audit_publishes_v2_sidecar_and_common_manifest(tmp_path):
         output_dir / CLASSIFICATION_ARTIFACTS_FILENAME
     )
     assert loaded.metrics["document_count"] == 1
-    assert loaded.artifacts[0].contract_version == "2.2.0"
+    assert loaded.artifacts[0].contract_version == "2.3.0"
     assert result.common_manifest_sha256 == (
         __import__("hashlib")
         .sha256(result.common_manifest_path.read_bytes())

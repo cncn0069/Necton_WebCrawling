@@ -69,10 +69,10 @@ body {
 .meeting-blocks { width: 100%; }
 .meeting-block {
   break-inside: auto;
-  display: grid;
-  gap: 5mm;
-  grid-template-columns: 12mm minmax(0, 1fr);
+  display: block;
   margin: 0 0 var(--meeting-block-gap, 5mm);
+  padding-left: 17mm;
+  position: relative;
 }
 .block-index {
   border-top: .55mm solid #34383b;
@@ -81,6 +81,10 @@ body {
   font-weight: 700;
   min-height: 2mm;
   padding-top: 1.2mm;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12mm;
 }
 .block-content { min-width: 0; }
 .block-paragraph p {
@@ -91,11 +95,11 @@ body {
   widows: 3;
 }
 .key-value-grid {
-  display: grid;
+  display: block;
   margin: 0;
 }
 .key-value-grid > div {
-  break-inside: avoid;
+  break-inside: auto;
   border-bottom: .2mm solid #d0d3d5;
   min-width: 0;
   padding: 2.2mm 2.5mm;
@@ -120,7 +124,7 @@ body {
   padding-left: 5mm;
 }
 .meeting-list li {
-  break-inside: avoid;
+  break-inside: auto;
   margin: 0 0 1.4mm;
   padding-left: 3mm;
   position: relative;
@@ -149,7 +153,7 @@ table {
   width: 100%;
 }
 thead { display: table-header-group; }
-tr { break-inside: avoid; }
+tr { break-inside: auto; }
 th, td {
   border-bottom: .2mm solid #babfc2;
   line-height: 1.48;
@@ -308,12 +312,12 @@ td { font-size: .85em; }
   padding-bottom: 6mm;
 }
 .meeting-sequence .meeting-block {
-  gap: 4mm;
-  grid-template-columns: 8mm minmax(0, 1fr);
+  padding-left: 12mm;
 }
 .meeting-sequence .block-index {
   border-top-color: #8d9397;
   color: #666d71;
+  width: 8mm;
 }
 .meeting-sequence .block-key-value .key-value-grid > div {
   background: #f0f1f1;
@@ -345,6 +349,8 @@ td { font-size: .85em; }
   display: block;
   margin-bottom: 2mm;
   padding: 0;
+  position: static;
+  width: auto;
 }
 .meeting-columns .key-value-grid { grid-template-columns: 1fr; }
 .meeting-columns .meeting-list { column-count: 1; }

@@ -33,7 +33,7 @@ from rd2.source_generation.classification_taxonomy import (
     subclause_belongs_to_clause,
 )
 
-CONTRACT_SCHEMA_VERSION = "2.2.0"
+CONTRACT_SCHEMA_VERSION = "2.3.0"
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256Hex = Annotated[
@@ -303,7 +303,7 @@ DocumentBlock = (
 
 
 class GeneratedDocumentIR(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     title: NonEmptyText
     blocks: tuple[DocumentBlock, ...] = Field(min_length=1)
 
@@ -359,7 +359,7 @@ class SourcePage(ContractModel):
 
 
 class SourceDocumentSnapshot(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source: NonEmptyText
     manifest_key: NonEmptyText
@@ -409,7 +409,7 @@ class RelevanceCandidateBlock(ContractModel):
 
 
 class RelevanceSelectionRequest(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_sha256: Sha256Hex
     selection_config_sha256: Sha256Hex
@@ -430,7 +430,7 @@ class RelevanceSelectionRequest(ContractModel):
 
 
 class RelevanceSelectionResponse(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     selected_block_ids: tuple[NonEmptyText, ...] = Field(min_length=1)
     rationale: NonEmptyText
 
@@ -484,7 +484,7 @@ class InsertionPlan(ContractModel):
     91%). 문서를 달라고 하지 않으면 요약할 기회가 없다.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     slots: tuple[InsertionSlot, ...] = Field(min_length=1, max_length=8)
     rationale: NonEmptyText
 
@@ -512,7 +512,7 @@ class MaskFillResponse(ContractModel):
     없고, 표제부·붙임처럼 계약이 걸린 자리에서 실패할 여지가 없다.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     fills: tuple[MaskFill, ...] = Field(min_length=1)
     rationale: NonEmptyText
 
@@ -525,7 +525,7 @@ class MaskFillResponse(ContractModel):
 
 
 class DocumentSelection(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     policy_version: NonEmptyText
     method: SelectionMethod
     source_sha256: Sha256Hex
@@ -681,6 +681,9 @@ class TargetClassification(str, Enum):
     S = "S"
 
 
+MilitarySecretGrade = Literal["1급", "2급", "3급"]
+
+
 class GenerationMode(str, Enum):
     SOURCE_ALIGNED = "source_aligned"
     COUNTERFACTUAL = "counterfactual"
@@ -780,7 +783,7 @@ class SourceAssessment(ContractModel):
     결정론적 계획기가 ``GenerationPlan``을 만든다.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_classification: SourceClassification
     source_suitability: SourceSuitability
     business_context: NonEmptyText
@@ -854,9 +857,17 @@ class GenerationTarget(ContractModel):
     subclause_key: SubclauseKey | None = None
     administrative_statuses: tuple[AdminStatus, ...] = ()
     generation_mode: GenerationMode
+    military_secret_grade: MilitarySecretGrade | None = None
 
     @model_validator(mode="after")
     def _target_must_be_coherent(self) -> "GenerationTarget":
+        if (
+            self.military_secret_grade is not None
+            and self.classification != TargetClassification.C
+        ):
+            raise ValueError(
+                "military_secret_grade is only allowed for C targets"
+            )
         if len(self.administrative_statuses) != len(
             set(self.administrative_statuses)
         ):
@@ -896,7 +907,7 @@ PLANNER_POLICY_VERSION = "source-generation-planner-v3"
 class GenerationPlan(ContractModel):
     """판별 결과와 요청 target을 결합해 코드가 만드는 잠긴 생성 계획."""
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     requested_target: GenerationTarget
     final_target: GenerationTarget
     generation_route: GenerationRoute
@@ -1045,7 +1056,7 @@ class GenerationProvenance(ContractModel):
 class GenerationArtifact(ContractModel):
     """한 번의 생성 시도와 그 lineage를 보존하는 산출물."""
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     plan_sha256: Sha256Hex
     generated_document: GeneratedDocumentIR
     attempt_index: int = Field(ge=1)
@@ -1184,7 +1195,7 @@ class ConsistencyAssessment(LegalClassification):
     행정상태는 채점 대상이 아니다 — ``effective_classification()`` 참고.
     """
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     #: O로 판정했을 때만 채운다. 기본값이 비어 있으므로 과거 산출물도 그대로
     #: 읽힌다 — 계약 버전을 올리지 않는 이유다.
     near_miss: tuple[NearMissNote, ...] = ()
@@ -1564,7 +1575,7 @@ class ConsistencyComparison(ContractModel):
 
 
 class DocumentPipelineResult(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_assessment: SourceAssessment | None = None
     generation_plan: GenerationPlan | None = None
@@ -1635,7 +1646,7 @@ class DocumentPipelineResult(ContractModel):
 
 
 class ClassificationStageArtifact(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_assessment: SourceAssessment
     receipt: CallReceipt
 
@@ -1651,12 +1662,12 @@ class ClassificationStageArtifact(ContractModel):
 
 
 class PlanningStageArtifact(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     generation_plan: GenerationPlan
 
 
 class GenerationStageArtifact(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     generation_artifact: GenerationArtifact
     receipt: CallReceipt | None = None
 
@@ -1678,7 +1689,7 @@ class GenerationStageArtifact(ContractModel):
 
 
 class ValidationStageArtifact(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     generated_document_sha256: Sha256Hex
     consistency_assessment: SensitiveConsistencyAssessment | ConsistencyAssessment
     receipt: CallReceipt
@@ -1697,7 +1708,7 @@ class ValidationStageArtifact(ContractModel):
 class AuditStageArtifact(ContractModel):
     """정식 audit 산출물을 가리키는 작고 비민감한 journal artifact."""
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     audit_artifact_path: NonEmptyText
     audit_artifact_sha256: Sha256Hex
 
@@ -1707,7 +1718,7 @@ class JournalRecord(ContractModel):
     # classified -> planned -> generated -> validated -> audited
     # 실패 record는 마지막 성공 artifact를 지우지 않으며, resume은 그 다음
     # stage부터 시작한다.
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     run_id: NonEmptyText
     sequence: int = Field(ge=1)
     source_document_id: NonEmptyText
@@ -1805,7 +1816,7 @@ class SecurityMode(str, Enum):
 
 
 class RunManifest(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     taxonomy_version: Literal["source-generation-taxonomy-v3"] = TAXONOMY_VERSION
     run_id: NonEmptyText
     created_at: datetime

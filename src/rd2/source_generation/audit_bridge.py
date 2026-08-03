@@ -70,7 +70,7 @@ class AuditCoverageAssignment(ContractModel):
 
 
 class AuditBridgeDocument(ContractModel):
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     source_document_id: NonEmptyText
     source_manifest_key: NonEmptyText
     source_sha256: Sha256Hex
@@ -105,7 +105,7 @@ class AuditBridgeDocument(ContractModel):
 class ClassificationAuditArtifact(ContractModel):
     """Separate source/target/validation labels; generated body is absent."""
 
-    contract_version: Literal["2.2.0"] = CONTRACT_SCHEMA_VERSION
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
     bridge_version: Literal["source-generation-audit-bridge-v3"] = (
         AUDIT_BRIDGE_VERSION
     )
