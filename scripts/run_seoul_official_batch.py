@@ -378,7 +378,12 @@ def _iter_rds_items(
         yield SourceItem(
             snapshot=snapshot,
             title=row.title or extracted_title,
-            display_name=row.document_id,
+            # 산출물 파일명은 원본 파일명에서 온다
+            # (``generation_output_filename``). 행 식별자를 넘기면 PDF가
+            # ``alio-7269.pdf``가 되어 원본과 눈으로 짝지을 수 없다. 원문 행과의
+            # 연결은 파일명이 아니라 ``source_document_id``/``source_row_id``가
+            # 맡는다. 파일 없이 body_text로 만든 스냅샷만 행 식별자를 쓴다.
+            display_name=path.name if path is not None else row.document_id,
             row=row,
         )
 

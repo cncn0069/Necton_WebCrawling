@@ -266,3 +266,59 @@ def test_rds_items_accept_windows_separators_in_the_stored_path(tmp_path):
         batch._snapshot_from_pdf = original
 
     assert resolved == [pdf]
+
+
+def test_rds_items_keep_the_original_file_name_for_the_output(tmp_path, monkeypatch):
+    """산출물 파일명은 원본 파일명에서 온다(generation_output_filename).
+    행 식별자를 넘기면 PDF가 alio-7269.pdf가 되어 원본과 짝지을 수 없다."""
+
+    target = tmp_path / "molit" / "policy_material"
+    target.mkdir(parents=True)
+    pdf = target / "2026년 국민주택채권 업무편람.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    row = SourceRow(
+        id=4900,
+        source="molit",
+        body_file_path="molit/policy_material/2026년 국민주택채권 업무편람.pdf",
+    )
+
+    import scripts.run_seoul_official_batch as batch
+
+    def _fake_snapshot(path, *, source, doc_id=None):
+        snapshot, title = batch._snapshot_from_texts(
+            ["국민주택채권 업무편람의 적용 범위를 다음과 같이 정한다."],
+            source=source,
+            doc_id=doc_id or path.stem,
+            source_sha256="a" * 64,
+        )
+        return snapshot, title
+
+    monkeypatch.setattr(batch, "_snapshot_from_pdf", _fake_snapshot)
+    items = list(
+        _iter_rds_items([row], files_root=tmp_path, allow_body_text=False)
+    )
+
+    assert len(items) == 1
+    assert items[0].display_name == "2026년 국민주택채권 업무편람.pdf"
+    # 원문 행과의 연결은 파일명이 아니라 스냅샷 id가 맡는다.
+    assert items[0].snapshot.source_document_id == "molit-4900"
+
+
+def test_body_text_fallback_uses_the_row_identifier(tmp_path):
+    """파일이 없으면 쓸 원본 파일명도 없다."""
+
+    row = SourceRow(
+        id=4900,
+        source="molit",
+        body_text="\n".join(
+            f"{index}. 국민주택채권 업무 처리 기준을 다음과 같이 통보합니다."
+            for index in range(1, 5)
+        ),
+    )
+
+    items = list(
+        _iter_rds_items([row], files_root=tmp_path, allow_body_text=True)
+    )
+
+    assert items[0].display_name == "molit-4900"
