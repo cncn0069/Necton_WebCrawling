@@ -23,14 +23,14 @@ from scripts.render_generated_documents import render_input_file
 def _press_payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "press_release",
                 "classification": "O",
             },
             "generation_route": "fully_synthetic",
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "지역 문화공간 안전관리 지원 확대",
                 "agency_name": None,
                 "document_metadata": {
@@ -782,7 +782,7 @@ def test_rejected_manifest_removes_source_identity_and_metadata(
             template_slugs={"press_01_government_standard"},
             required_source_texts=("렌더 결과에 없는 검증값",),
             input_metadata={
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "document_type": "press_release",
                 "renderer_family": "press_release",
                 "generation_route": "fully_synthetic",

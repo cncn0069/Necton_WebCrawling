@@ -201,6 +201,7 @@ def build_variation_specs(
     *,
     count: int = 3,
     base_seed: int = 20260728,
+    start_offset: int = 0,
 ) -> list[VariationSpec]:
     """템플릿 하나에 대해 재현 가능한 변주 설정을 만든다."""
 
@@ -208,11 +209,13 @@ def build_variation_specs(
         raise ValueError(f"Unknown template slug: {template_slug}")
     if count < 1:
         raise ValueError("count must be at least 1")
+    if start_offset < 0:
+        raise ValueError("start_offset must be at least 0")
 
     template_number = int(template_slug.split("_", 1)[0])
     specs: list[VariationSpec] = []
 
-    for offset in range(count):
+    for offset in range(start_offset, start_offset + count):
         profile = PROFILES[offset % len(PROFILES)]
         seed = base_seed + template_number * 1000 + offset
         rng = random.Random(seed)

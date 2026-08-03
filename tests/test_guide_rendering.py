@@ -20,7 +20,7 @@ from rd2.generators.guide_rendering import (
 def _payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "guide",
                 "classification": "O",
@@ -33,7 +33,7 @@ def _payload() -> dict:
                 "generation_mode": "counterfactual",
             },
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "공공시설 안전점검 및 운영 지침",
                 "blocks": [
                     {

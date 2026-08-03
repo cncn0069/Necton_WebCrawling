@@ -60,9 +60,24 @@ python scripts/render_generated_documents.py input.json \
   --per-template 3
 ```
 
-기본값은 입력의 `result.source_classification.document_type`에 맞는 템플릿
-전체다. `research_report`는 연구보고서 3종, `press_release`는 보도자료
-3종, 공고 계열은 공고 서식 3종으로 라우팅한다.
+디렉터리를 넘기면 `.json`, `.jsonl`, `.txt`를 하위 디렉터리까지 읽어
+문서당 PDF 하나를 만든다.
+
+```bash
+python scripts/render_generated_documents.py data/render_inputs \
+  --output-dir output/pdf/generated_documents
+```
+
+디렉터리 실행은 `doc_type`별 사용 가능한 템플릿을 균등하게 배정하고,
+각 템플릿 안에서도 구조 변주 3종을 균등하게 섞는다. 실행마다 무작위 seed를
+만들어 `batch_manifest.json`에 기록하며, 같은 결과가 필요하면
+`--seed 20260730`처럼 고정한다. 2만 건을 넣어도 같은 `doc_type` 안의 템플릿
+사용 횟수 차이는 최대 1건이다.
+
+단일 파일의 기본값은 입력의
+`result.source_classification.document_type`에 맞는 템플릿 전체다.
+`research_report`는 연구보고서 3종, `press_release`는 보도자료 3종,
+공고 계열은 공고 서식 3종으로 라우팅한다.
 `--template press_01_government_standard`처럼 같은 문서 유형의 일부 템플릿만
 반복 지정할 수도 있다. `--per-template` 기본값은 1이므로 공고 계열은
 문서당 3개를 만들고, `--per-template 3`이면 3개 서식의 변주를 모두 만들어

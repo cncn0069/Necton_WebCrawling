@@ -17,14 +17,14 @@ from rd2.generators.generated_document_pipeline import (
 def _payload(document_type: str = "directive") -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": document_type,
                 "classification": "O",
             },
             "generation_route": "fully_synthetic",
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "위원회 운영 및 업무처리 규정 일부개정규정",
                 "agency_name": None,
                 "document_metadata": {

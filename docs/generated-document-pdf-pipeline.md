@@ -52,34 +52,56 @@ JSONL이다. 확장자가 `.txt`여도 내용 전체가 완전한 JSON 객체이
 수 있다. 일반 원문만 있는 `.txt`는 먼저 `result.generated_document` 계약 JSON으로
 감싼 뒤 실행한다.
 
+현재 생성 파이프라인의 v2 결과인 `source_assessment`, `generation_plan`,
+`generation_artifact` 구조도 바로 입력할 수 있다. 렌더러가 내부적으로
+`result` envelope로 투영하며 원문 내용은 변경하지 않는다.
+
 ## 디렉터리 안의 텍스트 파일 전부 실행
 
-아래 예시는 각 `.txt`에 완전한 생성 결과 JSON 객체 하나가 들어 있을 때 사용한다.
-파일별 출력 폴더를 분리하므로 manifest가 서로 덮어쓰이지 않는다.
+디렉터리를 입력하면 `.json`, `.jsonl`, `.txt`를 하위 디렉터리까지 찾아
+각 payload에서 PDF 하나만 만든다. `.txt`도 내용 전체가 완전한 생성 계약
+JSON이어야 한다.
 
 ```bash
-INPUT_DIR=data/render_inputs
-OUTPUT_DIR=output/pdf/generated_documents
-
-find "$INPUT_DIR" -type f -name '*.txt' -print0 |
-while IFS= read -r -d '' input_file; do
-  output_name="$(basename "$input_file" .txt)"
-  python scripts/render_generated_documents.py "$input_file" \
-    --output-dir "$OUTPUT_DIR/$output_name" \
-    --template 01_classic_municipal
-done
+python scripts/render_generated_documents.py data/render_inputs \
+  --output-dir output/pdf/generated_documents
 ```
 
-JSON 파일을 모두 실행할 때는 `-name '*.txt'`를 `-name '*.json'`으로 바꾼다.
-해당 문서 유형의 템플릿을 전부 만들려면 `--template` 줄을 제거한다. 같은
-템플릿의 변주를 여러 개 만들려면 `--per-template 3`처럼 지정한다.
+선택 규칙:
+
+- `result.source_classification.document_type`에 맞는 렌더러와 템플릿만
+  후보로 사용한다.
+- 같은 `doc_type` 안에서는 템플릿 사용 횟수 차이를 최대 1건으로 유지한다.
+- 각 템플릿 안에서도 구조 변주 1·2·3의 사용 횟수 차이를 최대 1건으로
+  유지한다.
+- 후보 순서는 실행 seed로 섞으므로 연속된 파일이 같은 서식에 몰리지 않는다.
+- `--seed`를 생략하면 매 실행 새 seed를 만들고
+  `batch_manifest.json`에 저장한다.
+- `--seed 20260730`처럼 값을 주면 파일 경로와 정렬 순서가 같을 때 선택 결과도
+  같아진다.
+- `--variation-count 1`, `2`, `3`으로 사용할 구조 변주 수를 제한할 수 있다.
+
+디렉터리 실행에서는 균등 분배를 위해 `--template`과 `--per-template`을
+사용하지 않는다. 단일 파일에 기존처럼 후보 전체를 생성할 때만 해당 옵션을
+사용한다.
+
+```bash
+python scripts/render_generated_documents.py data/render_inputs \
+  --output-dir output/pdf/generated_documents \
+  --seed 20260730 \
+  --variation-count 3
+```
+
+루트의 `batch_manifest.json`에는 실행 seed, 성공·거부 건수, 각 입력 파일의
+`doc_type`, 선택된 템플릿, 변주 번호, 출력 폴더가 기록된다. 개별 문서의
+`manifest.json`에도 같은 `batch_selection` 정보가 저장된다.
 
 ## 입력 규칙
 
 - 지원 block: `paragraph`, `key_value`, `bullet_list`, `table`,
   `attachment_reference`
 - `result.contract_version`과
-  `result.generated_document.contract_version`은 같은 `1.x.x` 값이어야 한다.
+  `result.generated_document.contract_version`은 같은 `2.x.x` 값이어야 한다.
 - `blocks`가 내용의 기준이다.
 - `body_text`를 같이 넣으면 blocks를 평탄화한 결과와 같아야 한다.
 - 입력의 `failure`가 null이 아니면 기본적으로 거부한다.

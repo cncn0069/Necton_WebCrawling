@@ -108,6 +108,9 @@ _ADMINISTRATIVE_RULE_LABELS = {
     SemanticDocumentType.REGULATION: "예규",
     SemanticDocumentType.NOTIFICATION: "고시",
 }
+_ADMINISTRATIVE_RULE_TYPES = frozenset(
+    document_type.value for document_type in _ADMINISTRATIVE_RULE_LABELS
+)
 _ARTICLE_RE = re.compile(
     r"^(제\s*\d+\s*조(?:\([^)]*\))?)\s*(.*)$",
     re.DOTALL,
@@ -131,6 +134,28 @@ def _is_verbatim(envelope: "GenerationEnvelope") -> bool:
     if envelope.result.generation_route == MASK_RESTORATION_ROUTE:
         return True
     return bool(getattr(envelope.result, VERBATIM_RENDER_KEY, False))
+
+
+def renderer_family_for_document_type(document_type: str | None) -> str:
+    """분류값을 실제 렌더러 계열로 변환한다."""
+
+    if document_type == "research_report":
+        return "research_report"
+    if document_type == "press_release":
+        return "press_release"
+    if document_type in _ADMINISTRATIVE_RULE_TYPES:
+        return "administrative_rule"
+    if document_type == SemanticDocumentType.INTERPRETATION_COMPILATION.value:
+        return "interpretation_compilation"
+    if document_type == SemanticDocumentType.GUIDE.value:
+        return "guide"
+    if document_type == "status_report":
+        return "status_report"
+    if document_type == "meeting_minutes":
+        return "meeting_minutes"
+    if document_type in _NOTICE_DOCUMENT_TYPES:
+        return "notice"
+    return "official_document"
 
 
 class GeneratedDocumentPipelineError(ValueError):
@@ -1367,6 +1392,7 @@ def render_generation_payload(
     allow_failed: bool = False,
     per_template: int = 1,
     base_seed: int | None = None,
+    variation_offset: int = 0,
     template_slugs: set[str] | None = None,
 ) -> list[dict[str, object]]:
     """생성 계약 하나를 document_type 전용 템플릿 PDF로 렌더링한다."""
@@ -1388,24 +1414,8 @@ def render_generation_payload(
         # 원문을 그대로 옮긴 산출물이다 — 어느 템플릿 가족에도 속하지 않는다.
         # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
         renderer_family = "verbatim"
-    elif document_type == "research_report":
-        renderer_family = "research_report"
-    elif document_type == "press_release":
-        renderer_family = "press_release"
-    elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
-        renderer_family = "administrative_rule"
-    elif document_type_enum == SemanticDocumentType.INTERPRETATION_COMPILATION:
-        renderer_family = "interpretation_compilation"
-    elif document_type_enum == SemanticDocumentType.GUIDE:
-        renderer_family = "guide"
-    elif document_type == "status_report":
-        renderer_family = "status_report"
-    elif document_type == "meeting_minutes":
-        renderer_family = "meeting_minutes"
-    elif document_type in _NOTICE_DOCUMENT_TYPES:
-        renderer_family = "notice"
     else:
-        renderer_family = "official_document"
+        renderer_family = renderer_family_for_document_type(document_type)
     input_metadata = {
         "contract_version": envelope.result.contract_version,
         "document_type": document_type,
@@ -1438,6 +1448,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(
                 document,
@@ -1453,6 +1464,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(
                 document,
@@ -1468,6 +1480,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(document),
             max_pages=ADMINISTRATIVE_RULE_MAX_PAGES,
@@ -1479,6 +1492,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(document),
             max_pages=INTERPRETATION_COMPILATION_MAX_PAGES,
@@ -1490,6 +1504,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(document),
             max_pages=GUIDE_MAX_PAGES,
@@ -1501,6 +1516,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(
                 document,
@@ -1516,6 +1532,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(
                 document,
@@ -1531,6 +1548,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             template_slugs=template_slugs,
             required_source_texts=source_text_atoms(
                 document,
@@ -1546,6 +1564,7 @@ def render_generation_payload(
             output_dir,
             per_template=per_template,
             base_seed=seed,
+            variation_offset=variation_offset,
             identity_seed=seed,
             template_slugs=template_slugs,
             protected_context_keys=_CONTENT_CONTEXT_KEYS,
@@ -1563,5 +1582,3 @@ def render_generation_payload(
         encoding="utf-8",
     )
     return manifest
-
-

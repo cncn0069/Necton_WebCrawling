@@ -29,14 +29,14 @@ _NOTICE_TYPES = {
 def _notice_payload(document_type: str = "bid_notice") -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": document_type,
                 "classification": "S",
             },
             "generation_route": "fully_synthetic",
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "공공시설 사용·수익허가 대상자 선정 공고",
                 "agency_name": None,
                 "blocks": [

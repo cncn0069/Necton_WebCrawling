@@ -21,14 +21,14 @@ from scripts.render_generated_documents import render_input_file
 def _payload() -> dict:
     return {
         "result": {
-            "contract_version": "1.0.0",
+            "contract_version": "2.0.0",
             "source_classification": {
                 "document_type": "meeting_minutes",
                 "classification": "O",
             },
             "generation_route": "fully_synthetic",
             "generated_document": {
-                "contract_version": "1.0.0",
+                "contract_version": "2.0.0",
                 "title": "2026년 제2차 지역교통 개선협의회 회의록",
                 "agency_name": "입력기관명보존원",
                 "document_metadata": None,
