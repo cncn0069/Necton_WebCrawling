@@ -11,6 +11,7 @@ from rd2.extraction import hwp_text, storage
 from rd2.extraction.hwp_text import extract_hwp_document
 from rd2.extraction.pdf_text import _physical_line_payload, extract_pdf_document
 from rd2.extraction.pipeline import (
+    OCR_QUEUE_MANIFEST_NAME,
     RUN_MANIFEST_NAME,
     iter_source_documents,
     process_document,
@@ -53,6 +54,16 @@ def _make_two_line_pdf(path: Path) -> None:
 def _make_blank_pdf(path: Path) -> None:
     document = pymupdf.open()
     document.new_page(width=200, height=160)
+    document.save(path)
+    document.close()
+
+
+def _make_pdf_with_page_texts(path: Path, page_texts: list[str | None]) -> None:
+    document = pymupdf.open()
+    for text in page_texts:
+        page = document.new_page(width=200, height=160)
+        if text is not None:
+            page.insert_text((20, 40), text, fontsize=10)
     document.save(path)
     document.close()
 
@@ -105,8 +116,14 @@ def test_pdf_v2_schema_stores_physical_lines_and_rounded_geometry(tmp_path: Path
         "needs_quarantine",
         "pages_needing_ocr",
         "avg_chars_per_page",
+        "sparse_page_count",
+        "sparse_page_ratio",
+        "ocr_severity",
         "warnings",
     }
+    assert payload["quality"]["sparse_page_count"] == 0
+    assert payload["quality"]["sparse_page_ratio"] == 0.0
+    assert payload["quality"]["ocr_severity"] == "clean"
 
     page = payload["pages"][0]
     assert set(page) == {"page", "width_pt", "height_pt", "rotation", "lines"}
@@ -202,7 +219,60 @@ def test_blank_pdf_is_a_successful_needs_ocr_snapshot(tmp_path: Path):
     assert payload["quality"]["needs_ocr"] is True
     assert payload["quality"]["needs_quarantine"] is False
     assert payload["quality"]["pages_needing_ocr"] == [1]
+    assert payload["quality"]["sparse_page_count"] == 1
+    assert payload["quality"]["sparse_page_ratio"] == 1.0
+    assert payload["quality"]["ocr_severity"] == "image_pdf_candidate"
+    assert payload["quality"]["warnings"] == ["image_pdf_candidate"]
     assert payload["pages"][0]["lines"] == []
+
+
+def test_pdf_with_less_than_half_sparse_pages_stays_readable(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "partial.pdf")
+    _make_pdf_with_page_texts(
+        source_path,
+        [None, "enough text on page two", "enough text on page three"],
+    )
+
+    payload = extract_pdf_document(source_path, data_root=data_root)
+
+    assert payload["status"] == "ok"
+    assert payload["quality"]["needs_ocr"] is False
+    assert payload["quality"]["pages_needing_ocr"] == [1]
+    assert payload["quality"]["sparse_page_ratio"] == 0.3333
+    assert payload["quality"]["ocr_severity"] == "partial_text"
+    assert payload["quality"]["warnings"] == ["partial_text_layer"]
+
+
+def test_pdf_with_half_sparse_pages_needs_ocr(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "majority-threshold.pdf")
+    _make_pdf_with_page_texts(
+        source_path,
+        [None, None, "enough text on page three", "enough text on page four"],
+    )
+
+    payload = extract_pdf_document(source_path, data_root=data_root)
+
+    assert payload["status"] == "needs_ocr"
+    assert payload["quality"]["needs_ocr"] is True
+    assert payload["quality"]["sparse_page_ratio"] == 0.5
+    assert payload["quality"]["ocr_severity"] == "needs_ocr"
+    assert payload["quality"]["warnings"] == ["majority_sparse_pages"]
+
+
+def test_pdf_with_ninety_percent_sparse_pages_is_image_candidate(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "image-candidate.pdf")
+    _make_pdf_with_page_texts(
+        source_path,
+        [None] * 9 + ["one page still has enough extractable text"],
+    )
+
+    payload = extract_pdf_document(source_path, data_root=data_root)
+
+    assert payload["status"] == "needs_ocr"
+    assert payload["quality"]["has_text_layer"] is True
+    assert payload["quality"]["sparse_page_ratio"] == 0.9
+    assert payload["quality"]["ocr_severity"] == "image_pdf_candidate"
+    assert payload["quality"]["warnings"] == ["image_pdf_candidate"]
 
 
 def test_encrypted_pdf_is_serialized_as_quarantined_error(tmp_path: Path):
@@ -241,8 +311,14 @@ def test_hwp_v2_uses_one_logical_page_with_null_geometry(tmp_path: Path, monkeyp
         "needs_quarantine",
         "pages_needing_ocr",
         "avg_chars_per_page",
+        "sparse_page_count",
+        "sparse_page_ratio",
+        "ocr_severity",
         "warnings",
     }
+    assert payload["quality"]["sparse_page_count"] == 0
+    assert payload["quality"]["sparse_page_ratio"] == 0.0
+    assert payload["quality"]["ocr_severity"] == "clean"
     page = payload["pages"][0]
     assert (page["width_pt"], page["height_pt"], page["rotation"]) == (None, None, None)
     assert [line["text"] for line in page["lines"]] == ["첫 문단", "둘째 문단"]
@@ -269,6 +345,9 @@ def test_hwp_v2_marks_little_or_no_text_as_needing_ocr(tmp_path: Path, monkeypat
     assert payload["quality"]["needs_ocr"] is True
     assert payload["quality"]["needs_quarantine"] is False
     assert payload["quality"]["pages_needing_ocr"] == [1]
+    assert payload["quality"]["sparse_page_count"] == 1
+    assert payload["quality"]["sparse_page_ratio"] == 1.0
+    assert payload["quality"]["ocr_severity"] == "needs_ocr"
     assert payload["quality"]["warnings"] == ["little_or_no_text"]
     assert payload["pages"][0]["lines"] == []
 
@@ -479,6 +558,40 @@ def test_run_manifest_records_deterministic_success_and_skip_artifacts(tmp_path:
 
     assert second_manifest["counts"]["skipped"] == 2
     assert second_manifest["artifacts"] == first_manifest["artifacts"]
+
+
+def test_run_extraction_writes_reference_only_ocr_queue_manifest(tmp_path: Path):
+    data_root, blank_source = _source_path(tmp_path, "blank.pdf")
+    _, readable_source = _source_path(tmp_path, "readable.pdf")
+    extracted_root = data_root / "extracted"
+    ocr_queue_root = data_root / "ocr_queue"
+    _make_blank_pdf(blank_source)
+    _make_two_line_pdf(readable_source)
+
+    manifest = run_extraction(
+        [readable_source, blank_source],
+        data_root=data_root,
+        extracted_root=extracted_root,
+        ocr_queue_root=ocr_queue_root,
+    )
+
+    queue = read_json_gz(ocr_queue_root / OCR_QUEUE_MANIFEST_NAME)
+    assert queue["source_run_id"] == manifest["run_id"]
+    assert queue["source_run_status"] == "complete"
+    assert queue["count"] == 1
+    assert queue["entries"] == [
+        {
+            "source_path": "data/moe/report/blank.pdf",
+            "output_path": "moe/report/blank.pdf.json.gz",
+            "extraction_id": manifest["artifacts"][0]["extraction_id"],
+            "source_format": "pdf",
+            "has_text_layer": False,
+            "sparse_page_ratio": 1.0,
+            "ocr_severity": "image_pdf_candidate",
+            "pages_needing_ocr": [1],
+        }
+    ]
+    assert list(ocr_queue_root.glob("*.pdf.json.gz")) == []
 
 
 def test_cli_limit_slices_deterministically_ordered_documents(tmp_path: Path, monkeypatch):

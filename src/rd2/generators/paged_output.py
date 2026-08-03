@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
+import unicodedata
 from uuid import uuid4
 
 import fitz
@@ -25,8 +26,35 @@ class PageLimitResult:
         return asdict(self)
 
 
+_PDF_TEXT_EQUIVALENTS = str.maketrans(
+    {
+        # HWP 원문에서 쓰는 가운뎃점이 Pango/PDF 텍스트 추출을 거치며
+        # U+00B7로 바뀐다. 화면에 보이는 글자는 같으므로 검증에서만 같은
+        # 문자로 취급한다.
+        "・": "·",
+        "․": "·",
+        "‧": "·",
+    }
+)
+
+# 표 셀이나 짧은 문단이 페이지 경계에서 갈라지면 PDF 텍스트에는 두 조각
+# 사이로 반복 머리말·쪽번호가 들어온다. 80자 이상에 쓰는 무제한 부분수열
+# 검사를 짧은 값에 그대로 적용하면 흔한 단어 조합이 문서 전체에 흩어져 있어도
+# 통과할 수 있으므로, 중간 길이 값은 한 페이지 경계 분량의 삽입만 허용한다.
+_MIN_BOUNDED_FRAGMENT_CHARACTERS = 20
+_MAX_BOUNDED_INSERTED_CHARACTERS = 256
+
+
 def _normalized(value: str) -> str:
-    return "".join(value.split())
+    translated = value.translate(_PDF_TEXT_EQUIVALENTS)
+    return "".join(
+        character
+        for character in translated
+        if not character.isspace()
+        # HWP 추출본에 남은 \x01 같은 필드 구분자는 화면에 그려지는
+        # 문자가 아니다. PDF에서 사라졌다는 이유로 본문 누락으로 세지 않는다.
+        and unicodedata.category(character) != "Cc"
+    )
 
 
 def _fragmentation_tolerant_text_present(
@@ -35,9 +63,9 @@ def _fragmentation_tolerant_text_present(
 ) -> bool:
     """반복 머리말이 끼어도 원문 전체가 순서대로 남았는지 검증한다.
 
-    페이지 분할 시 PDF 텍스트 추출 순서에는 머리말·쪽번호가 긴 문단 사이에
-    삽입될 수 있다. 짧은 값은 기존처럼 완전 일치를 요구하고, 긴 값은 PDF에
-    추가 문자가 삽입되는 것만 허용하는 부분수열 검사로 중간 원문까지 확인한다.
+    페이지 분할 시 PDF 텍스트 추출 순서에는 머리말·쪽번호가 문단이나 표 셀
+    사이에 삽입될 수 있다. 짧은 값은 완전 일치, 중간 길이는 제한된 범위의
+    삽입, 긴 값은 순서를 보존하는 부분수열 검사로 중간 원문까지 확인한다.
     """
 
     normalized = _normalized(value)
@@ -45,7 +73,23 @@ def _fragmentation_tolerant_text_present(
         return True
     if normalized in normalized_pdf_text:
         return True
+    if len(normalized) < _MIN_BOUNDED_FRAGMENT_CHARACTERS:
+        return False
+
     if len(normalized) < 80:
+        maximum_span = len(normalized) + _MAX_BOUNDED_INSERTED_CHARACTERS
+        start = normalized_pdf_text.find(normalized[0])
+        while start >= 0:
+            source_index = 1
+            for character in normalized_pdf_text[
+                start + 1 : start + maximum_span
+            ]:
+                if character != normalized[source_index]:
+                    continue
+                source_index += 1
+                if source_index == len(normalized):
+                    return True
+            start = normalized_pdf_text.find(normalized[0], start + 1)
         return False
 
     source_index = 0
