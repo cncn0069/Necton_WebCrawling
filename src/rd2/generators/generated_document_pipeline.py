@@ -1525,10 +1525,7 @@ def render_generation_payload(
     )
     if generation_target is not None:
         generation_target.setdefault("military_secret_grade", None)
-    security_marking = resolve_security_marking(
-        generation_target,
-        agency_name=document.agency_name,
-    )
+    security_marking = resolve_security_marking(generation_target)
     if _is_verbatim(envelope):
         # 원문을 그대로 옮긴 산출물이다 — 어느 템플릿 가족에도 속하지 않는다.
         # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
@@ -1702,8 +1699,7 @@ def render_generation_payload(
         apply_security_marking_to_manifest(
             manifest,
             target=generation_target,
-            agency_name=document.agency_name,
-            content_sha256=content_sha256,
+            selection_seed=seed,
         )
 
         # 보안표지는 위에서 status="ok"인 산출물에 먼저 적용한다. 게시 상한을
@@ -1719,6 +1715,7 @@ def render_generation_payload(
                     artifact_path = entry.get(key)
                     if isinstance(artifact_path, str) and artifact_path:
                         Path(artifact_path).unlink(missing_ok=True)
+            (output_dir / "manifest.json").unlink(missing_ok=True)
         raise
 
     for entry in manifest:

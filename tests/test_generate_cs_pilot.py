@@ -1079,6 +1079,77 @@ class TestUniquePdfOutputPath:
         assert path_b.name == "대북_접경지역_군사대비태세_강화_2.pdf"
 
 
+def test_only_clauses_1_to_4_use_whitelist_agency_fallback():
+    assert all(
+        pilot._uses_whitelist_agency_fallback(clause_no)
+        for clause_no in ("1", "2", "3", "4")
+    )
+    assert all(
+        not pilot._uses_whitelist_agency_fallback(clause_no)
+        for clause_no in ("5", "6", "7", "8")
+    )
+
+
+def test_deprecated_agency_logo_column_preserves_resume_csv_alignment(tmp_path):
+    adjacent_columns = (
+        "military_secret_grade",
+        "agency_logo_filename",
+        "military_secret_content_notice",
+        "reclassification_json",
+    )
+    start = pilot.CSV_FIELDNAMES.index("military_secret_grade")
+    assert tuple(pilot.CSV_FIELDNAMES[start : start + 4]) == adjacent_columns
+
+    csv_path = tmp_path / "legacy-resume.csv"
+    row = {name: "" for name in pilot.CSV_FIELDNAMES}
+    row.update(
+        {
+            "row_id": "2-fallback-legacy",
+            "military_secret_grade": "2급",
+            "military_secret_content_notice": "true",
+            "reclassification_json": '{"old_grade":"1급"}',
+        }
+    )
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=pilot.CSV_FIELDNAMES)
+        writer.writeheader()
+        writer.writerow(row)
+
+    with csv_path.open(encoding="utf-8", newline="") as f:
+        resumed = next(csv.DictReader(f))
+
+    assert resumed["agency_logo_filename"] == ""
+    assert resumed["military_secret_content_notice"] == "true"
+    assert resumed["reclassification_json"] == '{"old_grade":"1급"}'
+
+
+def test_atomic_pdf_publish_does_not_leave_uncovered_military_pdf(
+    tmp_path,
+    monkeypatch,
+):
+    output_path = tmp_path / "military.pdf"
+
+    def fake_render(_row, _category, staged_path, **_kwargs):
+        staged_path.write_bytes(b"%PDF-uncovered")
+
+    def fail_cover(_path, _grade):
+        raise RuntimeError("cover failed")
+
+    monkeypatch.setattr(pilot, "render_document_pdf", fake_render)
+    monkeypatch.setattr(pilot, "prepend_military_secret_cover", fail_cover)
+
+    with pytest.raises(RuntimeError, match="cover failed"):
+        pilot._render_pdf_atomically(
+            {},
+            "central_government",
+            output_path,
+            military_secret_grade="1급",
+        )
+
+    assert not output_path.exists()
+    assert not list(tmp_path.glob(".*.staged.pdf"))
+
+
 class TestRenderPdfsForCsv:
     def _write_sample_csv(self, csv_path):
         rows = [
@@ -1132,59 +1203,10 @@ class TestRenderPdfsForCsv:
         # 2026-07-21 사용자 결정: PDF 파일명은 row_id가 아니라 문서 제목(title)
         # 기반이어야 한다 — row_id는 여전히 CSV 컬럼으로만 남는다.
         assert (pdf_dir / "테스트_문서.pdf").exists()  # S — 마크 없음
-        assert (pdf_dir / "합성_폴백_문서.pdf").exists()  # C — 워터마크+스탬프+기관마크 적용
+        assert (pdf_dir / "합성_폴백_문서.pdf").exists()  # C — 분류표시 적용
         assert (pdf_dir / "_stamp_confidential.png").exists()
-        # 워터마크/좌상단 기관마크는 기관 로고 파일명별 캐시 파일로 생성된다 —
-        # agency_logo_filename이 비어 있으면 정부부처 공용 마크로 폴백하므로
-        # C 행이 하나뿐이면 정확히 1개씩 생겨야 한다.
-        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
-        assert len(watermark_files) == 1
-        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
-        assert len(letterhead_files) == 1
-
-    def test_watermark_cache_reused_across_c_rows_sharing_same_agency_logo(self, tmp_path):
-        """워터마크/기관마크는 기관 로고 파일명별로 캐시된다 — 같은 로고를 쓰는
-        행끼리는 재사용하고, 다른 로고는 별도 파일을 만든다."""
-        csv_path = tmp_path / "cs_pilot_output.csv"
-        logo_filenames = ["국정원.png"] * 3 + ["정부부처.png"] * 2
-        rows = []
-        for i, logo_filename in enumerate(logo_filenames):
-            row = {name: "" for name in pilot.CSV_FIELDNAMES}
-            row.update(
-                {
-                    "row_id": f"1-fallback-{i}",
-                    "seed_type": "synthetic_fallback",
-                    "clause_no": "1",
-                    "cso_classification": "C",
-                    "title": f"합성 폴백 문서 {i}",
-                    "ordering_agency": "실제기관명",
-                    "body_text": "폴백 본문입니다.",
-                    "status": "ok",
-                    "agency_logo_filename": logo_filename,
-                }
-            )
-            rows.append(row)
-        with csv_path.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=pilot.CSV_FIELDNAMES)
-            writer.writeheader()
-            writer.writerows(rows)
-
-        pdf_dir = tmp_path / "pdfs"
-        # pre_mark_ratio=0.0: 이 테스트는 로고별 워터마크/레터헤드 캐시 재사용만
-        # 검증한다 — 마크없는 변형(DEFAULT_PRE_MARK_RATIO=1.0)은 별도 테스트에서 다룬다.
-        rendered, inserted, dup_skipped, rds_errors = pilot.render_pdfs_for_csv(
-            csv_path, pdf_dir, sampling_seed=42, pre_mark_ratio=0.0
-        )
-
-        assert rendered == 5
-        assert inserted == 0
-        assert dup_skipped == 0
-        assert rds_errors == 0
-        # 로고는 2종류(국정원/정부부처)뿐이므로 캐시가 재사용되면 파일도 2개여야 한다.
-        watermark_files = list(pdf_dir.glob("_watermark_*.png"))
-        assert len(watermark_files) == 2
-        letterhead_files = list(pdf_dir.glob("_letterhead_*.png"))
-        assert len(letterhead_files) == 2
+        assert not list(pdf_dir.glob("_watermark_*.png"))
+        assert not list(pdf_dir.glob("_letterhead_*.png"))
 
     def test_rejects_row_id_path_traversal(self, tmp_path):
         csv_path = tmp_path / "unsafe.csv"

@@ -1,8 +1,7 @@
 import pytest
 
 from rd2.generators.security_mark import (
-    generate_agency_letterhead_mark,
-    generate_agency_watermark,
+    SYNTHETIC_SECURITY_STAMP_LABELS,
     generate_classification_stamp,
     generate_military_secret_content_notice,
     generate_military_secret_mark,
@@ -10,6 +9,7 @@ from rd2.generators.security_mark import (
     generate_reclassification_notice,
     generate_reclassification_old_mark,
     generate_security_mark,
+    generate_synthetic_security_stamp,
 )
 
 
@@ -36,6 +36,36 @@ class TestGenerateClassificationStamp:
         nested = tmp_path / "nested" / "dir" / "stamp.png"
         output = generate_classification_stamp(nested, seed=1)
         assert output.exists()
+
+
+class TestGenerateSyntheticSecurityStamp:
+    def test_creates_each_supported_monochrome_stamp(self, tmp_path):
+        outputs = []
+        for label in SYNTHETIC_SECURITY_STAMP_LABELS:
+            output = generate_synthetic_security_stamp(
+                tmp_path / f"{label.replace(' ', '_').lower()}.png",
+                label,
+            )
+            assert output.exists()
+            assert output.stat().st_size > 0
+            outputs.append(output.read_bytes())
+
+        assert len(set(outputs)) == len(SYNTHETIC_SECURITY_STAMP_LABELS)
+
+    def test_normalizes_case_and_spacing_deterministically(self, tmp_path):
+        a = generate_synthetic_security_stamp(
+            tmp_path / "a.png",
+            " confidential ",
+        )
+        b = generate_synthetic_security_stamp(
+            tmp_path / "b.png",
+            "CONFIDENTIAL",
+        )
+        assert a.read_bytes() == b.read_bytes()
+
+    def test_rejects_unregistered_label(self, tmp_path):
+        with pytest.raises(ValueError, match="알 수 없는 가상 보안"):
+            generate_synthetic_security_stamp(tmp_path / "x.png", "CLASSIFIED")
 
 
 class TestGeneratePageWatermark:
@@ -82,42 +112,6 @@ class TestGenerateMilitarySecretMark:
     def test_unknown_grade_raises(self, tmp_path):
         with pytest.raises(ValueError, match="알 수 없는 군사기밀 등급"):
             generate_military_secret_mark(tmp_path / "x.png", "4급", seed=1)
-
-
-class TestGenerateAgencyLetterheadMark:
-    def test_creates_png_file(self, tmp_path):
-        output = generate_agency_letterhead_mark(tmp_path / "mark.png", "국정원.png", seed=1)
-        assert output.exists()
-        assert output.suffix == ".png"
-        assert output.stat().st_size > 0
-
-    def test_different_logos_produce_different_images(self, tmp_path):
-        a = generate_agency_letterhead_mark(tmp_path / "a.png", "국정원.png", seed=1)
-        b = generate_agency_letterhead_mark(tmp_path / "b.png", "정부부처.png", seed=1)
-        assert a.read_bytes() != b.read_bytes()
-
-    def test_creates_parent_directory_if_missing(self, tmp_path):
-        nested = tmp_path / "nested" / "dir" / "mark.png"
-        output = generate_agency_letterhead_mark(nested, "정부부처.png", seed=1)
-        assert output.exists()
-
-
-class TestGenerateAgencyWatermark:
-    def test_creates_png_file(self, tmp_path):
-        output = generate_agency_watermark(tmp_path / "wm.png", "국정원.png", seed=1)
-        assert output.exists()
-        assert output.suffix == ".png"
-        assert output.stat().st_size > 0
-
-    def test_different_logos_produce_different_images(self, tmp_path):
-        a = generate_agency_watermark(tmp_path / "a.png", "국정원.png", seed=1)
-        b = generate_agency_watermark(tmp_path / "b.png", "정부부처.png", seed=1)
-        assert a.read_bytes() != b.read_bytes()
-
-    def test_creates_parent_directory_if_missing(self, tmp_path):
-        nested = tmp_path / "nested" / "dir" / "wm.png"
-        output = generate_agency_watermark(nested, "정부부처.png", seed=1)
-        assert output.exists()
 
 
 class TestGenerateSecurityMarkAlias:

@@ -17,9 +17,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
+
+import fitz
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -28,8 +32,6 @@ from _common import ensure_src_on_path
 
 ensure_src_on_path()
 
-import random
-
 from rd2.generators.agency_categories import get_agency_category  # noqa: E402
 from rd2.generators.agency_resolver import (  # noqa: E402
     is_military_secret_agency,
@@ -37,6 +39,7 @@ from rd2.generators.agency_resolver import (  # noqa: E402
     select_whitelisted_agency,
 )
 from rd2.generators.doc_templates import TEMPLATE_VARIANTS, find_template, validate_row  # noqa: E402
+from rd2.generators.document_security_marking import prepend_military_secret_cover  # noqa: E402
 from rd2.generators.template_matrix import TEMPLATE_TARGETS  # noqa: E402
 from rd2.generators.pdf_render import render_document_pdf  # noqa: E402
 from rd2.generators.security_mark import (  # noqa: E402
@@ -316,7 +319,7 @@ SAMPLES: tuple[TemplateSample, ...] = (
     TemplateSample(
         template_id="T3-1", filename="T3-1_public_safety.pdf",
         row=_row(row_id="template-t3-1", clause_no="3", doc_type=DOC_TYPE_REPORT,
-            title="다중이용시설 안전 취약요인 점검보고", agency="정부부처", department="안전점검과",
+            title="다중이용시설 안전 취약요인 점검보고", agency="행정안전부", department="안전점검과",
             body_text="다중이용시설의 보호 대상과 안전 취약요인을 점검함.\n세부 취약정보 공개가 국민의 생명·신체 보호에 미칠 위험과 제한 범위를 검토함.",
             reason="제9조 제1항 제3호: 국민의 생명·신체 보호 지장 우려", document_status="내부검토중", classification="C"),
         sources=(_OFFICIAL_FORM_SOURCE,), provenance_level="partial_structural_reference",
@@ -1243,10 +1246,9 @@ def _expanded_samples() -> tuple[TemplateSample, ...]:
             classification = "C" if target.clause_no in {"1", "2", "3", "4"} else "S"
             # 2026-07-21 plan-eng-review: SAMPLES에 손으로 정의 안 된 템플릿 타겟은
             # 예전엔 가상 기관명("가온행정기관")을 썼다 — 실존하지 않는 이름이라 R3
-            # 위반. select_whitelisted_agency는 1~4호는 조항별 화이트리스트에서,
-            # 그 외/미매칭 조항은 실존하는 generic "정부부처"로 고른다. template_id로
-            # 시드를 고정해 같은 템플릿은 재실행해도 같은 기관명이 나온다.
-            fallback_agency, _logo = select_whitelisted_agency(
+            # 위반. select_whitelisted_agency는 조항별 실존 기관 풀에서 고른다.
+            # template_id로 시드를 고정해 같은 템플릿은 재실행해도 같은 기관명이 나온다.
+            fallback_agency = select_whitelisted_agency(
                 target.clause_no, random.Random(target.template_id)
             )
             base = TemplateSample(
@@ -1315,9 +1317,14 @@ def _verify_samples(*, require_source_files: bool = False) -> None:
                     raise RuntimeError(f"{sample.template_id}: 원본 참조 파일 없음: {source.path}")
 
 
-def _manifest_entry(sample: TemplateSample, output_path: Path) -> dict:
+def _manifest_entry(
+    sample: TemplateSample,
+    output_path: Path,
+    *,
+    military_secret_grade: str | None = None,
+) -> dict:
     row = sample.row
-    return {
+    entry = {
         "template_id": sample.template_id,
         "sample_pdf": output_path.name,
         "sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
@@ -1331,6 +1338,20 @@ def _manifest_entry(sample: TemplateSample, output_path: Path) -> dict:
         "source_documents": [source.as_dict() for source in sample.sources],
         "synthetic_content": True,
     }
+    if military_secret_grade is not None:
+        with fitz.open(output_path) as document:
+            final_pdf_page_count = document.page_count
+        entry["security_marking"] = {
+            "kind": "military_secret",
+            "military_secret_grade": military_secret_grade,
+            "cover_asset": (
+                f"logo/{military_secret_grade}_비밀_표지.png"
+            ),
+            "body_mark_asset": f"logo/{military_secret_grade}_비밀.png",
+            "content_page_count": final_pdf_page_count - 1,
+            "final_pdf_page_count": final_pdf_page_count,
+        }
+    return entry
 
 
 def _selected_samples(samples_per_template: int | None) -> tuple[TemplateSample, ...]:
@@ -1346,6 +1367,33 @@ def _selected_samples(samples_per_template: int | None) -> tuple[TemplateSample,
             selected.append(sample)
             counts[sample.template_id] = count + 1
     return tuple(selected)
+
+
+def _render_sample_pdf_atomically(
+    sample: TemplateSample,
+    category: str,
+    output_path: Path,
+    *,
+    stamp_path: Path | None,
+    stamp_top_path: Path | None,
+    military_secret_grade: str | None,
+) -> None:
+    staged_path = output_path.with_name(
+        f".{output_path.stem}.{uuid4().hex}.staged.pdf"
+    )
+    try:
+        render_document_pdf(
+            sample.row,
+            category,
+            staged_path,
+            stamp_path=stamp_path,
+            stamp_top_path=stamp_top_path,
+        )
+        if military_secret_grade is not None:
+            prepend_military_secret_cover(staged_path, military_secret_grade)
+        staged_path.replace(output_path)
+    finally:
+        staged_path.unlink(missing_ok=True)
 
 
 def generate_samples(
@@ -1384,6 +1432,7 @@ def generate_samples(
         agency = str(sample.row["ordering_agency"])
         category = get_agency_category(agency)
         is_confidential = str(sample.row.get("cso_classification") or "").upper() == "C"
+        grade: str | None = None
         if is_confidential and is_military_secret_agency(agency):
             grade = select_military_secret_grade(random.Random(sample.template_id))
             military_mark = _military_mark_for_grade(grade)
@@ -1391,14 +1440,23 @@ def generate_samples(
         else:
             row_stamp_path = stamp_path if is_confidential else None
             row_stamp_top_path = None
-        render_document_pdf(
-            sample.row, category, output_path,
+        _render_sample_pdf_atomically(
+            sample,
+            category,
+            output_path,
             stamp_path=row_stamp_path, stamp_top_path=row_stamp_top_path,
+            military_secret_grade=grade,
         )
 
         if output_path.read_bytes()[:4] != b"%PDF":
             raise RuntimeError(f"{sample.template_id}: PDF 헤더 검증 실패: {output_path}")
-        manifest.append(_manifest_entry(sample, output_path))
+        manifest.append(
+            _manifest_entry(
+                sample,
+                output_path,
+                military_secret_grade=grade,
+            )
+        )
         print(f"[ok] {sample.template_id} -> {_display_path(output_path)}")
 
     manifest_path = output_dir / "template_samples_manifest.json"

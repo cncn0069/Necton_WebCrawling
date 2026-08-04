@@ -127,12 +127,51 @@ def _write_document_manifest(
     )
 
 
+def _cleanup_rendered_artifacts(
+    output_dir: Path,
+    rendered: list[dict[str, object]],
+) -> None:
+    """최종 후처리가 실패한 문서의 게시 파일만 제거한다."""
+
+    resolved_output_dir = output_dir.resolve()
+    for entry in rendered:
+        for key in ("pdf", "html"):
+            raw_path = entry.get(key)
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            artifact_path = Path(raw_path)
+            try:
+                resolved_artifact = artifact_path.resolve()
+            except OSError:
+                continue
+            if (
+                resolved_artifact == resolved_output_dir
+                or resolved_output_dir not in resolved_artifact.parents
+            ):
+                continue
+            artifact_path.unlink(missing_ok=True)
+    (output_dir / "manifest.json").unlink(missing_ok=True)
+    for directory in sorted(
+        (path for path in output_dir.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        output_dir.rmdir()
+    except OSError:
+        pass
+
+
 def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다.
 
     원본 수집 계약의 ``ordering_agency``는 생성 IR의 본문 필드가 아니다.
-    렌더 경계에서 ``generated_document.agency_name``으로 한 번만 옮겨 기관
-    워터마크 입력으로 쓴다. 로고 파일 경로는 외부 입력에서 받지 않는다.
+    렌더 경계에서 ``generated_document.agency_name``으로 한 번만 옮겨 발행기관
+    문서정보로 쓴다. 로고 파일 경로는 외부 입력에서 받지 않는다.
     """
 
     agency_name = next(
@@ -399,6 +438,10 @@ def _finalize_rendered_document(
         scan_result["pre_scan_source_text_validation_scope"] = (
             original_validation_scope
         )
+        security_marking = entry.get("security_marking")
+        if isinstance(security_marking, dict):
+            security_marking["stage"] = "pre_scan"
+            security_marking["baked_into_scan"] = True
         entry["synthetic_scan"] = scan_result
         entry["source_text_validation_scope"] = "pre_scan_pdf"
     _write_document_manifest(document_output_dir, rendered)
@@ -426,6 +469,7 @@ def render_input_file(
             document_id = f"{document_id}-{index:05d}"
         used_document_ids.add(document_id)
         document_output_dir = output_dir / document_id
+        rendered: list[dict[str, object]] = []
         try:
             rendered = render_generation_payload(
                 payload,
@@ -451,6 +495,7 @@ def render_input_file(
             ValueError,
             OSError,
         ) as exc:
+            _cleanup_rendered_artifacts(document_output_dir, rendered)
             batch_manifest.append(
                 {
                     "document_id": document_id,
@@ -557,6 +602,7 @@ def render_input_directory(
             selection["payload_index"] = payload_index
 
             render_attempts: list[dict[str, object]] = []
+            rendered: list[dict[str, object]] = []
             try:
                 rendered, accepted_selection = _render_with_source_text_retries(
                     payload,
@@ -582,6 +628,7 @@ def render_input_directory(
                 ValueError,
                 OSError,
             ) as exc:
+                _cleanup_rendered_artifacts(document_output_dir, rendered)
                 documents.append(
                     {
                         "document_id": document_id,

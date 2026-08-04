@@ -37,82 +37,36 @@ FIXED_AGENCY_BY_SOURCE: dict[str, str] = {
     "molit": "국토교통부",
 }
 
-# 1~4호(C트랙) 폴백 생성용 실존 기관 화이트리스트 (2026-07-20 plan-eng-review, Approach D).
+# 합성 폴백 생성용 실존 기관 화이트리스트.
 # rd2 DB의 실제 기관 풀에는 안보/외교/수사 계열 기관이 0건이라
 # sample_real_agency_and_date_for_fallback()로는 이 조항들에 맞는 기관을 뽑을 수
-# 없다 — 대신 저장소 루트 logo/ 폴더에 이미 준비된 실존 기관 로고 인벤토리와,
-# 정부조직법상 19부·3처 목록(2026-07-21 사용자 제공)을 화이트리스트 소스로 쓴다.
+# 없다. 기관 로고 자산과는 무관하게 실제 기관명과 소관 업무만을 기준으로 고른다.
 # clause_data.py의 조항 설명에 맞춰 배정했다: 2호는 "안보·국방·통일·외교"를 명시해
 # 외교부·통일부를 추가했고, 4호는 "교정·보안처분" 시나리오가 있어 소관 부처인
 # 법무부를 추가했고, 3호는 "생명·신체·재산 보호"(원전/댐/위험물질) 범위가 넓어
 # 안전 관련 부처 다수를 추가했다. 조항 안에 성격이 다른 시나리오가 섞여 있어도
 # 화이트리스트 자체를 조항 단위로 넉넉히 잡아 랜덤 선택만으로 "완전히 무관하지는
 # 않은" 수준의 그럴싸함을 확보한다 — 시나리오별 정교한 1:1 매칭은 스코프 밖(사용자 확인).
-MARKING_SPEC_AGENCY_WHITELIST: dict[str, list[str]] = {
+FALLBACK_AGENCY_WHITELIST: dict[str, list[str]] = {
     "1": ["국가정보원", "국방부", "검찰청", "고위공직자범죄수사처"],
     "2": ["외교부", "통일부", "국방부", "국가정보원"],
     # 2026-07-22: 비공개대상정보세부기준.pdf 3호 표의 대테러·탈북자·납북자국군포로
     # ·국가보안유공자 시나리오(clause_data.CLAUSES["3"].scenario_agencies 뒤 4개)를
     # 추가하며 국가정보원·통일부를 함께 추가 — 이 두 기관은 기존 안전·재해계 시나리오
     # (원전/댐/화학공장 등)에는 뽑히지 않고 scenario_agencies로 좁혀진 풀에서만 나온다.
-    "3": ["행정안전부", "보건복지부", "환경부", "국토교통부", "해양수산부", "고용노동부", "산업통상자원부", "정부부처", "국가정보원", "통일부"],
+    "3": ["행정안전부", "보건복지부", "환경부", "국토교통부", "해양수산부", "고용노동부", "산업통상자원부", "국가정보원", "통일부"],
     "4": ["검찰청", "고위공직자범죄수사처", "법무부"],
 }
 
-# logo/ 폴더의 실제 파일명 매핑. 최신 PDF 후처리의 기관 워터마크 정책과 자산별
-# 사용 여부는 저장소 루트 ``logo/README.md``가 기준 문서다. 개별 자산이 없는
-# 중앙행정기관은 대한민국 정부상징인 ``정부부처.png``를 공유한다. 목록에 없는
-# 기관에는 정부상징을 임의로 붙이지 않는다.
-_GENERIC_GOVERNMENT_AGENCIES: tuple[str, ...] = (
-    "정부부처",
-    "기획재정부",
-    "재정경제부",
-    "기획예산처",
-    "교육부",
-    "과학기술정보통신부",
-    "외교부",
-    "통일부",
-    "법무부",
-    "행정안전부",
-    "국가보훈부",
-    "문화체육관광부",
-    "농림축산식품부",
-    "산업통상자원부",
-    "보건복지부",
-    "환경부",
-    "기후에너지환경부",
-    "고용노동부",
-    "여성가족부",
-    "성평등가족부",
-    "국토교통부",
-    "해양수산부",
-    "중소벤처기업부",
-    "인사혁신처",
-    "법제처",
-    "식품의약품안전처",
-)
-
-AGENCY_LOGO_FILENAMES: dict[str, str] = {
-    "감사원": "감사원.png",
-    "검찰청": "검찰.png",
-    "고위공직자범죄수사처": "고위공직자범죄수사처.png",
-    "국방부": "국방부.png",
-    "국가정보원": "국정원.png",
-    "대통령경호처": "대통령경호처.png",
-    "대통령실": "대통령실.svg",
-    "청와대": "청와대.svg",
-    **{agency: "정부부처.png" for agency in _GENERIC_GOVERNMENT_AGENCIES},
+# DB를 사용하지 않는 템플릿 검수 샘플은 5~8호도 실존 기관명이 필요하다. 운영
+# 파일럿의 5~8호 DB 기반 (기관, 날짜) 선택과 섞이지 않도록 별도 레지스트리로 둔다.
+TEMPLATE_SAMPLE_AGENCY_WHITELIST: dict[str, list[str]] = {
+    **FALLBACK_AGENCY_WHITELIST,
+    "5": ["감사원", "조달청", "인사혁신처", "행정안전부"],
+    "6": ["개인정보보호위원회", "보건복지부", "교육부"],
+    "7": ["중소벤처기업부", "산업통상자원부", "조달청"],
+    "8": ["국토교통부", "공정거래위원회", "기획재정부"],
 }
-
-_AGENCY_LOGO_ALIASES: dict[str, str] = {
-    "국정원": "국가정보원",
-    "공수처": "고위공직자범죄수사처",
-    "검찰": "검찰청",
-    "대검찰청": "검찰청",
-    "대한민국대통령실": "대통령실",
-}
-
-_GENERIC_WHITELIST_AGENCY = "정부부처"
 
 # 군사기밀보호법 시행령 [별표 2](제5조제1항)의 등급 표시 방식을 적용할 기관.
 # 화이트리스트의 나머지 기관(외교부·통일부·검찰청·고위공직자범죄수사처·법무부 등)은
@@ -138,35 +92,18 @@ MILITARY_SECRET_MARK_FILENAMES: dict[str, str] = {
     "3급": "3급_비밀.png",
 }
 
-
-def resolve_agency_logo(agency_name: str | None) -> tuple[str, str] | None:
-    """입력 기관명을 ``(기준 기관명, logo/ 파일명)``으로 해석한다.
-
-    공백과 선택적인 ``대한민국`` 접두사, 문서 입력에서 자주 쓰는 명시적
-    약칭만 정규화한다. 매핑되지 않은 기관을 이름 일부로 추측하거나
-    ``정부부처.png``로 자동 폴백하지 않는다.
-    """
-
-    normalized = "".join((agency_name or "").split())
-    if not normalized:
-        return None
-    if normalized.startswith("대한민국") and normalized != "대한민국":
-        normalized = normalized[len("대한민국") :]
-
-    canonical = _AGENCY_LOGO_ALIASES.get(normalized, normalized)
-    if canonical.endswith(("지방검찰청", "고등검찰청")):
-        canonical = "검찰청"
-
-    filename = AGENCY_LOGO_FILENAMES.get(canonical)
-    if filename is None:
-        return None
-    return canonical, filename
+MILITARY_SECRET_COVER_FILENAMES: dict[str, str] = {
+    "1급": "1급_비밀_표지.png",
+    "2급": "2급_비밀_표지.png",
+    "3급": "3급_비밀_표지.png",
+}
 
 
 def is_military_secret_agency(agency: str) -> bool:
-    """국방부/국가정보원 문서만 [별표 2] 스타일 등급 마크 대상으로 본다.
+    """합성 C 데이터에서 군사기밀 등급을 배정할 기관인지 반환한다.
 
-    나머지 화이트리스트 기관은 기존 "대외비" 마크를 유지한다(2026-07-21 사용자 결정).
+    PDF 후처리는 기관명을 다시 판별하지 않고 입력의 ``military_secret_grade``만
+    신뢰한다. 이 함수는 합성 데이터가 등급 값을 만드는 단계에만 남는다.
     """
     return agency in MILITARY_SECRET_AGENCIES
 
@@ -296,8 +233,8 @@ def _scenario_agency_pool(clause_no: str, scenario_index: int | None) -> list[st
 
 def select_whitelisted_agency(
     clause_no: str, rng: random.Random, *, scenario_index: int | None = None
-) -> tuple[str, str]:
-    """1~4호 폴백 생성용 실존 기관을 화이트리스트에서 고르고 로고 파일명과 함께 반환한다.
+) -> str:
+    """합성 폴백용 실존 기관을 조항·시나리오 화이트리스트에서 고른다.
 
     scenario_index가 주어지고 그 조항에 시나리오별 기관 매핑
     (clause_data.ClauseDefinition.scenario_agencies)이 있으면, 조항 전체
@@ -307,17 +244,15 @@ def select_whitelisted_agency(
     기존처럼 조항 전체 화이트리스트에서 고른다(하위 호환 — 시나리오 개념이 없는
     호출부, 예: generate_template_samples.py).
 
-    화이트리스트에 없는 clause_no는 generic(정부부처)으로 폴백한다 — Approach D는
-    법정근거/화이트리스트 미확보를 이유로 생성을 막지 않는다(on_hold 폐기, 2026-07-20).
+    지원하지 않는 조항을 가짜 기관명으로 덮지 않는다. 명시적인 오류로 중단해
+    호출자가 실제 기관 풀을 추가하거나 입력을 바로잡게 한다.
     """
-    pool = (
-        _scenario_agency_pool(clause_no, scenario_index)
-        or MARKING_SPEC_AGENCY_WHITELIST.get(clause_no)
-        or [_GENERIC_WHITELIST_AGENCY]
-    )
-    agency = rng.choice(pool)
-    logo_filename = AGENCY_LOGO_FILENAMES.get(agency, AGENCY_LOGO_FILENAMES[_GENERIC_WHITELIST_AGENCY])
-    return agency, logo_filename
+    pool = _scenario_agency_pool(clause_no, scenario_index)
+    if pool is None:
+        pool = TEMPLATE_SAMPLE_AGENCY_WHITELIST.get(clause_no)
+    if not pool:
+        raise ValueError(f"실존 기관 화이트리스트가 없는 조항입니다: {clause_no!r}")
+    return rng.choice(pool)
 
 
 def synthesize_plausible_date(rng: random.Random, *, years_back: int = 3) -> str:

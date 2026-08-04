@@ -713,7 +713,7 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
         assert synthetic_text not in rendered_text
 
 
-def test_c_payload_gets_general_confidential_mark_after_template_render(
+def test_c_payload_without_military_grade_gets_confidential_security_skin(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -733,13 +733,16 @@ def test_c_payload_gets_general_confidential_mark_after_template_render(
         template_slugs={"01_classic_municipal"},
     )
 
-    assert manifest[0]["security_marking"]["kind"] == "confidential"
-    assert manifest[0]["security_marking"]["asset"] == "logo/대외비.png"
+    marking = manifest[0]["security_marking"]
+    assert marking["kind"] == "confidential"
+    assert marking["asset"] == "logo/synthetic_confidential.png"
+    assert marking["asset_kind"] == "synthetic_security_stamp"
+    assert marking["security_template"]["slug"] == "04_restricted_memo"
+    assert marking["palette"]["ink_hex"] == "#22272C"
+    assert "agency_marking" not in manifest[0]
     assert manifest[0]["input"]["generation_target"][
         "military_secret_grade"
     ] is None
-    with fitz.open(str(manifest[0]["pdf"])) as document:
-        assert all(page.get_images(full=True) for page in document)
 
 
 def test_pipeline_keeps_first_twelve_pages_after_natural_layout(
@@ -791,10 +794,9 @@ def test_pipeline_keeps_first_twelve_pages_after_natural_layout(
     assert entry["actual_pages"] == 12
     with fitz.open(str(entry["pdf"])) as document_pdf:
         assert document_pdf.page_count == 12
-        assert all(page.get_images(full=True) for page in document_pdf)
 
 
-def test_dense_field_report_reserves_one_common_confidential_mark_slot(
+def test_dense_field_report_keeps_twelve_body_pages_plus_unlimited_cover(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -806,6 +808,7 @@ def test_dense_field_report_reserves_one_common_confidential_mark_slot(
         "clause_no": "2",
         "subclause_key": "security_defense",
         "generation_mode": "counterfactual",
+        "military_secret_grade": "3급",
     }
     document = payload["result"]["generated_document"]
     document["agency_name"] = "행정안전부"
@@ -833,15 +836,20 @@ def test_dense_field_report_reserves_one_common_confidential_mark_slot(
     assert entry["status"] == "ok_truncated"
     assert entry["actual_pages"] == 12
     assert entry["source_text_present"] is True
-    assert entry["security_marking"]["kind"] == "confidential"
-    assert entry["security_marking"]["placement"] == {
-        "strategy": "perimeter_slot",
-        "slot": 0,
-    }
+    marking = entry["security_marking"]
+    assert marking["kind"] == "military_secret"
+    assert marking["content_page_count"] == 12
+    assert marking["final_pdf_page_count"] == 13
+    assert marking["placement"]["cover"]["counted_in_page_limit"] is False
     with fitz.open(str(entry["pdf"])) as rendered:
-        assert all(page.get_images(full=True) for page in rendered)
+        assert rendered.page_count == 13
+        assert len(rendered[0].get_images(full=True)) == 1
         assert "[블록" not in rendered[0].get_text()
-        assert "[블록" in rendered[1].get_text()
+        assert "현장보고형" in rendered[1].get_text()
+        assert any(
+            "[블록" in rendered[page_number].get_text()
+            for page_number in range(2, rendered.page_count)
+        )
 
 
 @pytest.mark.parametrize(
@@ -919,7 +927,7 @@ def test_every_template_keeps_dense_blocks_inside_page_bounds(
                     assert overlap_ratio < 0.08
 
 
-def test_military_c_payload_requires_and_renders_explicit_grade(
+def test_military_c_payload_renders_explicit_grade_and_falls_back_to_confidential(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -943,20 +951,27 @@ def test_military_c_payload_requires_and_renders_explicit_grade(
     marking = manifest[0]["security_marking"]
     assert marking["kind"] == "military_secret"
     assert marking["military_secret_grade"] == "2급"
-    assert marking["placement"]["strategy"] == "top_bottom_center"
+    assert marking["placement"]["strategy"] == (
+        "front_cover_top_bottom_and_neutral_frame"
+    )
     with fitz.open(str(manifest[0]["pdf"])) as document:
-        assert all(len(page.get_images(full=True)) >= 2 for page in document)
+        assert document.page_count == manifest[0]["actual_pages"] + 1
+        assert len(document[0].get_images(full=True)) == 1
+        assert all(page.get_images(full=True) for page in document.pages(1))
 
     payload["result"]["generation_target"].pop("military_secret_grade")
-    with pytest.raises(SecurityMarkingError, match="military_secret_grade"):
-        render_generation_payload(
-            payload,
-            tmp_path / "missing-grade",
-            per_template=1,
-            base_seed=20260803,
-            template_slugs={"03_internal_approval"},
-        )
-    assert not list((tmp_path / "missing-grade").rglob("*.pdf"))
+    confidential_manifest = render_generation_payload(
+        payload,
+        tmp_path / "missing-grade",
+        per_template=1,
+        base_seed=20260803,
+        template_slugs={"03_internal_approval"},
+    )
+    confidential = confidential_manifest[0]["security_marking"]
+    assert confidential["kind"] == "confidential"
+    assert "military_secret_grade" not in confidential
+    with fitz.open(str(confidential_manifest[0]["pdf"])) as document:
+        assert document.page_count == confidential_manifest[0]["actual_pages"]
 
 
 def test_long_source_validation_rejects_middle_corruption() -> None:
@@ -1032,13 +1047,14 @@ def test_c_marking_failure_removes_unmarked_rendered_files(
         "clause_no": "2",
         "subclause_key": "security_defense",
         "generation_mode": "counterfactual",
+        "military_secret_grade": "1급",
     }
     payload["result"]["generated_document"]["agency_name"] = "행정안전부"
     output_dir = tmp_path / "failed-marking"
-    monkeypatch.setattr(
-        security_marking,
-        "_CONFIDENTIAL_MARK_ASSET",
-        tmp_path / "missing-confidential-mark.png",
+    monkeypatch.setitem(
+        security_marking.MILITARY_SECRET_MARK_FILENAMES,
+        "1급",
+        "missing-military-mark.png",
     )
 
     with pytest.raises(SecurityMarkingError, match="이미지가 없습니다"):

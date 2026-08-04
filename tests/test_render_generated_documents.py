@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import scripts.render_generated_documents as render_cli
+from rd2.generators.balanced_batch_selection import BalancedTemplateAssignment
 from rd2.generators.output_naming import (
     generation_output_filename,
     rename_rendered_files,
@@ -45,6 +46,81 @@ def _fake_synthetic_handwriting(
         "fallback_character_count": 0,
         "fallback_characters": {},
     }
+
+
+def _scan_assignment() -> BalancedTemplateAssignment:
+    return BalancedTemplateAssignment(
+        document_type="official_document",
+        renderer_family="official_document",
+        template_slug="01_classic_municipal",
+        variation_index=1,
+        selection_seed=1,
+        render_seed=2,
+        synthetic_scan=True,
+        synthetic_scan_seed=3,
+        synthetic_handwriting=False,
+        synthetic_handwriting_seed=4,
+        document_type_index=0,
+    )
+
+
+def test_scan_marks_security_metadata_as_pre_scan(tmp_path: Path, monkeypatch):
+    output_dir = tmp_path / "document"
+    output_dir.mkdir()
+    pdf_path = output_dir / "generated.pdf"
+    html_path = output_dir / "generated.html"
+    pdf_path.write_bytes(b"%PDF")
+    html_path.write_text("<html></html>", encoding="utf-8")
+    rendered = [
+        {
+            "status": "ok",
+            "pdf": str(pdf_path),
+            "html": str(html_path),
+            "security_marking": {"overlay": True},
+        }
+    ]
+    monkeypatch.setattr(
+        render_cli,
+        "verify_rendered_sensitive_evidence",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_scan_pdf",
+        _fake_synthetic_scan,
+    )
+
+    render_cli._finalize_rendered_document(
+        {},
+        output_dir,
+        rendered,
+        None,
+        assignment=_scan_assignment(),
+    )
+
+    marking = rendered[0]["security_marking"]
+    assert marking["stage"] == "pre_scan"
+    assert marking["baked_into_scan"] is True
+
+
+def test_cleanup_removes_rejected_pdf_html_and_manifest(tmp_path: Path):
+    output_dir = tmp_path / "document"
+    template_dir = output_dir / "template"
+    template_dir.mkdir(parents=True)
+    pdf_path = template_dir / "generated.pdf"
+    html_path = template_dir / "generated.html"
+    pdf_path.write_bytes(b"%PDF")
+    html_path.write_text("<html></html>", encoding="utf-8")
+    (output_dir / "manifest.json").write_text("[]", encoding="utf-8")
+
+    render_cli._cleanup_rendered_artifacts(
+        output_dir,
+        [{"pdf": str(pdf_path), "html": str(html_path)}],
+    )
+
+    assert not pdf_path.exists()
+    assert not html_path.exists()
+    assert not (output_dir / "manifest.json").exists()
 
 
 def test_renderer_projection_preserves_military_secret_grade():

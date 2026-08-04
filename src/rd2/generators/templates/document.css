@@ -14,7 +14,6 @@ html, body { margin: 0; padding: 0; font-family: "Noto Sans KR", sans-serif; fon
 body { position: relative; }
 body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 .watermark { position: fixed; z-index: -1; inset: calc(-1 * var(--margin-top)) calc(-1 * var(--margin-right)) calc(-1 * var(--margin-bottom)) calc(-1 * var(--margin-left)); width: 210mm; height: 297mm; object-fit: fill; }
-.agency-mark { position: absolute; top: 2mm; left: 2mm; width: 12mm; height: 12mm; object-fit: contain; }
 .status { color: #b00020; font-size: 9pt; margin-bottom: 3mm; }
 .title { font-size: var(--title-size); text-align: var(--title-align); font-weight: 700; margin: 0 0 4mm; }
 .slogan, .agency-name, .sender { text-align: center; }
