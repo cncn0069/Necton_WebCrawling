@@ -94,6 +94,8 @@ class BalancedTemplateAssignment:
     render_seed: int
     synthetic_scan: bool
     synthetic_scan_seed: int
+    synthetic_handwriting: bool
+    synthetic_handwriting_seed: int
     document_type_index: int
 
     @property
@@ -181,6 +183,22 @@ class BalancedTemplateSelector:
         ).shuffle(scan_cycle)
         synthetic_scan = scan_cycle[scan_offset]
 
+        # 8건당 정확히 1건을 선택해 장기 적용률을 12.5%로 유지한다. 각
+        # 8건 묶음 안의 위치는 seed로 섞으므로 연속 실행에서도 일정한
+        # 위치에만 손글씨 효과가 몰리지 않는다.
+        handwriting_epoch, handwriting_offset = divmod(type_position, 8)
+        handwriting_cycle = [True, *([False] * 7)]
+        random.Random(
+            _stable_seed(
+                self.seed,
+                type_key,
+                resolved_family,
+                "synthetic_handwriting",
+                handwriting_epoch,
+            )
+        ).shuffle(handwriting_cycle)
+        synthetic_handwriting = handwriting_cycle[handwriting_offset]
+
         return BalancedTemplateAssignment(
             document_type=document_type,
             renderer_family=resolved_family,
@@ -200,6 +218,14 @@ class BalancedTemplateSelector:
                 item_key,
                 type_position,
                 "synthetic_scan_effects",
+            ),
+            synthetic_handwriting=synthetic_handwriting,
+            synthetic_handwriting_seed=_stable_seed(
+                self.seed,
+                type_key,
+                item_key,
+                type_position,
+                "synthetic_handwriting_effects",
             ),
             document_type_index=type_position,
         )

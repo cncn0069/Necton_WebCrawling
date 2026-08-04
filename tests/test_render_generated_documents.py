@@ -30,6 +30,23 @@ def _fake_synthetic_scan(
     }
 
 
+def _fake_synthetic_handwriting(
+    _source_pdf: Path,
+    _output_pdf: Path,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    return {
+        "applied": True,
+        "seed": seed,
+        "image_only": True,
+        "page_count": 1,
+        "font": "NanumHanYunCe",
+        "fallback_character_count": 0,
+        "fallback_characters": {},
+    }
+
+
 def test_renderer_projection_preserves_military_secret_grade():
     payload = {
         "generation_plan": {
@@ -256,6 +273,11 @@ def test_directory_batch_routes_inferred_type_and_records_resolution(
         render_cli,
         "render_synthetic_scan_pdf",
         _fake_synthetic_scan,
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_handwriting_pdf",
+        _fake_synthetic_handwriting,
     )
 
     manifest = render_cli.render_input_directory(
