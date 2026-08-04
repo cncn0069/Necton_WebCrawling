@@ -1,24 +1,20 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
 import fitz
 import pytest
-from PIL import Image
 
 import rd2.generators.document_security_marking as security_marking
-from rd2.generators.agency_resolver import AGENCY_LOGO_FILENAMES
 from rd2.generators.document_security_marking import (
-    _agency_watermark_image,
     SecurityMarkingError,
     apply_security_marking_to_manifest,
     prepend_military_secret_cover,
-    resolve_agency_marking,
     resolve_security_marking,
 )
 from rd2.generators.confidential_security_templates import (
     CONFIDENTIAL_SECURITY_TEMPLATE_SLUGS,
+    SECURITY_MARK_HEIGHT_PT,
 )
 from rd2.source_generation.classification_taxonomy import ClauseNumber, SubclauseKey
 from rd2.source_generation.contracts import (
@@ -71,7 +67,7 @@ def test_resolve_security_marking_uses_c_as_confidential_and_grade_as_military()
     confidential = resolve_security_marking(_target(TargetClassification.C))
     assert confidential is not None
     assert confidential.kind == "confidential"
-    assert confidential.mark_asset_path.name == "대외비.png"
+    assert confidential.mark_asset_path is None
     assert confidential.cover_asset_path is None
 
     military = resolve_security_marking(
@@ -116,8 +112,9 @@ def test_military_secret_adds_unlimited_front_cover_and_body_marks(
     assert marking["kind"] == "military_secret"
     assert marking["military_secret_grade"] == grade
     assert marking["placement"]["strategy"] == (
-        "front_cover_top_bottom_and_monochrome_skin"
+        "front_cover_top_bottom_and_neutral_frame"
     )
+    assert marking["security_template"]["slug"] == "military_neutral_frame"
     assert marking["placement"]["cover"]["counted_in_page_limit"] is False
     assert marking["content_page_count"] == 2
     assert marking["final_pdf_page_count"] == 3
@@ -132,11 +129,22 @@ def test_military_secret_adds_unlimited_front_cover_and_body_marks(
         for page_number in range(1, document.page_count):
             page = document[page_number]
             assert "Central body text" in page.get_text()
+            page_text = page.get_text().upper()
+            assert "RESTRICTED" not in page_text
+            assert "OFFICIAL-SENSITIVE" not in page_text
+            assert "CONFIDENTIAL REPORT" not in page_text
+            assert "NEED TO KNOW" not in page_text
             image_rect_count = sum(
                 len(page.get_image_rects(xref))
                 for xref in {image[0] for image in page.get_images(full=True)}
             )
             assert image_rect_count == 2
+            image_rects = [
+                rect
+                for image in page.get_images(full=True)
+                for rect in page.get_image_rects(image[0])
+            ]
+            assert all(rect.height == pytest.approx(25.0) for rect in image_rects)
 
 
 def test_grade_without_agency_name_still_gets_cover(tmp_path: Path) -> None:
@@ -152,73 +160,6 @@ def test_grade_without_agency_name_still_gets_cover(tmp_path: Path) -> None:
     assert manifest[0]["security_marking"]["military_secret_grade"] == "3급"
     with fitz.open(pdf_path) as document:
         assert document.page_count == 2
-
-
-def test_c_document_keeps_existing_agency_watermark_policy(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "agency.pdf"
-    _write_pdf(pdf_path, pages=1)
-    manifest = [{"status": "ok", "pdf": str(pdf_path)}]
-
-    apply_security_marking_to_manifest(
-        manifest,
-        target=_target(TargetClassification.C),
-        agency_name="행정안전부",
-        selection_seed=2,
-    )
-
-    agency_marking = manifest[0]["agency_marking"]
-    assert agency_marking["agency_name"] == "행정안전부"
-    assert agency_marking["asset"] == "logo/정부부처.png"
-    assert agency_marking["placement"]["strategy"] == "center_watermark"
-    assert agency_marking["tone"] == {"grayscale": 82, "max_alpha": 74}
-    with fitz.open(pdf_path) as document:
-        assert len(document[0].get_images(full=True)) == 2
-
-
-def test_resolve_agency_marking_still_gates_on_c_classification() -> None:
-    assert (
-        resolve_agency_marking(
-            _target(TargetClassification.S),
-            agency_name="행정안전부",
-        )
-        is None
-    )
-    resolved = resolve_agency_marking(
-        _target(TargetClassification.C),
-        agency_name="행정안전부",
-    )
-    assert resolved is not None
-    assert resolved.asset_path.name == "정부부처.png"
-
-
-def test_agency_watermark_preserves_approved_internal_canvas_spacing() -> None:
-    expected_visible_widths = {
-        "국방부.png": (0.75, 0.90),
-        "정부부처.png": (0.50, 0.60),
-    }
-    for filename, expected_range in expected_visible_widths.items():
-        image_bytes, _ = _agency_watermark_image(REPO_ROOT / "logo" / filename)
-        with Image.open(BytesIO(image_bytes)) as watermark:
-            alpha = watermark.getchannel("A")
-            visible_box = alpha.getbbox()
-            assert visible_box is not None
-            visible_ratio = (visible_box[2] - visible_box[0]) / watermark.width
-            assert expected_range[0] <= visible_ratio <= expected_range[1]
-            assert alpha.getextrema() == (0, 74)
-
-
-@pytest.mark.parametrize(
-    "filename",
-    sorted(set(AGENCY_LOGO_FILENAMES.values())),
-)
-def test_every_mapped_agency_asset_builds_a_transparent_watermark(
-    filename: str,
-) -> None:
-    image_bytes, image_ratio = _agency_watermark_image(
-        REPO_ROOT / "logo" / filename
-    )
-    assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-    assert image_ratio > 0
 
 
 def test_c_document_without_grade_gets_monochrome_confidential_skin(
@@ -251,6 +192,8 @@ def test_c_document_without_grade_gets_monochrome_confidential_skin(
     }
     assert marking["content_page_count"] == 1
     assert marking["final_pdf_page_count"] == 1
+    mark_rect = marking["placement"]["body"]["page_placements"][0]["mark_rect"]
+    assert mark_rect[3] - mark_rect[1] == pytest.approx(SECURITY_MARK_HEIGHT_PT)
     assert "agency_marking" not in manifest[0]
     with fitz.open(pdf_path) as document:
         assert document.page_count == 1
@@ -286,9 +229,6 @@ def test_all_ten_confidential_templates_render_once_and_cycle_by_seed(
     assert assets == {
         "logo/대외비.png",
         "logo/synthetic_confidential.png",
-        "logo/synthetic_top_secret.png",
-        "logo/synthetic_restricted.png",
-        "logo/synthetic_need_to_know.png",
     }
 
 
@@ -320,27 +260,29 @@ def test_batch_is_not_modified_when_any_pdf_staging_fails(
     clear_before = clear_pdf.read_bytes()
     failing_before = failing_pdf.read_bytes()
     manifest = [
-        {"status": "ok", "pdf": str(clear_pdf)},
-        {"status": "ok", "pdf": str(failing_pdf)},
+        {
+            "status": "ok",
+            "pdf": str(clear_pdf),
+            "agency_marking": {"legacy": "clear"},
+            "security_marking": {"legacy": "clear"},
+        },
+        {
+            "status": "ok",
+            "pdf": str(failing_pdf),
+            "agency_marking": {"legacy": "failing"},
+            "security_marking": {"legacy": "failing"},
+        },
     ]
 
     original_save = security_marking._save_marked_pdf
 
-    def fail_second(
-        source_path,
-        output_path,
-        *,
-        spec,
-        agency_spec,
-        security_template,
-    ):
+    def fail_second(source_path, output_path, *, spec, security_template):
         if source_path == failing_pdf:
             raise SecurityMarkingError("두 번째 PDF staging 실패")
         return original_save(
             source_path,
             output_path,
             spec=spec,
-            agency_spec=agency_spec,
             security_template=security_template,
         )
 
@@ -354,5 +296,8 @@ def test_batch_is_not_modified_when_any_pdf_staging_fails(
 
     assert clear_pdf.read_bytes() == clear_before
     assert failing_pdf.read_bytes() == failing_before
-    assert all("security_marking" not in entry for entry in manifest)
+    assert manifest[0]["agency_marking"] == {"legacy": "clear"}
+    assert manifest[0]["security_marking"] == {"legacy": "clear"}
+    assert manifest[1]["agency_marking"] == {"legacy": "failing"}
+    assert manifest[1]["security_marking"] == {"legacy": "failing"}
     assert not list(tmp_path.glob(".*.security-mark.pdf"))

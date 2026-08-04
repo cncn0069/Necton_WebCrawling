@@ -52,3 +52,29 @@ def test_relative_output_directory_is_supported(tmp_path, monkeypatch):
 
     assert manifest == []
     assert (tmp_path / "relative-output" / "template_samples_manifest.json").is_file()
+
+
+def test_sample_cover_failure_does_not_publish_uncovered_pdf(tmp_path, monkeypatch):
+    output_path = tmp_path / "sample.pdf"
+
+    def fake_render(_row, _category, staged_path, **_kwargs):
+        staged_path.write_bytes(b"%PDF-uncovered")
+
+    def fail_cover(_path, _grade):
+        raise RuntimeError("cover failed")
+
+    monkeypatch.setattr(samples, "render_document_pdf", fake_render)
+    monkeypatch.setattr(samples, "prepend_military_secret_cover", fail_cover)
+
+    with pytest.raises(RuntimeError, match="cover failed"):
+        samples._render_sample_pdf_atomically(
+            samples.ALL_SAMPLES[0],
+            "central_government",
+            output_path,
+            stamp_path=None,
+            stamp_top_path=None,
+            military_secret_grade="1급",
+        )
+
+    assert not output_path.exists()
+    assert not list(tmp_path.glob(".*.staged.pdf"))

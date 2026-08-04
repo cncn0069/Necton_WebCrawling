@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import fitz
 
@@ -20,6 +21,21 @@ _WHITE = (1.0, 1.0, 1.0)
 
 BODY_SAFE_TOP_BOTTOM_PT = 30.0
 BODY_SAFE_LEFT_RIGHT_PT = 12.0
+SECURITY_LABEL_SCALE = 1.25
+SECURITY_MARK_HEIGHT_PT = 17.0 * SECURITY_LABEL_SCALE
+
+ConfidentialLayout = Literal[
+    "classic_register",
+    "report_band",
+    "minimal_mark",
+    "restricted_memo",
+    "strategy_report",
+    "controlled_sheet",
+    "official_sensitive",
+    "registry_control",
+    "protected_technology",
+    "need_to_know",
+]
 
 
 @dataclass(frozen=True)
@@ -27,7 +43,7 @@ class ConfidentialSecurityTemplate:
     slug: str
     name: str
     english_label: str
-    layout: str
+    layout: ConfidentialLayout
     stamp_asset: str
 
     def to_dict(self) -> dict[str, str]:
@@ -47,7 +63,7 @@ CONFIDENTIAL_SECURITY_TEMPLATES: tuple[ConfidentialSecurityTemplate, ...] = (
         "리포트 밴드형",
         "CONFIDENTIAL REPORT",
         "report_band",
-        "synthetic_top_secret.png",
+        "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "03_minimal_mark",
@@ -59,52 +75,62 @@ CONFIDENTIAL_SECURITY_TEMPLATES: tuple[ConfidentialSecurityTemplate, ...] = (
     ConfidentialSecurityTemplate(
         "04_restricted_memo",
         "통제 메모형",
-        "RESTRICTED / INTERNAL",
+        "CONFIDENTIAL / INTERNAL",
         "restricted_memo",
-        "synthetic_restricted.png",
+        "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "05_strategy_report",
         "전략보고서형",
         "CONFIDENTIAL / STRATEGY",
         "strategy_report",
-        "synthetic_top_secret.png",
+        "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "06_controlled_sheet",
         "통제 커버시트형",
-        "CONTROLLED",
+        "CONFIDENTIAL / CONTROLLED",
         "controlled_sheet",
-        "synthetic_restricted.png",
+        "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "07_official_sensitive",
         "오피셜 센서티브형",
-        "OFFICIAL-SENSITIVE",
+        "CONFIDENTIAL / OFFICIAL",
         "official_sensitive",
         "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "08_registry_control",
         "레지스트리 통제형",
-        "REGISTRY CONTROL",
+        "CONFIDENTIAL / REGISTRY",
         "registry_control",
         "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "09_protected_technology",
         "산업기술 보호형",
-        "PROTECTED TECHNOLOGY",
+        "CONFIDENTIAL / PROTECTED TECHNOLOGY",
         "protected_technology",
-        "synthetic_need_to_know.png",
+        "synthetic_confidential.png",
     ),
     ConfidentialSecurityTemplate(
         "10_need_to_know",
         "디지털 니드투노우형",
-        "SECURE / NEED TO KNOW",
+        "CONFIDENTIAL / NEED TO KNOW",
         "need_to_know",
-        "synthetic_need_to_know.png",
+        "synthetic_confidential.png",
     ),
+)
+
+# 군사기밀은 등급별 표지 자체가 분류 권위다. 대외비 템플릿의 영문 등급 문구를
+# 섞지 않고, 분류 의미가 없는 테두리만 재사용한다.
+MILITARY_NEUTRAL_SECURITY_FRAME = ConfidentialSecurityTemplate(
+    "military_neutral_frame",
+    "군사기밀 중립 프레임",
+    "",
+    "classic_register",
+    "",
 )
 
 CONFIDENTIAL_SECURITY_TEMPLATE_SLUGS = tuple(
@@ -147,7 +173,7 @@ def _text(
     page.insert_text(
         fitz.Point(x, y),
         value,
-        fontsize=size,
+        fontsize=size * SECURITY_LABEL_SCALE,
         fontname="helv",
         color=color,
         rotate=rotate,
@@ -160,7 +186,7 @@ def _mark_rect(
     *,
     image_ratio: float,
     anchor: str,
-    height: float = 17.0,
+    height: float = SECURITY_MARK_HEIGHT_PT,
 ) -> fitz.Rect:
     width = height * image_ratio
     margin = 5.0
@@ -384,7 +410,7 @@ def draw_confidential_security_template(
             rotate=90,
         )
         mark_anchor = "bottom_center"
-    else:
+    elif layout == "need_to_know":
         page.draw_rect(
             fitz.Rect(0, height - 23, width, height),
             color=None,
@@ -394,6 +420,8 @@ def draw_confidential_security_template(
         _text(page, 12, height - 8, template.english_label, color=_WHITE, size=6.5)
         _text(page, width - 102, 15, "ACCESS LOGGED", size=5.7)
         mark_anchor = "top_right"
+    else:
+        raise ValueError(f"알 수 없는 보안 스킨 layout입니다: {layout!r}")
 
     if mark_bytes is not None and mark_ratio is not None:
         mark_rect = _insert_mark(
@@ -402,12 +430,28 @@ def draw_confidential_security_template(
             image_ratio=mark_ratio,
             anchor=mark_anchor,
         )
+        # 래스터 스탬프 안의 작은 표시는 후속 스캔/JPEG 처리에서 흐려질 수 있다.
+        # 합성 provenance는 PDF 벡터 텍스트로도 최소 5.5pt 크기로 남긴다.
+        provenance_rect = fitz.Rect(width - 91, 5, width - 7, 18)
+        page.draw_rect(
+            provenance_rect,
+            color=_INK,
+            fill=_WHITE,
+            width=0.5,
+            overlay=True,
+        )
+        _text(page, width - 84, 14, "VIRTUAL SAMPLE", size=5.5)
 
     return {
         "layout": layout,
         "mark_anchor": mark_anchor if mark_rect is not None else None,
         "mark_rect": (
             [mark_rect.x0, mark_rect.y0, mark_rect.x1, mark_rect.y1]
+            if mark_rect is not None
+            else None
+        ),
+        "synthetic_provenance": (
+            {"label": "VIRTUAL SAMPLE", "font_size_pt": 5.5}
             if mark_rect is not None
             else None
         ),

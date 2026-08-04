@@ -55,11 +55,11 @@ class TestGenerateSyntheticSecurityStamp:
     def test_normalizes_case_and_spacing_deterministically(self, tmp_path):
         a = generate_synthetic_security_stamp(
             tmp_path / "a.png",
-            " top   secret ",
+            " confidential ",
         )
         b = generate_synthetic_security_stamp(
             tmp_path / "b.png",
-            "TOP SECRET",
+            "CONFIDENTIAL",
         )
         assert a.read_bytes() == b.read_bytes()
 

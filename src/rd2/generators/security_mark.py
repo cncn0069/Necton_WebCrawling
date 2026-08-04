@@ -1,9 +1,9 @@
-"""보안마크(대외비/군사기밀 워터마크 + 분류 스탬프) 생성 — Pillow + opencv.
+"""구형 파일럿용 대외비·군사기밀 분류표시 생성 — Pillow + opencv.
 
 최신 ``doc_type``별 PDF 생성기는 렌더 후
-``document_security_marking.py``에서 기관 워터마크와 분류표지를 합성한다.
-기관별 자산 매핑, 투명도, 크기, 레이어 순서는 ``logo/README.md``를 기준으로
-한다. 이 파일의 생성 함수는 기존 파일럿/레거시 이미지 합성 경로를 유지한다.
+``document_security_marking.py``에서 대외비 보안 스킨 또는 군사기밀 앞표지와
+본문 등급표시를 합성한다. 이 파일은 기존 파일럿/레거시 분류표시 경로와 단색
+가상 영문 스탬프 자산 생성기를 함께 제공한다.
 
 2026-07-14 사용자 피드백 반영 이력:
 1. 초기 버전(우측 하단 작은 사각 스탬프)이 실제 한국 관공서 대외비 문서
@@ -54,27 +54,19 @@ _REPO_ROOT = Path(__file__).parent.parent.parent.parent
 _LOGO_DIR = _REPO_ROOT / "logo"
 _CONFIDENTIAL_MARK_ASSET = _LOGO_DIR / "대외비.png"
 
-SYNTHETIC_SECURITY_STAMP_LABELS: tuple[str, ...] = (
-    "CONFIDENTIAL",
-    "TOP SECRET",
-    "RESTRICTED",
-    "NEED TO KNOW",
-)
-_SYNTHETIC_STAMP_SIZE_PX = (720, 220)
-_SYNTHETIC_STAMP_INK = (34, 39, 44, 255)
-
 # A4 @ ~150dpi (reportlab A4는 pt 단위 595x842 — 150dpi로 래스터화)
 _PAGE_SIZE_PX = (1240, 1754)
 _STAMP_SIZE_PX = (260, 100)
 _WATERMARK_FONT_SIZE = 620
-_LETTERHEAD_MARK_SIZE_PX = (170, 170)  # 좌상단 기관 마크(레터헤드) 캔버스
-_AGENCY_WATERMARK_BOX_PX = (900, 900)  # 배경 워터마크용 기관 마크 캔버스
-_AGENCY_WATERMARK_ALPHA = 60  # 글자 워터마크 fill=(140,140,140,60)과 같은 톤
 
 # 비밀표시 규정 제9항 붉은 문구 + [별표 2] 7호 재분류 근거 박스 공용 폰트 크기/색.
 _NOTICE_FONT_SIZE = 26
 _NOTICE_TEXT_COLOR = (200, 0, 0, 255)
 _MILITARY_SECRET_CONTENT_NOTICE_TEXT = "이 비밀에는 군사기밀 사항이 포함되어 있습니다"
+
+SYNTHETIC_SECURITY_STAMP_LABELS: tuple[str, ...] = ("CONFIDENTIAL",)
+_SYNTHETIC_STAMP_SIZE_PX = (720, 220)
+_SYNTHETIC_STAMP_INK = (34, 39, 44, 255)
 
 # security_mark.py의 다른 마크와 같은 150dpi 래스터화 기준 cm→px 환산
 # (_PAGE_SIZE_PX 주석 참고, 1cm = dpi/2.54 px) — 비밀표시 규정 제9항 박스와
@@ -118,14 +110,6 @@ def _load_mark_asset(asset_path: Path, canvas_size: tuple[int, int] = _STAMP_SIZ
     offset = ((canvas_size[0] - new_size[0]) // 2, (canvas_size[1] - new_size[1]) // 2)
     canvas.paste(resized, offset)  # mask 인자를 또 주면 resized의 알파가 제곱으로 감쇠된다
     return canvas
-
-
-def _fade_to_watermark_tone(img: Image.Image) -> Image.Image:
-    """기관 마크를 흑백 처리 후 알파를 낮춰, 기존 글자 워터마크와 같은 옅은 회색 톤으로 만든다."""
-    gray = img.convert("L")
-    alpha = img.split()[3]
-    faded_alpha = alpha.point(lambda v: v * _AGENCY_WATERMARK_ALPHA // 255)
-    return Image.merge("RGBA", (gray, gray, gray, faded_alpha))
 
 
 def _apply_noise(img: Image.Image, *, seed: int, angle_range: float = 3.0) -> Image.Image:
@@ -260,47 +244,6 @@ def generate_military_secret_mark(output_path: Path, grade: str, *, seed: int = 
     asset_path = _LOGO_DIR / MILITARY_SECRET_MARK_FILENAMES[grade]
     base = _load_mark_asset(asset_path)
     noisy = _apply_noise(base, seed=seed, angle_range=0.0)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    noisy.save(output_path)
-    return output_path
-
-
-def generate_agency_letterhead_mark(output_path: Path, logo_filename: str, *, seed: int = 0) -> Path:
-    """문서 좌상단에 한 번 표시할 기관 마크 PNG를 만든다(C 문서 전용).
-
-    logo_filename은 agency_resolver.AGENCY_LOGO_FILENAMES의 값(logo/ 폴더 실제
-    파일명)이다. 대외비/군사기밀 마크와 마찬가지로 회전은 적용하지 않는다
-    (2026-07-21 사용자 결정 — 마크는 항상 수평 유지).
-    """
-    asset_path = _LOGO_DIR / logo_filename
-    base = _load_mark_asset(asset_path, canvas_size=_LETTERHEAD_MARK_SIZE_PX)
-    noisy = _apply_noise(base, seed=seed, angle_range=0.0)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    noisy.save(output_path)
-    return output_path
-
-
-def generate_agency_watermark(output_path: Path, logo_filename: str, *, seed: int = 0) -> Path:
-    """가/나/다/라... 글자 워터마크 대신, 기관 마크를 크게 옅게 키워 배경에 한 번 찍는다.
-
-    _draw_single_character_watermark와 같은 톤(연한 회색, 알파 60)으로 맞춰
-    문서 배경에서 자연스럽게 보이도록 흑백+저알파 처리한다. 최신 PDF
-    후처리의 승인된 작은·선명한 합성 규칙은 ``logo/README.md``와
-    ``document_security_marking.py``를 따른다.
-    """
-    asset_path = _LOGO_DIR / logo_filename
-    boxed = _load_mark_asset(asset_path, canvas_size=_AGENCY_WATERMARK_BOX_PX)
-    faded = _fade_to_watermark_tone(boxed)
-
-    width, height = _PAGE_SIZE_PX
-    canvas = Image.new("RGBA", (width, height), (255, 255, 255, 0))
-    offset = (
-        (width - _AGENCY_WATERMARK_BOX_PX[0]) // 2,
-        (height - _AGENCY_WATERMARK_BOX_PX[1]) // 2,
-    )
-    canvas.paste(faded, offset)  # mask 인자를 또 주면 faded의 알파(이미 60)가 제곱으로 감쇠된다
-
-    noisy = _apply_noise(canvas, seed=seed, angle_range=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     noisy.save(output_path)
     return output_path

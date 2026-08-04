@@ -1,8 +1,8 @@
 # `generate_cs_pilot.py` 출력 CSV 컬럼 정리
 
-`scripts/generate_cs_pilot.py`가 만드는 CSV(`CSV_FIELDNAMES`, [generate_cs_pilot.py:108](scripts/generate_cs_pilot.py:108))의 42개 컬럼을 순서대로 정리한다. `--target-matrix` 없이 `--per-clause`(기본) 경로로 생성하면 마지막 3개 컬럼(40~42번)은 항상 빈 값이다.
+`scripts/generate_cs_pilot.py`가 만드는 CSV(`CSV_FIELDNAMES`, [generate_cs_pilot.py:117](scripts/generate_cs_pilot.py:117))의 46개 컬럼을 순서대로 정리한다. `--target-matrix` 없이 `--per-clause`(기본) 경로로 생성하면 마지막 3개 컬럼(44~46번)은 항상 빈 값이다.
 
-## 시드/근거 추적 (1~8)
+## 시드/근거 추적 (1~10)
 
 | 컬럼 | 역할 |
 |---|---|
@@ -14,8 +14,10 @@
 | `seed_extraction_id` | 원문 추출본(canonical v2) ID |
 | `seed_text_sha256` | 근거 span 원문 해시 — 원문 변경 시 stale 판정용 |
 | `seed_source_path` | 근거 span이 나온 원본 파일 경로 |
+| `seed_context_text` | LLM 입력에 사용한 원문 문맥 |
+| `generation_trace_json` | 생성·검증 경로를 기록한 JSON |
 
-## 조항/분류 (9~11)
+## 조항/분류 (11~13)
 
 | 컬럼 | 역할 |
 |---|---|
@@ -23,12 +25,12 @@
 | `cso_subclause_key` | 세부조항 키(`legal_secret`, `decision_review` 등 — `content_points.py` Part B에서 쓰는 값과 동일) |
 | `cso_classification` | C(기밀)/S(민감) |
 
-## 문서 내용 (12~20)
+## 문서 내용 (14~22)
 
 | 컬럼 | 역할 |
 |---|---|
 | `title` | 문서 제목 |
-| `ordering_agency` | 발주/작성 기관명(실제 DB에 존재하는 값만 사용, 가상기관 금지 — R3 규칙) |
+| `ordering_agency` | 발주/작성 기관명(DB 실수집 또는 조항별 실존기관 화이트리스트 사용, 가상기관 금지 — R3 규칙) |
 | `department` | 담당부서 |
 | `unit_task` | 단위업무명 |
 | `production_date` | 생산일자 |
@@ -37,7 +39,7 @@
 | `non_disclosure_reason` | 비공개 사유 설명 문구(`제N호 — 제목` 또는 행정상태 사유) |
 | `body_text` | LLM이 생성한 실제 본문 |
 
-## 공개/행정 상태 (21~23)
+## 공개/행정 상태 (23~25)
 
 | 컬럼 | 역할 |
 |---|---|
@@ -45,7 +47,7 @@
 | `document_status` | `doc_templates.py`의 `AdminStatus` 값(예: "첨부미등록") — 없으면 빈 문자열 |
 | `release_due_date` | 공개 예정 일시(ISO 날짜). 정보공개법 제9조1항5호(의사결정 과정·내부검토)에 따라 비공개 시 공개 여부를 다시 판단할 시점을 정해야 하므로 `clause_no == "5"` 행에만 채운다 — 그 외 조항(내부검토 사유가 아닌 비공개)은 빈 문자열. PDF의 하단 공개구분 표기(`disclosure_label`)에도 "· 공개예정일 YYYY-MM-DD"로 반영된다. |
 
-## 출처/합성 여부 (24~29)
+## 출처/합성 여부 (26~31)
 
 | 컬럼 | 역할 |
 |---|---|
@@ -56,7 +58,7 @@
 | `field_source` | 각 필드가 어디서 왔는지(원문 복사/LLM 생성 등) 기록한 JSON |
 | `status` | `ok` / `llm_error` / `empty_body` / `template_violation` |
 
-## 생성 메타데이터 (30~39)
+## 생성 메타데이터 (32~43)
 
 | 컬럼 | 역할 |
 |---|---|
@@ -68,9 +70,11 @@
 | `template_id` | 적용된 `doc_templates.py` template_id(예: T5-4) |
 | `template_violations` | `validate_row()`가 잡은 모순 문구 목록(비어있으면 통과) |
 | `military_secret_grade` | 군사기밀 등급(대상 기관일 때만) |
-| `agency_logo_filename` | 기관 레터헤드/로고 파일명 |
+| `agency_logo_filename` | 폐기된 기관 로고 컬럼. 기존 CSV의 `--resume` 열 위치 호환을 위해 항상 빈 값으로만 유지 |
+| `military_secret_content_notice` | 일반 기관 문서에 군사기밀 내용이 포함될 때 붉은 안내문 적용 여부 |
+| `reclassification_json` | 군사기밀 등급 재분류 이력·근거를 기록한 JSON |
 
-## `--target-matrix` 전용 (40~42)
+## `--target-matrix` 전용 (44~46)
 
 `--per-clause`(기본) 경로에서는 항상 빈 값. `--target-matrix`로 돌릴 때만 `_apply_cell_metadata()`가 채운다([generate_cs_pilot.py:980](scripts/generate_cs_pilot.py:980)).
 

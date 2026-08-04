@@ -5,15 +5,14 @@ import pytest
 import datetime
 
 from rd2.generators.agency_resolver import (
-    AGENCY_LOGO_FILENAMES,
     FIXED_AGENCY_BY_SOURCE,
     GENERAL_TRACK_SUPPLEMENTARY_AGENCIES,
-    MARKING_SPEC_AGENCY_WHITELIST,
+    FALLBACK_AGENCY_WHITELIST,
     PER_DOC_AGENCY_SOURCES,
     RECLASSIFICATION_RATIO,
+    TEMPLATE_SAMPLE_AGENCY_WHITELIST,
     fetch_real_agency_date_samples,
     resolve_agency_for_candidate,
-    resolve_agency_logo,
     sample_compatible_scenario_agency_and_date,
     sample_diverse_agency_and_date_for_fallback,
     sample_real_agency_and_date_for_fallback,
@@ -104,33 +103,6 @@ class TestResolveAgencyForCandidate:
         assert PER_DOC_AGENCY_SOURCES == {
             "alio", "korea_kr", "open_go_kr", "orginl_info", "prism", "seoul_opengov", "me",
         }
-
-
-class TestResolveAgencyLogo:
-    def test_resolves_specific_generic_and_svg_assets(self):
-        assert resolve_agency_logo("국방부") == ("국방부", "국방부.png")
-        assert resolve_agency_logo("교육부") == ("교육부", "정부부처.png")
-        assert resolve_agency_logo("대통령실") == ("대통령실", "대통령실.svg")
-        assert resolve_agency_logo("청와대") == ("청와대", "청와대.svg")
-
-    def test_normalizes_explicit_aliases_and_prosecutor_offices(self):
-        assert resolve_agency_logo(" 대한민국 국가정보원 ") == (
-            "국가정보원",
-            "국정원.png",
-        )
-        assert resolve_agency_logo("공 수 처") == (
-            "고위공직자범죄수사처",
-            "고위공직자범죄수사처.png",
-        )
-        assert resolve_agency_logo("서울중앙지방검찰청") == (
-            "검찰청",
-            "검찰.png",
-        )
-
-    def test_unknown_agency_has_no_generic_fallback(self):
-        assert resolve_agency_logo("가상행정기관") is None
-        assert resolve_agency_logo("서울특별시") is None
-        assert resolve_agency_logo(None) is None
 
 
 class TestFetchRealAgencyDateSamples:
@@ -261,30 +233,24 @@ class TestSampleDiverseAgencyAndDateForFallback:
 
 
 class TestSelectWhitelistedAgency:
-    def test_clause_1_to_4_have_whitelist_entries(self):
-        for clause_no in ("1", "2", "3", "4"):
-            assert MARKING_SPEC_AGENCY_WHITELIST.get(clause_no), (
+    def test_pilot_fallback_registry_is_limited_to_clauses_1_to_4(self):
+        assert set(FALLBACK_AGENCY_WHITELIST) == {"1", "2", "3", "4"}
+
+    def test_all_template_sample_clauses_have_real_whitelist_entries(self):
+        for clause_no in map(str, range(1, 9)):
+            assert TEMPLATE_SAMPLE_AGENCY_WHITELIST.get(clause_no), (
                 f"clause {clause_no} has no whitelist entries"
             )
-
-    def test_every_whitelist_agency_has_a_logo(self):
-        for clause_no, agencies in MARKING_SPEC_AGENCY_WHITELIST.items():
-            for agency in agencies:
-                assert agency in AGENCY_LOGO_FILENAMES, (
-                    f"clause {clause_no} whitelists {agency!r} but it has no logo mapping"
-                )
+            assert "정부부처" not in TEMPLATE_SAMPLE_AGENCY_WHITELIST[clause_no]
 
     def test_returns_agency_from_clause_pool(self):
         rng = random.Random(42)
-        agency, logo_filename = select_whitelisted_agency("2", rng)
-        assert agency in MARKING_SPEC_AGENCY_WHITELIST["2"]
-        assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
+        agency = select_whitelisted_agency("2", rng)
+        assert agency in FALLBACK_AGENCY_WHITELIST["2"]
 
-    def test_unknown_clause_falls_back_to_generic_government(self):
-        rng = random.Random(42)
-        agency, logo_filename = select_whitelisted_agency("8", rng)
-        assert agency == "정부부처"
-        assert logo_filename == AGENCY_LOGO_FILENAMES["정부부처"]
+    def test_unknown_clause_is_rejected_instead_of_using_fake_agency(self):
+        with pytest.raises(ValueError, match="화이트리스트가 없는 조항"):
+            select_whitelisted_agency("9", random.Random(42))
 
     def test_deterministic_given_fixed_seed(self):
         result_a = select_whitelisted_agency("1", random.Random(7))
@@ -298,21 +264,20 @@ class TestSelectWhitelistedAgency:
             clause = CLAUSES[clause_no]
             for idx, expected_pool in enumerate(clause.scenario_agencies):
                 for seed in range(10):
-                    agency, logo_filename = select_whitelisted_agency(
+                    agency = select_whitelisted_agency(
                         clause_no, random.Random(seed), scenario_index=idx
                     )
                     assert agency in expected_pool, (
                         f"clause {clause_no} scenario {idx} picked {agency!r}, "
                         f"expected one of {expected_pool}"
                     )
-                    assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
 
     def test_scenario_specific_pools_are_subsets_of_clause_whitelist(self):
         from rd2.generators.clause_data import CLAUSES
 
         for clause_no in ("1", "2", "3", "4"):
             clause = CLAUSES[clause_no]
-            whitelist = set(MARKING_SPEC_AGENCY_WHITELIST[clause_no])
+            whitelist = set(FALLBACK_AGENCY_WHITELIST[clause_no])
             assert len(clause.scenario_agencies) == len(clause.scenario_prompts), (
                 f"clause {clause_no} scenario_agencies must align 1:1 with scenario_prompts"
             )
@@ -325,9 +290,8 @@ class TestSelectWhitelistedAgency:
         # 하위 호환: scenario_index 없이 호출하는 기존 경로(예: template_samples.py)는
         # 여전히 조항 전체 화이트리스트에서 고른다.
         rng = random.Random(42)
-        agency, logo_filename = select_whitelisted_agency("2", rng, scenario_index=None)
-        assert agency in MARKING_SPEC_AGENCY_WHITELIST["2"]
-        assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
+        agency = select_whitelisted_agency("2", rng, scenario_index=None)
+        assert agency in FALLBACK_AGENCY_WHITELIST["2"]
 
 
 class TestSynthesizePlausibleDate:

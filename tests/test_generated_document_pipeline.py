@@ -735,12 +735,11 @@ def test_c_payload_without_military_grade_gets_confidential_security_skin(
 
     marking = manifest[0]["security_marking"]
     assert marking["kind"] == "confidential"
-    assert marking["asset"] == "logo/synthetic_restricted.png"
+    assert marking["asset"] == "logo/synthetic_confidential.png"
     assert marking["asset_kind"] == "synthetic_security_stamp"
     assert marking["security_template"]["slug"] == "04_restricted_memo"
     assert marking["palette"]["ink_hex"] == "#22272C"
-    assert manifest[0]["agency_marking"]["agency_name"] == "행정안전부"
-    assert manifest[0]["agency_marking"]["asset"] == "logo/정부부처.png"
+    assert "agency_marking" not in manifest[0]
     assert manifest[0]["input"]["generation_target"][
         "military_secret_grade"
     ] is None
@@ -953,7 +952,7 @@ def test_military_c_payload_renders_explicit_grade_and_falls_back_to_confidentia
     assert marking["kind"] == "military_secret"
     assert marking["military_secret_grade"] == "2급"
     assert marking["placement"]["strategy"] == (
-        "front_cover_top_bottom_and_monochrome_skin"
+        "front_cover_top_bottom_and_neutral_frame"
     )
     with fitz.open(str(manifest[0]["pdf"])) as document:
         assert document.page_count == manifest[0]["actual_pages"] + 1

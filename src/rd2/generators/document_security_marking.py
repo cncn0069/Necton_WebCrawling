@@ -5,8 +5,8 @@
 표지 한 장을 추가하고 본문 각 면의 상·하단 중앙에 같은 등급표시도 넣는다.
 표지는 본문 페이지 수에 포함하지 않는다.
 
-기관명은 대외비·군사기밀 종류를 결정하지 않지만 기존 기관 워터마크에는 계속
-사용한다. 호출자가 생성 계약에 ``classification=C``만 지정하면 대외비, 여기에
+기관명이나 정부부처 로고는 보안표지 결정에 사용하지 않는다. 호출자가 생성
+계약에 ``classification=C``만 지정하면 대외비, 여기에
 ``military_secret_grade`` 1급·2급·3급을 지정하면 군사기밀로 처리한다. S/O
 문서는 그대로 둔다.
 """
@@ -21,15 +21,16 @@ from typing import Any, Mapping, MutableMapping, Sequence
 from uuid import uuid4
 
 import fitz
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 
 from rd2.generators.agency_resolver import (
+    MILITARY_SECRET_COVER_FILENAMES,
     MILITARY_SECRET_MARK_FILENAMES,
-    resolve_agency_logo,
 )
 from rd2.generators.confidential_security_templates import (
     BODY_SAFE_TOP_BOTTOM_PT,
     ConfidentialSecurityTemplate,
+    MILITARY_NEUTRAL_SECURITY_FRAME,
     body_safe_rect,
     draw_confidential_security_template,
     select_confidential_security_template,
@@ -38,23 +39,9 @@ from rd2.source_generation.contracts import GenerationTarget, TargetClassificati
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _LOGO_DIR = _REPO_ROOT / "logo"
-_CONFIDENTIAL_MARK_ASSET = _LOGO_DIR / "대외비.png"
-_MILITARY_SECRET_COVER_FILENAMES: dict[str, str] = {
-    "1급": "1급_비밀_표지.png",
-    "2급": "2급_비밀_표지.png",
-    "3급": "3급_비밀_표지.png",
-}
 
-_MILITARY_MARK_HEIGHT_PT = 20.0
+_MILITARY_MARK_HEIGHT_PT = 25.0
 _MILITARY_MARK_EDGE_OFFSET_PT = 2.0
-
-_AGENCY_MARK_WIDTH_RATIO = 0.42
-_AGENCY_MARK_MAX_HEIGHT_RATIO = 0.30
-_AGENCY_MARK_VERTICAL_OFFSET_RATIO = 0.036
-_AGENCY_MARK_GRAY = 82
-_AGENCY_MARK_MAX_ALPHA = 74
-_AGENCY_MARK_RASTER_WIDTH_PX = 1040
-_AGENCY_MARK_WHITE_THRESHOLD = 8
 
 _POINTS_PER_CM = 72.0 / 2.54
 _COVER_WIDTH_PT = 17.0 * _POINTS_PER_CM
@@ -74,21 +61,9 @@ class SecurityMarkingError(RuntimeError):
 @dataclass(frozen=True)
 class SecurityMarkingSpec:
     kind: str
-    mark_asset_path: Path
+    mark_asset_path: Path | None = None
     cover_asset_path: Path | None = None
     military_secret_grade: str | None = None
-
-    @property
-    def asset_path(self) -> Path:
-        """기존 호출자가 사용하던 자산 필드명을 보존한다."""
-
-        return self.mark_asset_path
-
-
-@dataclass(frozen=True)
-class AgencyMarkingSpec:
-    agency_name: str
-    asset_path: Path
 
 
 def _classification_value(
@@ -120,29 +95,10 @@ def _military_secret_grade(
     return str(grade).strip() if grade is not None else None
 
 
-def resolve_agency_marking(
-    target: GenerationTarget | Mapping[str, Any] | None,
-    *,
-    agency_name: str | None,
-) -> AgencyMarkingSpec | None:
-    """기존 C 문서 기관 워터마크 정책을 그대로 적용한다."""
-
-    if _classification_value(target) != TargetClassification.C.value:
-        return None
-    resolved = resolve_agency_logo(agency_name)
-    if resolved is None:
-        return None
-    canonical_agency, filename = resolved
-    return AgencyMarkingSpec(
-        agency_name=canonical_agency,
-        asset_path=_LOGO_DIR / filename,
-    )
-
-
 def _spec_for_grade(grade: str) -> SecurityMarkingSpec:
     if (
         grade not in MILITARY_SECRET_MARK_FILENAMES
-        or grade not in _MILITARY_SECRET_COVER_FILENAMES
+        or grade not in MILITARY_SECRET_COVER_FILENAMES
     ):
         raise SecurityMarkingError(
             "military_secret_grade는 1급, 2급, 3급 중 하나여야 합니다"
@@ -150,27 +106,20 @@ def _spec_for_grade(grade: str) -> SecurityMarkingSpec:
     return SecurityMarkingSpec(
         kind="military_secret",
         mark_asset_path=_LOGO_DIR / MILITARY_SECRET_MARK_FILENAMES[grade],
-        cover_asset_path=_LOGO_DIR / _MILITARY_SECRET_COVER_FILENAMES[grade],
+        cover_asset_path=_LOGO_DIR / MILITARY_SECRET_COVER_FILENAMES[grade],
         military_secret_grade=grade,
     )
 
 
 def _confidential_spec() -> SecurityMarkingSpec:
-    return SecurityMarkingSpec(
-        kind="confidential",
-        mark_asset_path=_CONFIDENTIAL_MARK_ASSET,
-    )
+    return SecurityMarkingSpec(kind="confidential")
 
 
 def resolve_security_marking(
     target: GenerationTarget | Mapping[str, Any] | None,
-    *,
-    agency_name: str | None = None,
 ) -> SecurityMarkingSpec | None:
     """C는 대외비로, 명시된 1·2·3급은 군사기밀 표지로 변환한다."""
 
-    # 하위 호환을 위해 인자를 유지하되 보안 등급 결정에는 사용하지 않는다.
-    _ = agency_name
     if _classification_value(target) != TargetClassification.C.value:
         return None
     grade = _military_secret_grade(target)
@@ -194,100 +143,6 @@ def _image_ratio(asset_path: Path) -> float:
         raise SecurityMarkingError(
             f"보안표지 이미지를 읽을 수 없습니다: {asset_path}"
         ) from exc
-
-
-def _open_agency_asset(asset_path: Path) -> Image.Image:
-    """PNG와 SVG 기관 자산을 RGBA 이미지로 읽는다."""
-
-    if not asset_path.is_file():
-        raise SecurityMarkingError(f"기관 로고 이미지가 없습니다: {asset_path}")
-    try:
-        if asset_path.suffix.lower() == ".svg":
-            svg_document = fitz.open(
-                stream=asset_path.read_bytes(),
-                filetype="svg",
-            )
-            try:
-                if svg_document.page_count != 1:
-                    raise SecurityMarkingError(
-                        f"기관 SVG는 한 페이지여야 합니다: {asset_path}"
-                    )
-                pixmap = svg_document[0].get_pixmap(
-                    matrix=fitz.Matrix(4, 4),
-                    alpha=True,
-                )
-                return Image.open(BytesIO(pixmap.tobytes("png"))).convert("RGBA")
-            finally:
-                svg_document.close()
-        with Image.open(asset_path) as image:
-            return image.convert("RGBA")
-    except (OSError, RuntimeError, ValueError) as exc:
-        if isinstance(exc, SecurityMarkingError):
-            raise
-        raise SecurityMarkingError(
-            f"기관 로고 이미지를 읽을 수 없습니다: {asset_path}"
-        ) from exc
-
-
-@lru_cache(maxsize=16)
-def _agency_watermark_image(asset_path: Path) -> tuple[bytes, float]:
-    """흰 배경을 지우고 선명한 저알파 회색 워터마크 PNG를 만든다."""
-
-    source = _open_agency_asset(asset_path)
-    red, green, blue, original_alpha = source.split()
-    distance_from_white = ImageChops.lighter(
-        ImageChops.invert(red),
-        ImageChops.lighter(ImageChops.invert(green), ImageChops.invert(blue)),
-    )
-    foreground = distance_from_white.point(
-        lambda value: (
-            0
-            if value <= _AGENCY_MARK_WHITE_THRESHOLD
-            else min(255, (value - _AGENCY_MARK_WHITE_THRESHOLD) * 8)
-        )
-    )
-    alpha = ImageChops.multiply(original_alpha, foreground)
-    if alpha.getbbox() is None:
-        raise SecurityMarkingError(
-            f"기관 로고에 표시할 픽셀이 없습니다: {asset_path}"
-        )
-    target_width = _AGENCY_MARK_RASTER_WIDTH_PX
-    target_height = max(1, round(target_width * alpha.height / alpha.width))
-    alpha = alpha.resize(
-        (target_width, target_height),
-        Image.Resampling.LANCZOS,
-    )
-    alpha = ImageEnhance.Contrast(alpha).enhance(1.35)
-    alpha = alpha.filter(
-        ImageFilter.UnsharpMask(radius=1.1, percent=260, threshold=2)
-    )
-    alpha = alpha.point(
-        lambda value: round(value * _AGENCY_MARK_MAX_ALPHA / 255)
-    )
-    watermark = Image.new(
-        "RGBA",
-        alpha.size,
-        (_AGENCY_MARK_GRAY, _AGENCY_MARK_GRAY, _AGENCY_MARK_GRAY, 0),
-    )
-    watermark.putalpha(alpha)
-    output = BytesIO()
-    watermark.save(output, format="PNG", optimize=True)
-    return output.getvalue(), watermark.width / watermark.height
-
-
-def _agency_mark_rect(page: fitz.Page, *, image_ratio: float) -> fitz.Rect:
-    mark_width = page.rect.width * _AGENCY_MARK_WIDTH_RATIO
-    mark_height = mark_width / image_ratio
-    max_height = page.rect.height * _AGENCY_MARK_MAX_HEIGHT_RATIO
-    if mark_height > max_height:
-        mark_height = max_height
-        mark_width = mark_height * image_ratio
-    x0 = (page.rect.width - mark_width) / 2
-    y0 = (
-        (page.rect.height - mark_height) / 2
-        + page.rect.height * _AGENCY_MARK_VERTICAL_OFFSET_RATIO
-    )
-    return fitz.Rect(x0, y0, x0 + mark_width, y0 + mark_height)
 
 
 @lru_cache(maxsize=1)
@@ -408,15 +263,15 @@ def _save_marked_pdf(
     output_path: Path,
     *,
     spec: SecurityMarkingSpec,
-    agency_spec: AgencyMarkingSpec | None,
     security_template: ConfidentialSecurityTemplate,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
+) -> dict[str, Any]:
     military = spec.kind == "military_secret"
-    effective_mark_asset_path = (
-        spec.mark_asset_path
-        if military
-        else _LOGO_DIR / security_template.stamp_asset
-    )
+    if military:
+        if spec.mark_asset_path is None:
+            raise SecurityMarkingError("군사기밀 등급표시 자산이 없습니다")
+        effective_mark_asset_path = spec.mark_asset_path
+    else:
+        effective_mark_asset_path = _LOGO_DIR / security_template.stamp_asset
     if military:
         mark_ratio = _image_ratio(effective_mark_asset_path)
         try:
@@ -434,29 +289,6 @@ def _save_marked_pdf(
         )
         skin_mark_bytes = mark_bytes
         skin_mark_ratio = mark_ratio
-
-    agency_marking: dict[str, Any] | None = None
-    agency_image_bytes: bytes | None = None
-    agency_image_ratio: float | None = None
-    if agency_spec is not None:
-        agency_image_bytes, agency_image_ratio = _agency_watermark_image(
-            agency_spec.asset_path
-        )
-        agency_marking = {
-            "agency_name": agency_spec.agency_name,
-            "asset": f"logo/{agency_spec.asset_path.name}",
-            "placement": {
-                "strategy": "center_watermark",
-                "width_ratio": _AGENCY_MARK_WIDTH_RATIO,
-                "max_height_ratio": _AGENCY_MARK_MAX_HEIGHT_RATIO,
-                "vertical_offset_ratio": _AGENCY_MARK_VERTICAL_OFFSET_RATIO,
-            },
-            "tone": {
-                "grayscale": _AGENCY_MARK_GRAY,
-                "max_alpha": _AGENCY_MARK_MAX_ALPHA,
-            },
-            "overlay": True,
-        }
     try:
         source_document = fitz.open(source_path)
     except (OSError, RuntimeError) as exc:
@@ -471,7 +303,6 @@ def _save_marked_pdf(
 
         content_page_count = source_document.page_count
         mark_xref = 0
-        agency_xref = 0
         skin_placements: list[dict[str, object]] = []
         for page_number, source_page in enumerate(source_document):
             page = marked_document.new_page(
@@ -490,14 +321,6 @@ def _save_marked_pdf(
             # imported body before drawing security marks so a continued table
             # cannot clip a stamp on the following page.
             page.wrap_contents()
-            if agency_image_bytes is not None and agency_image_ratio is not None:
-                agency_xref = page.insert_image(
-                    _agency_mark_rect(page, image_ratio=agency_image_ratio),
-                    stream=agency_image_bytes,
-                    xref=agency_xref,
-                    keep_proportion=True,
-                    overlay=True,
-                )
             skin_placements.append(
                 draw_confidential_security_template(
                     page,
@@ -548,7 +371,7 @@ def _save_marked_pdf(
 
     placement: dict[str, Any] = {
         "strategy": (
-            "front_cover_top_bottom_and_monochrome_skin"
+            "front_cover_top_bottom_and_neutral_frame"
             if military
             else "monochrome_security_skin"
         ),
@@ -583,11 +406,7 @@ def _save_marked_pdf(
         "asset_kind": (
             "military_grade_mark"
             if military
-            else (
-                "confidential_mark"
-                if effective_mark_asset_path == _CONFIDENTIAL_MARK_ASSET
-                else "synthetic_security_stamp"
-            )
+            else "synthetic_security_stamp"
         ),
         "security_template": security_template.to_dict(),
         "palette": {
@@ -603,7 +422,7 @@ def _save_marked_pdf(
         assert spec.cover_asset_path is not None
         marking["cover_asset"] = f"logo/{spec.cover_asset_path.name}"
         marking["military_secret_grade"] = spec.military_secret_grade
-    return marking, agency_marking
+    return marking
 
 
 def prepend_military_secret_cover(pdf_path: Path, grade: str) -> None:
@@ -645,30 +464,19 @@ def apply_security_marking_to_manifest(
     manifest: Sequence[MutableMapping[str, Any]],
     *,
     target: GenerationTarget | Mapping[str, Any] | None,
-    agency_name: str | None = None,
-    content_sha256: str | None = None,
     selection_seed: int = 0,
 ) -> None:
-    """성공 PDF 묶음 전체를 staging한 뒤에만 C 문서판으로 교체한다.
+    """성공 PDF 묶음 전체를 staging한 뒤에만 C 문서판으로 교체한다."""
 
-    ``content_sha256``는 기존 호출 계약과 호환하기 위해 유지한다. 스킨 선택은
-    명시적인 ``selection_seed``를 사용한다.
-    """
-
-    _ = content_sha256
-    spec = resolve_security_marking(target, agency_name=agency_name)
+    spec = resolve_security_marking(target)
     if spec is None:
+        for entry in manifest:
+            entry.pop("agency_marking", None)
+            entry.pop("security_marking", None)
         return
-    agency_spec = resolve_agency_marking(target, agency_name=agency_name)
 
     staged: list[
-        tuple[
-            Path,
-            Path,
-            MutableMapping[str, Any],
-            dict[str, Any],
-            dict[str, Any] | None,
-        ]
+        tuple[Path, Path, MutableMapping[str, Any], dict[str, Any]]
     ] = []
     backups: list[tuple[Path, Path]] = []
     try:
@@ -684,29 +492,24 @@ def apply_security_marking_to_manifest(
             staged_path = pdf_path.with_name(
                 f".{pdf_path.stem}.{uuid4().hex}.security-mark.pdf"
             )
-            security_template = select_confidential_security_template(
-                selection_seed,
-                offset=entry_index,
+            security_template = (
+                MILITARY_NEUTRAL_SECURITY_FRAME
+                if spec.kind == "military_secret"
+                else select_confidential_security_template(
+                    selection_seed,
+                    offset=entry_index,
+                )
             )
-            marking, agency_marking = _save_marked_pdf(
+            marking = _save_marked_pdf(
                 pdf_path,
                 staged_path,
                 spec=spec,
-                agency_spec=agency_spec,
                 security_template=security_template,
             )
-            staged.append(
-                (staged_path, pdf_path, entry, marking, agency_marking)
-            )
+            staged.append((staged_path, pdf_path, entry, marking))
 
         try:
-            for (
-                staged_path,
-                pdf_path,
-                entry,
-                marking,
-                agency_marking,
-            ) in staged:
+            for staged_path, pdf_path, entry, marking in staged:
                 backup_path = pdf_path.with_name(
                     f".{pdf_path.stem}.{uuid4().hex}.security-mark.backup.pdf"
                 )
@@ -718,26 +521,21 @@ def apply_security_marking_to_manifest(
                     backup_path.replace(pdf_path)
                     backups.pop()
                     raise
-                entry["security_marking"] = marking
-                if agency_marking is not None:
-                    entry["agency_marking"] = agency_marking
-                else:
-                    entry.pop("agency_marking", None)
         except OSError as exc:
             for pdf_path, backup_path in reversed(backups):
                 backup_path.replace(pdf_path)
-            for _, _, entry, _, _ in staged:
-                entry.pop("security_marking", None)
-                entry.pop("agency_marking", None)
             raise SecurityMarkingError(
                 "보안표지 PDF 묶음을 최종 경로에 게시하지 못했습니다"
             ) from exc
         else:
+            for _, _, entry, marking in staged:
+                entry.pop("agency_marking", None)
+                entry["security_marking"] = marking
             for _, backup_path in backups:
                 backup_path.unlink(missing_ok=True)
             backups.clear()
     finally:
-        for staged_path, _, _, _, _ in staged:
+        for staged_path, _, _, _ in staged:
             staged_path.unlink(missing_ok=True)
         for _, backup_path in backups:
             backup_path.unlink(missing_ok=True)

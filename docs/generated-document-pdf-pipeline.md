@@ -133,12 +133,13 @@ python scripts/render_generated_documents.py data/render_inputs \
 
 ### C 문서 보안표지
 
-보안표지는 템플릿 HTML이 아니라 최종 PDF 공통 후처리 단계에서 적용한다.
+보안표지는 템플릿 HTML이 아니라 PDF 공통 후처리 단계에서 적용한다. 이후 선택된
+문서에는 손글씨 합성 및 이미지 전용 스캔 후처리가 추가될 수 있다.
 `generation_target.classification`이 `C`이면 단색 대외비 보안 스킨 10종 중
-하나를 seed로 재현 가능하게 선택한다. `military_secret_grade`가 명시되면 같은
-스킨에 등급별 앞표지와 본문 상·하단 표시를 더한다. S/O 문서는 변경하지 않는다.
-기관명과 정부부처 로고는 보안 스킨 적용 여부나 등급 판단에 사용하지 않는다.
-다만 매핑된 기관명은 기존 중앙 워터마크 선택에 계속 사용한다.
+하나를 seed로 재현 가능하게 선택한다. `military_secret_grade`가 명시되면 등급
+문구가 없는 중립 프레임과 등급별 앞표지·본문 상하단 표시만 사용한다. S/O 문서는
+변경하지 않는다.
+기관명과 정부부처 로고는 적용 여부나 등급 판단에 사용하지 않는다.
 
 ```json
 {
@@ -154,9 +155,10 @@ python scripts/render_generated_documents.py data/render_inputs \
 }
 ```
 
-등급이 없는 C 문서는 `대외비`, `CONFIDENTIAL`, `TOP SECRET`, `RESTRICTED`,
-`NEED TO KNOW` 가상 스탬프를 선택한 보안 스킨의 예약 여백에 표시한다. 모든
-가상 영문 스탬프에는 `VIRTUAL SAMPLE`이 포함되며 색상은 `#22272C` 단색이다.
+등급이 없는 C 문서는 `대외비` 또는 `CONFIDENTIAL` 스탬프만 선택한 보안 스킨의
+예약 여백에 표시한다. `TOP SECRET`은 명시적인 `1급` 문서에서만 사용한다. 가상
+영문 스탬프에는 `VIRTUAL SAMPLE`이 포함되고, 최종 PDF에도 같은 문구를 읽을 수
+있는 벡터 텍스트로 별도 표시한다. 색상은 `#22272C` 단색이다.
 보안 스킨은 공문·연구보고서·회의록 등 본문 렌더러와 독립적이며 기존 payload에
 별도 필드를 요구하지 않는다.
 
@@ -168,6 +170,12 @@ python scripts/render_generated_documents.py data/render_inputs \
 넣고, 등급표시는 그 바깥 여백에 배치한다. 헤더·푸터가 빽빽하거나 장문 block이
 많은 템플릿에서도 본문을 가리지 않는다. 잘못된 등급이나 누락된 자산은 해당
 출력을 거부한다.
+
+최종 배치 순서는 `본문 렌더·절단 → 보안표지 → 민감정보 근거 검증 → 선택적
+손글씨 합성 → 선택적 이미지 전용 스캔 → manifest 게시`다. 스캔이 적용되면
+`security_marking.stage`는 `pre_scan`, `baked_into_scan`은 `true`가 되어 표시
+좌표가 스캔 전 PDF 기준임을 명시한다. 후처리 중 실패한 문서의 PDF·HTML·문서별
+manifest는 제거하고 배치 manifest에만 거절 사유를 남긴다.
 
 보안 스킨 slug:
 
@@ -340,13 +348,12 @@ rule_04_notice_frame
 ## 결과 확인
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
-`manifest.json`에는 seed, 입력 해시, 기관명 선택, 원문 포함 검증,
+`manifest.json`에는 seed, 입력 해시, 발행기관명, 원문 포함 검증,
 합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. 기관 로고용
-`agency_marking`은 기존과 같이 별도 필드에 기록한다. 보안 스킨 선택과 기밀
-등급은 기관 로고와 독립적으로 결정된다. 배치 입력의 문서별 성공·실패는
+`agency_marking` 필드는 생성하지 않는다. 배치 입력의 문서별 성공·실패는
 `batch_manifest.json`에서 확인한다.
 
-등급별 표지, 가상 스탬프와 기관 워터마크 자산 목록은
+등급별 표지와 본문 표시 자산, 사용하지 않는 기관 로고 목록은
 [`logo/README.md`](../logo/README.md)를 따른다.
 
 실패 입력을 조사 목적으로만 렌더링할 때는

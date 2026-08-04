@@ -1,7 +1,6 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><base href="{{ base_uri }}"><style>{{ css }}</style></head>
 <body style="--margin-top:{{ layout.margins_mm[0] }}mm;--margin-bottom:{{ layout.margins_mm[1] }}mm;--margin-left:{{ layout.margins_mm[2] }}mm;--margin-right:{{ layout.margins_mm[3] }}mm;--title-size:{{ layout.title_font_size }}pt;--title-align:{{ layout.title_align }}">
 {% if watermark_uri %}<img class="watermark" src="{{ watermark_uri }}" alt="">{% endif %}
-{% if agency_mark_uri %}<img class="agency-mark" src="{{ agency_mark_uri }}" alt="">{% endif %}
 {% if status != 'ok' %}<div class="status">[생성 상태: {{ status }} — 검토용 표시, 본문은 아래 참고]</div>{% endif %}
 {% if template %}{% include form_template %}{% else %}{% include 'generic.html' %}{% endif %}
 </body></html>
