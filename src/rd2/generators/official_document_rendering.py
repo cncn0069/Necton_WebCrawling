@@ -9,41 +9,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
-import os
 from pathlib import Path
 from typing import Any, Collection, Mapping, Sequence
 
 import fitz
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
-#: 순서가 중요하다. MSYS2 mingw64는 자체 OpenSSL(libssl-3-x64.dll,
-#: libcrypto-3-x64.dll)을 갖고 있고, 이는 파이썬이 쓰는 것과 다른 빌드다.
-#: WeasyPrint가 필요로 하는 Pango/GObject를 찾으려고 그 폴더를
-#: ``os.add_dll_directory``로 검색 경로에 얹으면, 이 프로세스가 그 전까지
-#: 한 번도 ``ssl``을 안 건드렸을 경우 다음 ``import ssl``(urllib.request가
-#: weasyprint 안에서 처음 로드될 때 트리거)이 파이썬 번들 OpenSSL 대신 MSYS2
-#: 쪽을 집어 ABI 불일치로 조용히 실패한다 — urllib.request의
-#: ``try: import ssl except ImportError`` 가드가 그걸 삼켜서 ``HTTPSHandler``가
-#: 아예 없는 채로 모듈이 캐시되고, WeasyPrint import가
-#: ``AttributeError: module 'urllib.request' has no attribute 'HTTPSHandler'``로
-#: 죽는다. 그래서 MSYS2 디렉터리를 추가하기 **전에** ``ssl``을 먼저 import해
-#: 파이썬 자신의 OpenSSL로 확정 짓는다 — 이후 같은 프로세스에서는 캐시된 모듈을
-#: 재사용하므로 뒤늦게 추가되는 검색 경로에 영향받지 않는다.
-import ssl  # noqa: F401
-
-_WINDOWS_DLL_HANDLES: list[object] = []
-if os.name == "nt" and hasattr(os, "add_dll_directory"):
-    configured = os.environ.get("WEASYPRINT_DLL_DIRECTORIES", "")
-    candidates = [
-        *(Path(item) for item in configured.split(os.pathsep) if item),
-        Path(r"C:\tools\msys64\mingw64\bin"),
-    ]
-    for candidate in candidates:
-        if candidate.is_dir():
-            _WINDOWS_DLL_HANDLES.append(os.add_dll_directory(str(candidate)))
-
-from weasyprint import HTML
-
+from rd2.generators.weasyprint_runtime import HTML
 from rd2.generators.official_document_variations import (
     EXPECTED_PAGE_COUNTS,
     apply_identity_context,

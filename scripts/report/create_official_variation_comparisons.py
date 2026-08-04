@@ -9,11 +9,13 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageDraw, ImageFont
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_INPUT_DIR = (
-    _REPO_ROOT / "output" / "pdf" / "official_template_layout_variations"
-)
-_FONT_DIR = _REPO_ROOT / "src" / "rd2" / "generators" / "assets" / "fonts"
+import rd2.generators
+
+# 폰트는 저장소 배치가 아니라 패키지에 속한다. 저장소 루트에서 거슬러 찾으면
+# 스크립트가 몇 층 깊이에 있는지를 스크립트가 알아야 해서, 폴더를 옮길 때마다 틀린다.
+# 이 스크립트는 PDF를 렌더링하지 않으므로 렌더러 모듈(=WeasyPrint) 대신
+# 패키지 위치만 가져온다.
+_FONT_DIR = Path(rd2.generators.__file__).parent / "assets" / "fonts"
 
 _TEMPLATE_LABELS = {
     "01_classic_municipal": "01 전통 공문형",
@@ -175,7 +177,15 @@ def _render_first_page(pdf_path: Path, image_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", type=Path, default=_DEFAULT_INPUT_DIR)
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        required=True,
+        help=(
+            "generate_official_template_variations.py가 만든 변주 디렉터리 "
+            "(manifest.json과 previews/가 있는 곳)"
+        ),
+    )
     args = parser.parse_args()
     for output_path in create_comparison_sheets(args.input_dir):
         print(f"[ok] {output_path}")

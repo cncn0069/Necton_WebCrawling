@@ -34,7 +34,7 @@ from rd2.source_generation.contracts import (
     SourceTextBlock,
     TargetClassification,
 )
-from rd2.source_generation.pipeline import StructuredCall
+from rd2.source_generation.gateway import StructuredCall
 
 
 def snapshot() -> SourceDocumentSnapshot:
@@ -116,6 +116,7 @@ def source_assessment(
         else (span,)
     )
     return SourceAssessment(
+        layout_analysis="표제부와 처리 의견란, 결재란이 있는 1쪽 서식이다.",
         source_classification=source_label,
         source_suitability=SourceSuitability(
             assessment_scope=AssessmentScope.FULL_DOCUMENT,

@@ -23,11 +23,11 @@
 구체적인 성명·일자·금액은 생성기가 만든다 — ``seed_assembly``가 "구체적 값은 넣지
 않는다"고 정한 것과 같은 이유다.
 
-**프롬프트는 이 모듈이 통째로 만든다.** ``c_only_generation.build_c_prompt``는
-사건 프레임이 없던 시절 것이라 ``CLAUSES[n].scenario_prompts[0]``을 무조건 첫
-번째로 박는다 — 교정 보안 문서에 "대형 경제범죄 압수수색 계획"이 딸려 들어가고,
-그 한 줄이 4000건 전부에 똑같이 박힌다. 여기서는 그 하드코딩을 버리고, 그쪽에만
-있던 문체·기호체계 지시만 가져와 한 벌로 합친다.
+**프롬프트는 이 모듈이 통째로 만든다.** 이전 C 생성 프롬프트(``c_only_generation``,
+삭제됨)는 사건 프레임이 없던 시절 것이라 ``CLAUSES[n].scenario_prompts[0]``을
+무조건 첫 번째로 박았다 — 교정 보안 문서에 "대형 경제범죄 압수수색 계획"이 딸려
+들어가고, 그 한 줄이 4000건 전부에 똑같이 박힌다. 여기서는 그 하드코딩을 버리고,
+그쪽에만 있던 문체·기호체계 지시만 가져와 한 벌로 합쳤다.
 """
 
 from __future__ import annotations
@@ -37,12 +37,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Iterator, Mapping
 
-from rd2.generators.agency_resolver import (
+from rd2.disclosure.military_secret import (
     MILITARY_SECRET_GRADE_LABELS,
     MILITARY_SECRET_GRADES,
     is_military_secret_agency,
 )
-from rd2.generators.clause_data import CLAUSES
+
+from rd2.disclosure.clause_data import CLAUSES
 from rd2.source_generation.classification_taxonomy import (
     DOCUMENT_FORM_DEFINITIONS,
     SUBCLAUSE_DEFINITIONS,
@@ -55,7 +56,7 @@ from rd2.source_generation.document_form import header_keys_for
 
 #: 템플릿·전개·프롬프트 규칙의 버전. 슬롯 구성이나 프롬프트 문구가 바뀌면 올린다 —
 #: planner policy hash에 실려 과거 계획을 무효화한다.
-C_TRACK_TEMPLATE_VERSION = "c-track-template-v1"
+C_TRACK_TEMPLATE_VERSION = "c-track-template-v2"
 
 #: 비군사기관 문서의 등급 표기. ``is_military_secret_agency``가 참이면
 #: ``MILITARY_SECRET_GRADES``(Ⅰ~Ⅲ급)를 쓴다.
@@ -128,8 +129,8 @@ _TITLE_RULE = """[제목]
   연도나 차수처럼 이 건을 특정하는 표현을 넣어 다른 건과 구별되게 한다.
 - '[합성]', '(가상)', 'AI 생성' 같은 라벨은 절대 넣지 않는다."""
 
-#: ``c_only_generation.build_c_prompt``에만 있던 문체·기호체계 지시.
-#: 그쪽의 "3. 확인 사항"(화이트리스트·조항 분포를 확인하라)은 가져오지 않는다 —
+#: 삭제된 ``c_only_generation``에만 있던 문체·기호체계 지시.
+#: 그쪽의 "3. 확인 사항"(화이트리스트·조항 분포를 확인하라)은 가져오지 않았다 —
 #: 모델이 확인할 수 있는 대상이 아니라 개발자 메모다.
 #:
 #: 절 이름은 ``[문체]``다. ``[문서형식]``이던 때는 문서 **구조**를 다루는
@@ -146,6 +147,27 @@ _DOCUMENT_STYLE_RULES = """[문체]
        ○ (중항목 - 핵심 내용)
          - (소항목 - 세부 사실 및 근거)
            ※ (참고/주의사항 - 보충 설명)"""
+
+
+#: 위 기호 위계를 **어느 블록에 담을지**. 문체만 정해 두면 모델은 개요 전체를
+#: ``paragraph.text`` 하나에 개행으로 이어 붙인다 — 실측(2026-08-04, case 141):
+#: 11개 블록 중 단락 하나가 개행 9개짜리 471자였다. HTML은 개행을 공백으로
+#: 접고 ``official_variants`` 계열 CSS에는 ``white-space: pre-line``이 없어서,
+#: PDF에서 □·○·- 위계가 통째로 사라진 통글이 됐다.
+#:
+#: 계약은 이미 이걸 예상하고 있었다 — ``contracts.BULLET_MARKERS``는 "C트랙
+#: 프롬프트가 위계를 요구하므로 생성기가 낸 ``items``에 기호가 이미 붙어
+#: 있다"고 적고, ``render_bullet_item``은 그래서 기호를 벗기지 않는다. 빠져
+#: 있던 것은 **그 items에 담으라는 말** 하나였다.
+_BLOCK_STRUCTURE_RULES = """[출력 구조]
+- 개요를 한 블록의 text에 개행으로 이어 붙이지 않는다. 개행은 렌더링에서 공백으로
+  접혀 위계가 사라진다.
+- □ 대항목 한 줄은 paragraph 블록 하나로 낸다. text에는 그 한 줄만 담는다.
+- 그 아래 ○·-·※ 줄들은 뒤따르는 bullet_list 블록 하나에 담는다. 줄 하나가
+  items 항목 하나이며, 각 항목은 자기 기호(○, -, ※)와 들여쓰기를 그대로 달고
+  있어야 한다 — 기호가 곧 깊이다.
+- 따라서 □ 절 하나마다 paragraph 1개 + bullet_list 1개가 짝으로 나온다.
+- 표제부(문서번호·수신·시행일자 등)는 key_value 블록으로 낸다."""
 
 
 @dataclass(frozen=True)
@@ -771,6 +793,8 @@ def render_fixed_prefix(template: CTrackTemplate) -> str:
             _TITLE_RULE,
             "",
             _DOCUMENT_STYLE_RULES,
+            "",
+            _BLOCK_STRUCTURE_RULES,
         ]
     )
 

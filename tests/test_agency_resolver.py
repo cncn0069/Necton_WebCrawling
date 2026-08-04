@@ -292,7 +292,7 @@ class TestSelectWhitelistedAgency:
         assert result_a == result_b
 
     def test_scenario_index_narrows_to_scenario_specific_pool(self):
-        from rd2.generators.clause_data import CLAUSES
+        from rd2.disclosure.clause_data import CLAUSES
 
         for clause_no in ("1", "2", "3", "4"):
             clause = CLAUSES[clause_no]
@@ -308,7 +308,7 @@ class TestSelectWhitelistedAgency:
                     assert logo_filename == AGENCY_LOGO_FILENAMES[agency]
 
     def test_scenario_specific_pools_are_subsets_of_clause_whitelist(self):
-        from rd2.generators.clause_data import CLAUSES
+        from rd2.disclosure.clause_data import CLAUSES
 
         for clause_no in ("1", "2", "3", "4"):
             clause = CLAUSES[clause_no]

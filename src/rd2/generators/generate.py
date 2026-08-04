@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
 
-from rd2.generators.clause_data import CLAUSES, ClauseDefinition
+from rd2.disclosure.clause_data import CLAUSES, ClauseDefinition
 from rd2.generators.doc_templates import ApprovalState, DocTemplateSpec
 from rd2.schema.models import Document
 from rd2.storage.naming import DOC_TYPE_SYNTHETIC_DOCUMENT

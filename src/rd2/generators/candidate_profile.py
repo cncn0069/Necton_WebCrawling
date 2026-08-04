@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
-from rd2.generators.agency_categories import get_agency_category
+from rd2.disclosure.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import FIXED_AGENCY_BY_SOURCE, PER_DOC_AGENCY_SOURCES
 from rd2.generators.doc_type_inference import infer_doc_type
 from rd2.generators.template_matrix import infer_subclause_key

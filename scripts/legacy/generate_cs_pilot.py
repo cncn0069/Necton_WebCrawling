@@ -67,27 +67,30 @@ from rd2.extraction.storage import (
     extraction_output_path,
     read_json_gz,
 )
-from rd2.generators.agency_categories import get_agency_category
+from rd2.disclosure.agency_categories import get_agency_category
 from rd2.generators.agency_resolver import (
     AGENCY_LOGO_FILENAMES,
     MARKING_SPEC_AGENCY_WHITELIST,
-    MILITARY_SECRET_MARK_FILENAMES,
     fetch_real_agency_date_samples,
-    is_military_secret_agency,
     resolve_agency_for_candidate,
     sample_compatible_scenario_agency_and_date,
     sample_diverse_agency_and_date_for_fallback,
     scenario_contains_military_secret,
-    select_military_secret_grade,
     select_reclassification,
     select_whitelisted_agency,
     synthesize_plausible_date,
 )
+from rd2.disclosure.military_secret import (
+    MILITARY_SECRET_MARK_FILENAMES,
+    is_military_secret_agency,
+    select_military_secret_grade,
+)
+
 from rd2.generators.candidate_manifest import (
     fetch_all_span_candidates,
     load_candidate_manifest,
 )
-from rd2.generators.clause_data import CLAUSES
+from rd2.disclosure.clause_data import CLAUSES
 from rd2.generators.doc_templates import find_template, validate_row
 from rd2.generators.doc_type_inference import infer_doc_type
 from rd2.generators.pii_evidence import (

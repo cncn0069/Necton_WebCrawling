@@ -70,6 +70,67 @@ def test_synthetic_docs_without_url_never_deduped(store):
     assert store.count_documents(cso_classification="C") == 3
 
 
+def _generated_yn(store, dedup_key_like: str) -> bytes:
+    with store._conn.cursor() as cur:
+        cur.execute(
+            "SELECT generated_yn FROM documents WHERE dedup_key LIKE %s",
+            (dedup_key_like,),
+        )
+        return cur.fetchone()[0]
+
+
+def test_upsert_stores_generated_yn_0_for_collected_docs(store):
+    store.upsert(_doc())
+    assert _generated_yn(store, f"{SOURCE_OPEN_GO_KR}::%") == b"0"
+
+
+def test_upsert_stores_generated_yn_1_for_generated_docs(store):
+    """생성 문서는 '1' — is_synthetic에서 파생되므로 수집기/생성기가 따로
+    설정할 필요가 없다. BINARY(1) 컬럼이라 ASCII 한 글자로 들어간다."""
+    store.upsert(
+        _doc(
+            cso_classification=CsoClassification.S,
+            cso_sub_clause="5",
+            source="gen_alio",
+            source_url="synthetic://source-generation/alio-1/5-none",
+            is_synthetic=True,
+        )
+    )
+    assert _generated_yn(store, "gen_alio::%") == b"1"
+
+
+def test_count_documents_filters_by_generated_yn(store):
+    store.upsert(_doc())
+    store.upsert(_doc(source="gen_alio", source_url=None, is_synthetic=True))
+    assert store.count_documents() == 2
+    assert store.count_documents(generated_yn="0") == 1
+    assert store.count_documents(generated_yn="1") == 1
+
+
+def test_upsert_stores_generation_provenance(store):
+    """input_prompt/content/generated_text/ref_id는 준 그대로 들어간다."""
+    store.upsert(
+        _doc(
+            cso_classification=CsoClassification.S,
+            cso_sub_clause="5",
+            source="gen_alio",
+            source_url="synthetic://source-generation/alio-7/5-none",
+            is_synthetic=True,
+            input_prompt="생성기 프롬프트",
+            content="원문 앞 40쪽",
+            generated_text="생성된 본문",
+            ref_id=7,
+        )
+    )
+    with store._conn.cursor() as cur:
+        cur.execute(
+            "SELECT input_prompt, content, generated_text, ref_id FROM documents "
+            "WHERE dedup_key LIKE %s",
+            ("gen_alio::%",),
+        )
+        assert cur.fetchone() == ("생성기 프롬프트", "원문 앞 40쪽", "생성된 본문", 7)
+
+
 def test_quarantine_stores_failed_record(store):
     store.quarantine({"title": "broken"}, "is_synthetic mismatch")
     assert store.count_quarantine() == 1

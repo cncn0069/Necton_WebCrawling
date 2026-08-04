@@ -27,12 +27,13 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import random
 
-from rd2.generators.agency_categories import get_agency_category  # noqa: E402
-from rd2.generators.agency_resolver import (  # noqa: E402
+from rd2.disclosure.agency_categories import get_agency_category  # noqa: E402
+from rd2.generators.agency_resolver import select_whitelisted_agency  # noqa: E402
+from rd2.disclosure.military_secret import (  # noqa: E402
     is_military_secret_agency,
     select_military_secret_grade,
-    select_whitelisted_agency,
 )
+
 from rd2.generators.doc_templates import TEMPLATE_VARIANTS, find_template, validate_row  # noqa: E402
 from rd2.generators.template_matrix import TEMPLATE_TARGETS  # noqa: E402
 from rd2.generators.pdf_render import render_document_pdf  # noqa: E402

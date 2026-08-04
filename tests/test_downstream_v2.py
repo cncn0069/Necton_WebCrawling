@@ -19,7 +19,7 @@ from rd2.augmentation.llm_augment import (  # noqa: E402
     validate_candidates_for_document,
 )
 from rd2.extraction.storage import extraction_output_path  # noqa: E402
-from rd2.generators.clause_data import CLAUSES  # noqa: E402
+from rd2.disclosure.clause_data import CLAUSES  # noqa: E402
 
 
 def _candidate(

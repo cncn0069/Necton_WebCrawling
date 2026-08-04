@@ -21,16 +21,13 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from rd2.generators.generated_blocks import blocks_to_body_text
 from rd2.generators.official_document_rendering import (
     _normalized_pdf_text,
     _normalized_required_text,
     _page_count,
 )
-
-# ``official_document_rendering``이 weasyprint import 전에 처리하는 MSYS2/ssl
-# 문제를 그대로 물려받는다 — 위 import가 이미 그 준비를 끝낸 뒤에만 아래가
-# 성립하므로 순서를 바꾸지 않는다.
-from weasyprint import HTML  # noqa: E402
+from rd2.generators.weasyprint_runtime import HTML
 
 VERBATIM_SLUG = "00_verbatim"
 
@@ -54,11 +51,6 @@ def render_verbatim_document(
     required_source_texts: tuple[str, ...],
 ) -> dict[str, object]:
     """block을 그대로 인쇄하고, 원문 글자 누락만 검사한다."""
-
-    # ``generated_document_pipeline``이 이 모듈을 import하므로 최상위에서
-    # 되받으면 순환이 된다. 평탄화 규칙 하나만 빌려 쓰는 것이라 호출 시점에
-    # 가져온다.
-    from rd2.generators.generated_document_pipeline import blocks_to_body_text
 
     target_dir = output_dir / VERBATIM_SLUG
     target_dir.mkdir(parents=True, exist_ok=True)

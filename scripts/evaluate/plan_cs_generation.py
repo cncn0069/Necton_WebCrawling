@@ -28,7 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from dotenv import load_dotenv
 
 from rd2.canonical import compute_candidate_profile_digest
-from rd2.generators.agency_categories import AGENCY_CATEGORIES
+from rd2.disclosure.agency_categories import AGENCY_CATEGORIES
 from rd2.generators.candidate_manifest import fetch_all_span_candidates, load_candidate_manifest
 from rd2.generators.candidate_profile import profile_candidates, write_candidate_profiles_atomic
 from rd2.generators.generation_plan_schema import build_generation_plan, write_generation_plan_atomic

@@ -34,8 +34,6 @@ from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
 _SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl", ".txt"})
 SUCCESSFUL_RENDER_STATUSES = frozenset({"ok", "ok_truncated"})
 _COMPACT_VARIATION_INDEX = 2
@@ -602,7 +600,12 @@ def main() -> None:
             "디렉터리는 문서당 균등 랜덤 서식 한 건을 생성합니다."
         ),
     )
-    parser.add_argument("--output-dir", type=Path, default=_DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="렌더링 결과를 쓸 디렉터리 (예: output/pdf/generated_documents)",
+    )
     parser.add_argument("--per-template", type=int, default=1)
     parser.add_argument(
         "--seed",

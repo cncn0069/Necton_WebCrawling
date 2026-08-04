@@ -31,7 +31,13 @@ from rd2.schema.models import Document
 # 한 차례 컬럼에서 제거됐다가, 같은 날 오후 후속 office-hours에서 본문파일을
 # 출처별/문서종류별 폴더로 정리하는 요구가 생기며 다시 컬럼으로 복원됨(design doc:
 # 안정현-design-20260707-115203.md 참고) — 단순 조회 편의가 아니라 파일 저장 경로를
-# 결정하는 입력값이 됐기 때문. is_synthetic/source_url은 이번 요청과 무관해 계속 제외.
+# 결정하는 입력값이 됐기 때문. source_url은 이번 요청과 무관해 계속 제외.
+# data_origin은 2026-08-04에 추가 — 원본 수집분(O)과 생성분(G)을 DB에서 구분할
+# 컬럼이 없어(구 is_synthetic 컬럼은 2026-07-15 정리로 제거) source의 "gen_"
+# 접두사가 유일한 표시였는데, 접두사는 출처 이름과 한 칸에 섞여 있어 학습셋을
+# 나눌 기준으로 쓰기엔 약했다(합성 소스명이 접두사 규약을 안 따르는 경로도 있음 —
+# generators/generate.py의 "synthetic-llm"). is_synthetic 불리언과 달리 O/G
+# 한 글자로 두는 건 cso_classification과 같은 방식으로 읽고 필터하기 위함.
 #
 # 타입은 실제 컬럼 값 길이 실측(2026-07-15, 12,707건 기준)에 여유를 두고 정함.
 # body_text/content_summary/non_disclosure_reason/body_file_path/other_file_paths/
@@ -58,7 +64,37 @@ _EXTRA_COLUMNS: list[tuple[str, str]] = [
     ("doc_type", "VARCHAR(50)"),
     ("other_file_paths", "TEXT"),
     ("table_of_contents", "TEXT"),
+    # 생성 provenance 5종. **이 다섯은 RDS(ingest_data.documents)에 이미 있고,
+    # 여기 정의는 그 실측 DDL을 그대로 옮긴 것이다**(2026-08-04 확인) — 순서·
+    # 타입·기본값·코멘트까지 맞춘다. 코드가 만든 테이블과 RDS가 다르면
+    # 마이그레이션이 운영 테이블을 조용히 고치게 된다.
+    ("content", "LONGTEXT"),
+    ("input_prompt", "LONGTEXT"),
+    ("generated_text", "LONGTEXT"),
+    # BINARY(1)에 ASCII '0'/'1'을 담는다(x'30' = '0'). TINYINT가 아니다 —
+    # RDS가 그렇게 잡혀 있고, 다르게 두면 _migrate_column_types가 운영 컬럼을
+    # MODIFY해 버린다.
+    ("generated_yn", "BINARY(1)"),
+    # 참조한 원문의 documents.id. RDS에 FK도 인덱스도 없어 여기서도 걸지 않는다.
+    ("ref_id", "INT"),
 ]
+
+#: 타입 뒤에 붙는 제약·기본값. ``_EXTRA_COLUMNS``의 타입 문자열에 섞으면
+#: ``_migrate_column_types``의 길이 파싱(``sqltype.split("(")[1]``)이 깨진다.
+_COLUMN_CONSTRAINTS: dict[str, str] = {
+    "generated_yn": "NOT NULL DEFAULT x'30'",
+}
+
+#: 컬럼 코멘트도 RDS와 같게 둔다 — ``SHOW CREATE TABLE`` 결과를 두 DB에서
+#: 나란히 놓고 눈으로 비교할 수 있어야 한다. 문구는 RDS 실측값 그대로다
+#: (끝의 공백까지 동일).
+_COLUMN_COMMENTS: dict[str, str] = {
+    "content": "프롬프트 입력용 본문 40페이지 텍스트 ",
+    "input_prompt": "입력 프롬프트",
+    "generated_text": "생성된 텍스트",
+    "generated_yn": "생성된 문서인지 여부 (0 /1 )",
+    "ref_id": "민감으로 생성된 문서일때 본문을 참조한 문서 ",
+}
 
 def _encode_for_storage(value: object) -> object:
     """list 타입 필드(현재 other_file_paths만)는 DB에 직접 바인딩할 수 없어 "|"로
@@ -76,7 +112,34 @@ def _encode_for_storage(value: object) -> object:
 # 실패하므로, payload_json 백업도 없어져 역추출 백필도 불가능). 컬럼이 이미 있는
 # 상태에서만 별도로 NOT NULL로 좁힌다(_migrate_not_null_constraints). 로컬(12,707건)·
 # RDS(34,086건) 양쪽 다 NULL 값 0건 실측 확인(2026-07-15) 후 추가.
+# generated_yn은 여기 없다 — NOT NULL을 _COLUMN_CONSTRAINTS의 DEFAULT와 함께
+# 거는 쪽이라(ADD COLUMN 한 번으로 기존 행까지 '0'으로 채워진다) 이 단계가
+# 따로 좁힐 것이 없다.
 _NOT_NULL_COLUMNS: list[str] = ["ordering_agency", "disclosure_status"]
+
+
+def _column_spec(name: str, sqltype: str, *, bare_not_null: bool = True) -> str:
+    """``CREATE TABLE``/``ADD COLUMN``/``MODIFY COLUMN``이 공유하는 컬럼 정의.
+
+    세 자리가 각자 문자열을 조립하던 것을 하나로 모은다 — 한 곳에서만 제약을
+    붙이면 나머지 두 경로가 그 제약을 **지우는** DDL을 만든다(MODIFY는 명시하지
+    않은 NOT NULL·DEFAULT·COMMENT를 전부 떨어뜨린다).
+
+    ``bare_not_null=False``는 ADD COLUMN 전용이다. DEFAULT 없는 NOT NULL은 기존
+    행에 채울 값이 없어 ALTER 자체가 실패하므로 그 자리에서는 빼고, 컬럼이
+    채워진 뒤 ``_migrate_not_null_constraints``가 따로 좁힌다.
+    """
+
+    parts = [sqltype]
+    constraint = _COLUMN_CONSTRAINTS.get(name)
+    if constraint:
+        parts.append(constraint)
+    elif bare_not_null and name in _NOT_NULL_COLUMNS:
+        parts.append("NOT NULL")
+    comment = _COLUMN_COMMENTS.get(name)
+    if comment:
+        parts.append(f"COMMENT '{comment}'")
+    return " ".join(parts)
 
 # 과거 스키마에 있었지만 RD-2 v1.1 필수 필드 목록에 없어 컬럼에서 제거된 것들.
 # abstract는 body_text와 설명이 중복돼(둘 다 "초록"을 가리킴, 2026-07-07 수집계획
@@ -96,7 +159,7 @@ CREATE TABLE IF NOT EXISTS documents (
     dedup_key VARCHAR(""" + str(_DEDUP_KEY_MAXLEN) + """) NOT NULL,
     cso_classification VARCHAR(16) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP""" + "".join(
-    f",\n    {name} {sqltype}" + (" NOT NULL" if name in _NOT_NULL_COLUMNS else "")
+    f",\n    {name} {_column_spec(name, sqltype)}"
     for name, sqltype in _EXTRA_COLUMNS
 ) + """
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -160,6 +223,7 @@ class DocumentStore:
         self._add_missing_columns()
         self._drop_deprecated_columns()
         self._migrate_column_types()
+        self._relax_legacy_data_origin()
         self._migrate_not_null_constraints()
         self._migrate_constraints()
 
@@ -201,17 +265,64 @@ class DocumentStore:
             return
         with self._conn.cursor() as cur:
             for name, sqltype in missing:
-                cur.execute(f"ALTER TABLE documents ADD COLUMN {name} {sqltype}")
+                # NOT NULL은 DEFAULT가 함께 있을 때만 붙는다(_COLUMN_CONSTRAINTS).
+                # 기존 행에 채울 값이 없는데 NOT NULL로 ADD하면 실패하기 때문에,
+                # DEFAULT 없는 NOT NULL 지정은 _migrate_not_null_constraints가
+                # 컬럼이 채워진 뒤에 따로 좁힌다.
+                cur.execute(
+                    f"ALTER TABLE documents ADD COLUMN {name} "
+                    f"{_column_spec(name, sqltype, bare_not_null=False)}"
+                )
         self._conn.commit()
 
     def _drop_deprecated_columns(self) -> None:
-        """RD-2 v1.1 필수 필드 목록에 없는 컬럼(source/is_synthetic/source_url/doc_type)과
-        payload_json(2026-07-15 제거, 컬럼이 유일한 SSOT가 됨)을 기존 DB에서 없앤다."""
+        """RD-2 v1.1 필수 필드 목록에 없는 컬럼(source_url/abstract)과
+        payload_json(2026-07-15 제거, 컬럼이 유일한 SSOT가 됨)을 기존 DB에서 없앤다.
+        구 is_synthetic(TINYINT) 컬럼도 여기서 빠진다 — 같은 정보를 O/G 한 글자로
+        담는 data_origin이 대체한다."""
         existing = self._existing_columns("documents")
         with self._conn.cursor() as cur:
             for name in _DEPRECATED_COLUMNS:
                 if name in existing:
                     cur.execute(f"ALTER TABLE documents DROP COLUMN {name}")
+        self._conn.commit()
+
+    def _relax_legacy_data_origin(self) -> None:
+        """구 ``data_origin`` 컬럼이 남아 있으면 nullable로 푼다.
+
+        2026-08-04에 잠시 들어갔던 컬럼이다. **RDS(ingest_data.documents)에는
+        없고**, 같은 사실을 ``generated_yn``(BINARY(1), '0'/'1')이 담는다 — 두
+        DB의 스키마를 같게 두기로 하면서 이 컬럼은 코드가 더는 만들지도
+        채우지도 않는다.
+
+        그런데 로컬 덤프에는 NOT NULL에 DEFAULT 없이 남아 있어(실측: rd2_dump
+        14,231행) 값을 대주던 코드가 사라진 지금 그대로 두면 다음 INSERT가
+        1364로 죽는다. **지우지 않고 푸는 이유**는 DROP이 되돌릴 수 없는
+        쪽이어서다. 컬럼과 값은 그대로 두고, 정리는 사람이 정한다:
+
+            ALTER TABLE documents DROP COLUMN data_origin;
+
+        기존 행의 O/G 값은 ``generated_yn``으로 옮기지 않는다. 새 컬럼의
+        DEFAULT가 x'30'(='0')이라 ADD COLUMN 시점에 기존 행이 전부 '0'으로
+        채워지는데, 이는 "컬럼 도입 시점의 코퍼스는 전부 수집분으로 본다"는
+        기존 결정과 같은 결과다. 생성분이 섞여 있었다면
+        ``UPDATE documents SET generated_yn='1' WHERE source LIKE 'gen\\_%'``로
+        골라 고친다 — 접두사 규약을 안 따르는 생성 경로가 있어 조용한
+        재라벨링보다 명시적 지시가 안전하다.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'documents' "
+                "AND column_name = 'data_origin'",
+                (self.database,),
+            )
+            row = cur.fetchone()
+            if row is None or row[0] == "YES" or row[1] is not None:
+                return
+            cur.execute(
+                "ALTER TABLE documents MODIFY COLUMN data_origin VARCHAR(1) NULL"
+            )
         self._conn.commit()
 
     def _migrate_column_types(self) -> None:
@@ -239,9 +350,12 @@ class DocumentStore:
                     int(sqltype.split("(")[1].rstrip(")")) if "(" in sqltype else None
                 )
                 if current_base != target_base or (
-                    target_base == "varchar" and current_len != target_len
+                    target_base in ("varchar", "binary") and current_len != target_len
                 ):
-                    cur.execute(f"ALTER TABLE documents MODIFY COLUMN {name} {sqltype}")
+                    cur.execute(
+                        f"ALTER TABLE documents MODIFY COLUMN {name} "
+                        f"{_column_spec(name, sqltype)}"
+                    )
         self._conn.commit()
 
     def _migrate_not_null_constraints(self) -> None:
@@ -264,7 +378,8 @@ class DocumentStore:
                 if cur.fetchone()[0] > 0:
                     continue
                 cur.execute(
-                    f"ALTER TABLE documents MODIFY COLUMN {name} {sqltypes[name]} NOT NULL"
+                    f"ALTER TABLE documents MODIFY COLUMN {name} "
+                    f"{_column_spec(name, sqltypes[name])}"
                 )
         self._conn.commit()
 
@@ -297,6 +412,9 @@ class DocumentStore:
                 "CREATE INDEX IF NOT EXISTS idx_documents_source_doc_type "
                 "ON documents(source, doc_type)"
             )
+            # generated_yn에는 CHECK를 걸지 않는다. RDS에 없기 때문이다 —
+            # 값 범위는 BINARY(1) DEFAULT x'30'과 Document의 computed field가
+            # 이미 좁히고 있고, 여기서 더 거는 순간 두 DB의 제약이 달라진다.
         self._conn.commit()
 
     def upsert(self, doc: Document) -> bool:
@@ -393,6 +511,43 @@ class DocumentStore:
             )
         self._conn.commit()
 
+    def set_body_file_path(
+        self, *, source: str, source_url: str, body_file_path: str
+    ) -> bool:
+        """렌더가 끝난 뒤 그 행의 PDF 경로만 채운다. 행이 없으면 False.
+
+        생성 경로는 행을 **PDF보다 먼저** 넣는다
+        (``scripts/writeback_minimal_to_rds.py``) — 본문·프롬프트·참조 원문은
+        생성 시점에 이미 손에 있고, 그때 넣어야 렌더가 깨져도 무엇을 만들었는지가
+        DB에 남는다. 그러고 나면 뒤에 채울 자리가 ``body_file_path`` 하나뿐이라
+        이 메서드가 그 칸만 메운다.
+
+        ``update_files``를 쓰지 않는 이유는 그쪽이 ``other_file_paths``까지 함께
+        덮어쓰기 때문이다. 생성 행에는 지금 첨부가 없지만, 경로 하나를 채우려고
+        다른 컬럼을 건드리는 쿼리를 재사용하면 첨부가 생기는 날 조용히 지운다.
+
+        ``source_url``은 필수다. 비면 ``_dedup_key``가 합성 문서 규칙에 따라 매번
+        새 UUID를 붙여 방금 넣은 행을 다시 찾을 수 없다.
+        """
+
+        if not source_url:
+            raise ValueError(
+                "source_url이 없으면 dedup_key가 매번 달라져 그 행을 되찾을 수 없다"
+            )
+        key = _dedup_key(source, source_url)
+        with self._conn.cursor() as cur:
+            # 행 존재 확인을 UPDATE의 rowcount로 대신하지 않는다 — 같은 경로를
+            # 다시 쓰면 affected rows가 0이라 "행이 없다"와 구분되지 않는다.
+            cur.execute("SELECT 1 FROM documents WHERE dedup_key = %s", (key,))
+            if cur.fetchone() is None:
+                return False
+            cur.execute(
+                "UPDATE documents SET body_file_path = %s WHERE dedup_key = %s",
+                (body_file_path, key),
+            )
+        self._conn.commit()
+        return True
+
     def quarantine(self, raw_payload: dict, error: str) -> None:
         """스키마 검증 실패 레코드 — 드롭하지 않고 격리 저장 후 수동 검토 대상으로 남긴다."""
         with self._conn.cursor() as cur:
@@ -402,15 +557,29 @@ class DocumentStore:
             )
         self._conn.commit()
 
-    def count_documents(self, *, cso_classification: str | None = None) -> int:
+    def count_documents(
+        self,
+        *,
+        cso_classification: str | None = None,
+        generated_yn: str | None = None,
+    ) -> int:
+        """``generated_yn``은 '1'(생성) 또는 '0'(수집).
+
+        구 ``data_origin='G'`` 필터를 대신한다 — 그 컬럼은 RDS에 없어 코드가
+        더는 관리하지 않는다(``_relax_legacy_data_origin`` 참고).
+        """
+
+        clauses: list[str] = []
+        params: list[str] = []
+        if cso_classification:
+            clauses.append("cso_classification = %s")
+            params.append(cso_classification)
+        if generated_yn:
+            clauses.append("generated_yn = %s")
+            params.append(generated_yn)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._conn.cursor() as cur:
-            if cso_classification:
-                cur.execute(
-                    "SELECT COUNT(*) FROM documents WHERE cso_classification = %s",
-                    (cso_classification,),
-                )
-            else:
-                cur.execute("SELECT COUNT(*) FROM documents")
+            cur.execute(f"SELECT COUNT(*) FROM documents{where}", params)
             return cur.fetchone()[0]
 
     def count_by_doc_type(self, source: str) -> dict[str, int]:

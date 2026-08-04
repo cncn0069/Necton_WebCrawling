@@ -24,7 +24,7 @@ from rd2.extraction.storage import (
     extraction_output_path,
     read_json_gz,
 )
-from rd2.generators.clause_data import CLAUSES, ClauseDefinition
+from rd2.disclosure.clause_data import CLAUSES, ClauseDefinition
 
 load_dotenv()
 

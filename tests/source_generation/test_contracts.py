@@ -13,6 +13,7 @@ from rd2.source_generation.classification_taxonomy import (
 )
 from rd2.source_generation.contracts import (
     CONTRACT_SCHEMA_VERSION,
+    BulletListBlock,
     CallReceipt,
     ClassificationStageArtifact,
     ConsistencyComparison,
@@ -22,6 +23,7 @@ from rd2.source_generation.contracts import (
     GeneratedDocumentIR,
     GenerationArtifact,
     GenerationMode,
+    GenerationPlan,
     GenerationProvenance,
     GenerationRoute,
     GenerationStageArtifact,
@@ -41,10 +43,6 @@ from rd2.source_generation.contracts import (
     SourceSlotKind,
     TargetClassification,
     ValidationStageArtifact,
-)
-from rd2.source_generation.pipeline import (
-    PLANNER_POLICY_SHA256,
-    build_generation_plan,
     model_sha256,
 )
 
@@ -64,14 +62,21 @@ def _selection():
     return value
 
 
+#: 계획을 만들던 플래너는 사라졌다. 계약이 요구하는 것은 "잠긴 값들이 서로
+#: 맞는가"이므로 여기서는 값을 직접 세워 그 검증만 본다.
+_PLANNER_POLICY_SHA256 = "c" * 64
+
+
 def _plan():
     assessment = source_assessment()
-    return assessment, build_generation_plan(
-        assessment=assessment,
+    return assessment, GenerationPlan(
         requested_target=target(),
-        snapshot=snapshot(),
-        selection=_selection(),
-        sensitive_seed="seed",
+        final_target=target(),
+        generation_route=GenerationRoute.ANCHORED,
+        source_assessment_sha256=model_sha256(assessment),
+        source_sha256=snapshot().source_sha256,
+        selection_sha256=_selection().selection_sha256,
+        planner_policy_sha256=_PLANNER_POLICY_SHA256,
     )
 
 
@@ -167,6 +172,38 @@ def test_generated_ir_body_is_derived_and_block_ids_are_unique():
         )
 
 
+def test_bullet_items_that_carry_a_marker_are_not_double_marked():
+    """개조식 기호를 달고 온 항목에 ``- ``를 또 붙이지 않는다.
+
+    C트랙 프롬프트가 ``□ > ○ > - > ※`` 위계를 요구해서 생성기가 기호를 항목
+    안에 넣어 온다. 실측(``c-track-correction-security-001``)에서 body_text가
+    ``- ○ 인력 증감 소요임`` / ``- - 순환근무조 1개 조 신설``로 나왔다.
+    """
+
+    document = GeneratedDocumentIR(
+        title="문서",
+        blocks=(
+            BulletListBlock(
+                block_id="b1",
+                items=(
+                    "○ 중항목임",
+                    "- 소항목임",
+                    "※ 참고임",
+                    "기호 없는 항목임",
+                    "-5% 감소함",
+                ),
+            ),
+        ),
+    )
+    assert document.body_text == (
+        "○ 중항목임\n"
+        "- 소항목임\n"
+        "※ 참고임\n"
+        "- 기호 없는 항목임\n"
+        "- -5% 감소함"
+    )
+
+
 def test_source_classification_requires_evidence_for_s_and_none_for_o():
     with pytest.raises(ValidationError):
         SourceClassification(
@@ -230,7 +267,7 @@ def test_planner_contract_locks_hashes_and_route():
     assessment, plan = _plan()
 
     assert plan.source_assessment_sha256 == model_sha256(assessment)
-    assert plan.planner_policy_sha256 == PLANNER_POLICY_SHA256
+    assert plan.planner_policy_sha256 == _PLANNER_POLICY_SHA256
     assert plan.generation_route == GenerationRoute.ANCHORED
     assert plan.final_target.classification == TargetClassification.S
     plan.validate_against(assessment)

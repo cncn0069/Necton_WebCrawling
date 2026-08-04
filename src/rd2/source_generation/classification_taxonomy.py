@@ -604,6 +604,46 @@ SUBCLAUSE_LABELS: Mapping[SubclauseKey, str] = MappingProxyType(
     {key: definition.label for key, definition in SUBCLAUSE_DEFINITIONS.items()}
 )
 
+#: 근거 식별자. 생성기가 심은 자료를 이름으로 부를 수 있게 하는 기호다.
+#: 기호가 없으면 근거를 지목할 방법이 문장 인용뿐이고, 그러면 사후에 어느
+#: 근거로 성립했는지 집계할 수 없다.
+#:
+#: 길이는 ``SUBCLAUSE_GENERATION_RULES``의 ``document_patterns`` 중 가장 긴
+#: 것(5개)에 맞춘다.
+GROUND_IDS: tuple[str, ...] = ("A", "B", "C", "D", "E")
+
+#: 근거 식별자. 두 근거 목록 중 긴 쪽(``SUBCLAUSE_GENERATION_RULES``의
+#: ``document_patterns``, 최대 5개)에 맞춘다. ``includes``는 2~3개다.
+GROUND_IDS: tuple[str, ...] = ("A", "B", "C", "D", "E")
+
+if any(len(d.includes) > len(GROUND_IDS) for d in SUBCLAUSE_DEFINITIONS.values()):
+    raise RuntimeError("subclause grounds outgrew the available ground ids")
+
+
+def subclause_grounds(subclause: SubclauseKey) -> Mapping[str, str]:
+    """세부조항을 성립시키는 **대안적** 근거. 하나만 충족해도 그 조항이다.
+
+    셋을 모두 만족해야 하는 요건 분해가 아니다. 그래서 생성기는 하나만 심어도
+    되고, 여러 개가 자연스럽게 들어가도 라벨은 같다 — 다만 실제로 들어간 것은
+    전부 보고해야 어느 근거로 성립했는지 사후에 알 수 있다.
+
+    ``includes``에 기호를 붙인 것이 전부이고 별도 표를 두지 않는다. 두 목록이
+    갈라지면 판별기가 읽는 근거와 생성기가 심는 근거가 달라지기 때문이다 —
+    ``EVIDENCE_QUOTE_GUIDANCE``를 공용 절로 둔 것과 같은 이유다.
+    """
+
+    includes = SUBCLAUSE_DEFINITIONS[subclause].includes
+    return MappingProxyType(dict(zip(GROUND_IDS, includes)))
+
+
+def render_subclause_grounds(subclause: SubclauseKey) -> str:
+    """한 세부조항의 근거를 기호와 함께 여러 줄로 렌더링한다."""
+
+    return "\n".join(
+        f"조건{ground_id}: {text}"
+        for ground_id, text in subclause_grounds(subclause).items()
+    )
+
 
 def expected_classification(clause_no: ClauseNumber) -> CsoClassification:
     """정보공개법 조항 번호에 대응하는 프로젝트 C/S 분류를 반환한다."""
@@ -1097,7 +1137,15 @@ def render_taxonomy_guidance(
                 f"- {subclause.value} [제{clause_no.value}호] ({definition.label}): "
                 f"{definition.definition}"
             )
-            lines.append(f"  포함: {' / '.join(definition.includes)}")
+            # 근거에 기호를 붙여 판별기·생성기·검증기가 같은 이름으로 부르게
+            # 한다. 셋 다 이 렌더링을 받으므로 "조건B"가 세 프롬프트에서 같은
+            # 것을 가리킨다. 기호가 없으면 근거를 지목할 방법이 문장 인용뿐이고,
+            # 그러면 사후에 어느 근거로 성립했는지 집계할 수 없다.
+            grounds = " / ".join(
+                f"{ground_id}. {text}"
+                for ground_id, text in subclause_grounds(subclause).items()
+            )
+            lines.append(f"  포함(하나만 충족해도 이 세부유형이다): {grounds}")
             # 경계 규칙과 같은 필터를 ``제외`` 항목에도 적용한다. 목록에서 뺀
             # 세부유형을 인용하는 항목은 가리키는 곳 없는 참조로 남는다 —
             # 실측(2026-08-01): 제5~8호만 준 검증기 프롬프트에 제3호

@@ -5,16 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from generate_official_template_previews import (
-    _REPO_ROOT,
-    _SHARED_CONTEXT,
-)
+from generate_official_template_previews import _SHARED_CONTEXT
 from rd2.generators.official_document_rendering import (
     render_official_document_variations,
-)
-
-_DEFAULT_OUTPUT_DIR = (
-    _REPO_ROOT / "output" / "pdf" / "official_template_layout_variations"
 )
 
 
@@ -36,7 +29,15 @@ def generate_variations(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=_DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help=(
+            "변주 PDF를 쓸 디렉터리 "
+            "(예: output/pdf/official_template_layout_variations)"
+        ),
+    )
     parser.add_argument("--per-template", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20260728)
     args = parser.parse_args()

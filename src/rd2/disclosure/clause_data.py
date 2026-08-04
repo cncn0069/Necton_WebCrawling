@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from rd2.generators.agency_categories import (
+from rd2.disclosure.agency_categories import (
     CATEGORY_CENTRAL_MINISTRY,
     CATEGORY_METRO_LOCAL_GOVERNMENT,
     CATEGORY_PUBLIC_CORPORATION,

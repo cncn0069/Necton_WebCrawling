@@ -7,11 +7,11 @@ import json
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from weasyprint import HTML
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_TEMPLATE_DIR = _REPO_ROOT / "src" / "rd2" / "generators" / "templates"
-_DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "official_template_previews"
+# 템플릿은 저장소 배치가 아니라 패키지에 속한다. 저장소 루트에서 거슬러 찾으면
+# 스크립트가 몇 층 깊이에 있는지를 스크립트가 알아야 해서, 폴더를 옮길 때마다 틀린다.
+from rd2.generators.official_document_rendering import TEMPLATE_DIR as _TEMPLATE_DIR
+from rd2.generators.weasyprint_runtime import HTML
 
 # 공통 내용은 유지하고, 장문/서식형에 필요한 구조 데이터만 함께 제공한다.
 _SHARED_CONTEXT = {
@@ -281,7 +281,12 @@ def generate_previews(output_dir: Path) -> list[dict[str, str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=_DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="미리보기 HTML·PDF를 쓸 디렉터리 (예: output/pdf/official_template_previews)",
+    )
     args = parser.parse_args()
     generate_previews(args.output_dir)
 
