@@ -411,3 +411,10 @@ def test_directory_batch_does_not_retry_non_source_render_error(
     assert manifest["documents"][0]["render_attempts"][0]["status"] == (
         "rejected"
     )
+    assert manifest["documents"][0]["document_type"] == "guide"
+    assert manifest["documents"][0]["document_type_resolution"] == {
+        "document_type": "guide",
+        "source": "explicit",
+        "document_form": None,
+        "reason": "result.source_classification.document_type",
+    }
