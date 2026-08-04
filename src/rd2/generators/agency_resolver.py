@@ -59,10 +59,39 @@ MARKING_SPEC_AGENCY_WHITELIST: dict[str, list[str]] = {
     "4": ["검찰청", "고위공직자범죄수사처", "법무부"],
 }
 
-# logo/ 폴더의 실제 파일명 매핑. "정부부처"는 화이트리스트에 없는 조항이나 미매칭
-# 기관의 generic 폴백으로도 쓰인다. 2026-07-21에 추가한 19부 소속 부처는 전용 로고
-# 파일이 아직 logo/에 없어 정부부처.png(실존 파일)를 그대로 재사용한다 — 없는
-# 파일을 가리키는 매핑을 넣지 않는다.
+# logo/ 폴더의 실제 파일명 매핑. 최신 PDF 후처리의 기관 워터마크 정책과 자산별
+# 사용 여부는 저장소 루트 ``logo/README.md``가 기준 문서다. 개별 자산이 없는
+# 중앙행정기관은 대한민국 정부상징인 ``정부부처.png``를 공유한다. 목록에 없는
+# 기관에는 정부상징을 임의로 붙이지 않는다.
+_GENERIC_GOVERNMENT_AGENCIES: tuple[str, ...] = (
+    "정부부처",
+    "기획재정부",
+    "재정경제부",
+    "기획예산처",
+    "교육부",
+    "과학기술정보통신부",
+    "외교부",
+    "통일부",
+    "법무부",
+    "행정안전부",
+    "국가보훈부",
+    "문화체육관광부",
+    "농림축산식품부",
+    "산업통상자원부",
+    "보건복지부",
+    "환경부",
+    "기후에너지환경부",
+    "고용노동부",
+    "여성가족부",
+    "성평등가족부",
+    "국토교통부",
+    "해양수산부",
+    "중소벤처기업부",
+    "인사혁신처",
+    "법제처",
+    "식품의약품안전처",
+)
+
 AGENCY_LOGO_FILENAMES: dict[str, str] = {
     "감사원": "감사원.png",
     "검찰청": "검찰.png",
@@ -71,17 +100,16 @@ AGENCY_LOGO_FILENAMES: dict[str, str] = {
     "국가정보원": "국정원.png",
     "대통령경호처": "대통령경호처.png",
     "대통령실": "대통령실.svg",
-    "정부부처": "정부부처.png",
-    "외교부": "정부부처.png",
-    "통일부": "정부부처.png",
-    "법무부": "정부부처.png",
-    "행정안전부": "정부부처.png",
-    "보건복지부": "정부부처.png",
-    "환경부": "정부부처.png",
-    "국토교통부": "정부부처.png",
-    "해양수산부": "정부부처.png",
-    "고용노동부": "정부부처.png",
-    "산업통상자원부": "정부부처.png",
+    "청와대": "청와대.svg",
+    **{agency: "정부부처.png" for agency in _GENERIC_GOVERNMENT_AGENCIES},
+}
+
+_AGENCY_LOGO_ALIASES: dict[str, str] = {
+    "국정원": "국가정보원",
+    "공수처": "고위공직자범죄수사처",
+    "검찰": "검찰청",
+    "대검찰청": "검찰청",
+    "대한민국대통령실": "대통령실",
 }
 
 _GENERIC_WHITELIST_AGENCY = "정부부처"
@@ -109,6 +137,30 @@ MILITARY_SECRET_MARK_FILENAMES: dict[str, str] = {
     "2급": "2급_비밀.png",
     "3급": "3급_비밀.png",
 }
+
+
+def resolve_agency_logo(agency_name: str | None) -> tuple[str, str] | None:
+    """입력 기관명을 ``(기준 기관명, logo/ 파일명)``으로 해석한다.
+
+    공백과 선택적인 ``대한민국`` 접두사, 문서 입력에서 자주 쓰는 명시적
+    약칭만 정규화한다. 매핑되지 않은 기관을 이름 일부로 추측하거나
+    ``정부부처.png``로 자동 폴백하지 않는다.
+    """
+
+    normalized = "".join((agency_name or "").split())
+    if not normalized:
+        return None
+    if normalized.startswith("대한민국") and normalized != "대한민국":
+        normalized = normalized[len("대한민국") :]
+
+    canonical = _AGENCY_LOGO_ALIASES.get(normalized, normalized)
+    if canonical.endswith(("지방검찰청", "고등검찰청")):
+        canonical = "검찰청"
+
+    filename = AGENCY_LOGO_FILENAMES.get(canonical)
+    if filename is None:
+        return None
+    return canonical, filename
 
 
 def is_military_secret_agency(agency: str) -> bool:

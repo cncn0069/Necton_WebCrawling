@@ -364,9 +364,16 @@ body {
 .proclamation-table td { border-bottom: .2mm solid #c2b7a5; }
 .proclamation-table th, .proclamation-table td { padding: 1.4mm; text-align: center; }
 .proclamation-ending { align-items: flex-start; display: flex; justify-content: space-between; margin-top: 3mm; }
-.proclamation-attachments { display: flex; flex: 1; font-size: 7.5pt; }
+.proclamation-attachments { display: flex; flex: 1; font-size: 7.5pt; min-width: 0; }
 .proclamation-attachments > strong { flex: 0 0 14mm; }
-.proclamation-attachments ol { margin: 0; padding-left: 5mm; white-space: nowrap; }
+.proclamation-attachments ol {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-left: 5mm;
+  white-space: normal;
+}
 .proclamation-issuer { min-width: 68mm; text-align: right; }
 .proclamation-issuer h2 { font-family: "Nanum Hand"; font-size: 17pt; letter-spacing: 2mm; margin: 0; white-space: nowrap; }
 .proclamation-issuer p { font-size: 6.8pt; margin: 1.5mm 0 0; white-space: nowrap; }

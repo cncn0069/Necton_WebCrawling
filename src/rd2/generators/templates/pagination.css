@@ -1,0 +1,140 @@
+@page pagination-continuation {
+  size: A4;
+  margin: 17mm 18mm 18mm;
+  @top-center {
+    color: #666;
+    content: "본문 연속본";
+    font-size: 7pt;
+  }
+  @top-right {
+    color: #666;
+    content: string(continuation-agency);
+    font-size: 7pt;
+  }
+  @bottom-right {
+    color: #666;
+    content: counter(page);
+    font-size: 7pt;
+  }
+}
+
+.pagination-continuation {
+  break-before: page;
+  color: #1d1d1d;
+  font-family: "Noto Sans KR", sans-serif;
+  font-size: 9.5pt;
+  line-height: 1.65;
+  page: pagination-continuation;
+}
+
+.pagination-continuation-header {
+  align-items: baseline;
+  border-bottom: .35mm solid #333;
+  display: flex;
+  gap: 5mm;
+  justify-content: space-between;
+  margin-bottom: 5mm;
+  padding-bottom: 2mm;
+}
+
+.pagination-continuation-header span {
+  color: #666;
+  flex: 1 1 auto;
+  font-size: 8pt;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  string-set: continuation-agency content();
+}
+.pagination-continuation-header strong {
+  flex: 0 0 auto;
+  font-size: 8.5pt;
+  letter-spacing: .8mm;
+}
+.pagination-continuation > h1 {
+  font-size: 16pt;
+  line-height: 1.35;
+  margin: 0 0 7mm;
+  overflow-wrap: anywhere;
+}
+
+.pagination-block {
+  break-inside: auto;
+  display: block;
+  margin: 0 0 5mm;
+  min-height: 0;
+  overflow: visible;
+  padding-left: 10mm;
+  position: relative;
+}
+
+.pagination-block-index {
+  color: #777;
+  font-size: 7pt;
+  left: 0;
+  position: absolute;
+  top: .8mm;
+}
+
+.pagination-block-content,
+.pagination-block-content p,
+.pagination-block-content li,
+.pagination-block-content dd,
+.pagination-block-content td {
+  overflow-wrap: anywhere;
+}
+
+.pagination-block-content p { margin: 0; orphans: 2; white-space: pre-wrap; widows: 2; }
+.pagination-block-content ul { margin: 0; padding-left: 6mm; }
+.pagination-block-content li { break-inside: auto; margin-bottom: 1.2mm; }
+.pagination-block-content dl { display: block; margin: 0; }
+.pagination-block-content dl > div {
+  border-bottom: .2mm solid #ddd;
+  break-inside: auto;
+  display: grid;
+  grid-template-columns: 34mm minmax(0, 1fr);
+  padding: 1.5mm 0;
+}
+.pagination-block-content dt { color: #555; font-weight: 700; }
+.pagination-block-content dd { margin: 0; }
+.pagination-block-content table {
+  border-collapse: collapse;
+  font-size: 8pt;
+  table-layout: fixed;
+  width: 100%;
+}
+.pagination-block-content thead { display: table-header-group; }
+.pagination-block-content tr { break-inside: auto; }
+.pagination-block-content th,
+.pagination-block-content td { border: .2mm solid #888; padding: 1.4mm; }
+.pagination-block-content th { background: #eee; }
+
+.pagination-block-table { padding-left: 0; }
+.pagination-block-table > .pagination-block-index {
+  display: block;
+  margin-bottom: 1.5mm;
+  position: static;
+}
+
+.pagination-administrative-events {
+  border-top: .3mm solid #777;
+  break-inside: auto;
+  margin-top: 7mm;
+  padding-top: 3mm;
+}
+.pagination-administrative-events p { margin: 0 0 2mm; }
+.pagination-administrative-events time { color: #666; margin-right: 4mm; }
+
+/* long_form의 고정 2페이지 본문 그리드는 장문을 분할하지 못한다. 장문 모드에서는
+   표지·요약만 미리보기로 남기고, 원문은 아래 연속 본문에서 한 번에 흘린다. */
+.pagination-preview.theme-long-form .long-body { display: none; }
+
+/* field_report의 고정 1페이지 그리드는 장문 block을 축약 카드·표로 다시
+   배치하면서 서로 겹칠 수 있다. 장문 모드에서는 첫 장을 표지로 남기고,
+   원문 block은 다음 페이지의 연속 본문에서만 한 번 흐르게 한다. */
+.pagination-preview.theme-sidebar .sidebar-main > header p,
+.pagination-preview.theme-sidebar .sidebar-sections,
+.pagination-preview.theme-sidebar .sidebar-facts,
+.pagination-preview.theme-sidebar .sidebar-table,
+.pagination-preview.theme-sidebar .sidebar-bottom {
+  display: none;
+}

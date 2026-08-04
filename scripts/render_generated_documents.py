@@ -12,7 +12,9 @@ from typing import Any
 
 from rd2.generators.balanced_batch_selection import (
     ALL_TEMPLATE_SLUGS,
+    BalancedTemplateAssignment,
     BalancedTemplateSelector,
+    template_slugs_for_document_type,
 )
 from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
@@ -22,6 +24,12 @@ from rd2.generators.output_naming import (
     rename_rendered_files,
     requested_output_filename,
 )
+from rd2.generators.payload_document_type import (
+    PayloadDocumentTypeResolution,
+    apply_payload_document_type,
+    resolve_payload_document_type,
+)
+from rd2.generators.paged_output import RenderedSourceTextError
 from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
 )
@@ -29,6 +37,9 @@ from rd2.generators.pdf_sensitive_evidence import (
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
 _SUPPORTED_INPUT_SUFFIXES = frozenset({".json", ".jsonl", ".txt"})
+SUCCESSFUL_RENDER_STATUSES = frozenset({"ok", "ok_truncated"})
+_COMPACT_VARIATION_INDEX = 2
+_MAX_SOURCE_TEXT_RENDER_ATTEMPTS = 3
 
 
 def _load_payloads(input_path: Path) -> list[dict[str, Any]]:
@@ -113,10 +124,42 @@ def _write_document_manifest(
 
 
 def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다."""
+    """v2 pipeline result를 공문 렌더러의 작은 envelope로 투영한다.
 
-    if isinstance(payload.get("result"), dict):
-        return payload
+    원본 수집 계약의 ``ordering_agency``는 생성 IR의 본문 필드가 아니다.
+    렌더 경계에서 ``generated_document.agency_name``으로 한 번만 옮겨 기관
+    워터마크 입력으로 쓴다. 로고 파일 경로는 외부 입력에서 받지 않는다.
+    """
+
+    agency_name = next(
+        (
+            str(payload[key]).strip()
+            for key in ("agency_name", "ordering_agency")
+            if isinstance(payload.get(key), str) and str(payload[key]).strip()
+        ),
+        None,
+    )
+
+    def with_agency_name(document: dict[str, Any]) -> dict[str, Any]:
+        if document.get("agency_name") or agency_name is None:
+            return document
+        return {**document, "agency_name": agency_name}
+
+    result = payload.get("result")
+    if isinstance(result, dict):
+        document = result.get("generated_document")
+        if not isinstance(document, dict):
+            return payload
+        projected_document = with_agency_name(document)
+        if projected_document is document:
+            return payload
+        return {
+            **payload,
+            "result": {
+                **result,
+                "generated_document": projected_document,
+            },
+        }
     artifact = payload.get("generation_artifact")
     plan = payload.get("generation_plan")
     if not isinstance(artifact, dict) or not isinstance(plan, dict):
@@ -139,12 +182,20 @@ def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
             ),
             "generation_route": plan.get("generation_route"),
             "generation_target": plan.get("final_target"),
-            "generated_document": document,
+            "generated_document": with_agency_name(document),
             "source_classification": source_classification,
         },
         "receipt": payload.get("generation_receipt"),
         "provenance": artifact.get("provenance"),
     }
+
+
+def _prepare_renderer_payload(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], PayloadDocumentTypeResolution]:
+    projected = _renderer_payload(payload)
+    resolution = resolve_payload_document_type(projected)
+    return apply_payload_document_type(projected, resolution), resolution
 
 
 def _uses_verbatim_renderer(payload: dict[str, Any]) -> bool:
@@ -155,6 +206,137 @@ def _uses_verbatim_renderer(payload: dict[str, Any]) -> bool:
         result.get("generation_route") == "mask_restoration"
         or result.get("verbatim_render")
     )
+
+
+def _combined_render_status(rendered: list[dict[str, object]]) -> str:
+    if not rendered:
+        raise RuntimeError("Successful render returned no outputs")
+    statuses = {str(entry.get("status") or "") for entry in rendered}
+    unexpected = statuses - SUCCESSFUL_RENDER_STATUSES
+    if unexpected:
+        raise RuntimeError(
+            "Successful render returned non-success status(es): "
+            + ", ".join(sorted(unexpected))
+        )
+    return "ok_truncated" if "ok_truncated" in statuses else "ok"
+
+
+def _source_text_retry_candidates(
+    assignment: BalancedTemplateAssignment,
+    document_type: str | None,
+) -> tuple[dict[str, object], ...]:
+    """균등 선택 결과 뒤에 최대 두 개의 compact 대안을 붙인다."""
+
+    candidates: list[dict[str, object]] = [
+        {
+            "template_slug": assignment.template_slug,
+            "variation_index": assignment.variation_index,
+            "variation_offset": assignment.variation_offset,
+            "reason": "balanced_selection",
+        }
+    ]
+    if assignment.renderer_family == "verbatim":
+        return tuple(candidates)
+
+    if assignment.variation_index != _COMPACT_VARIATION_INDEX:
+        candidates.append(
+            {
+                "template_slug": assignment.template_slug,
+                "variation_index": _COMPACT_VARIATION_INDEX,
+                "variation_offset": _COMPACT_VARIATION_INDEX - 1,
+                "reason": "same_template_compact",
+            }
+        )
+
+    family_slugs = template_slugs_for_document_type(document_type)
+    try:
+        selected_index = family_slugs.index(assignment.template_slug)
+    except ValueError:
+        ordered_alternates = family_slugs
+    else:
+        ordered_alternates = (
+            family_slugs[selected_index + 1 :]
+            + family_slugs[:selected_index]
+        )
+    for template_slug in ordered_alternates:
+        candidate = {
+            "template_slug": template_slug,
+            "variation_index": _COMPACT_VARIATION_INDEX,
+            "variation_offset": _COMPACT_VARIATION_INDEX - 1,
+            "reason": "alternate_template_compact",
+        }
+        if candidate not in candidates:
+            candidates.append(candidate)
+        if len(candidates) == _MAX_SOURCE_TEXT_RENDER_ATTEMPTS:
+            break
+    return tuple(candidates)
+
+
+def _render_with_source_text_retries(
+    payload: dict[str, Any],
+    document_output_dir: Path,
+    *,
+    assignment: BalancedTemplateAssignment,
+    document_type: str | None,
+    allow_failed: bool,
+    attempt_log: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """원문 누락 판정에만 compact·대체 템플릿을 순서대로 시도한다."""
+
+    candidates = _source_text_retry_candidates(assignment, document_type)
+    for attempt_number, candidate in enumerate(candidates, start=1):
+        attempt = {
+            "attempt": attempt_number,
+            **candidate,
+        }
+        try:
+            rendered = render_generation_payload(
+                payload,
+                document_output_dir,
+                allow_failed=allow_failed,
+                per_template=1,
+                base_seed=assignment.render_seed,
+                variation_offset=int(candidate["variation_offset"]),
+                template_slugs={str(candidate["template_slug"])},
+            )
+            if len(rendered) != 1:
+                raise RuntimeError(
+                    "Balanced rendering must produce exactly one output, "
+                    f"got {len(rendered)}"
+                )
+        except RenderedSourceTextError as exc:
+            attempt.update(
+                {
+                    "status": "source_text_missing",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+            attempt_log.append(attempt)
+            if attempt_number == len(candidates):
+                raise
+            continue
+        except (
+            GeneratedDocumentPipelineError,
+            RuntimeError,
+            ValueError,
+            OSError,
+        ) as exc:
+            attempt.update(
+                {
+                    "status": "rejected",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+            attempt_log.append(attempt)
+            raise
+
+        attempt["status"] = _combined_render_status(rendered)
+        attempt_log.append(attempt)
+        return rendered, candidate
+
+    raise RuntimeError("Source-text retry candidates were unexpectedly empty")
 
 
 def _finalize_rendered_document(
@@ -188,7 +370,7 @@ def render_input_file(
     used_document_ids: set[str] = set()
 
     for index, payload in enumerate(payloads, start=1):
-        payload = _renderer_payload(payload)
+        payload, document_type_resolution = _prepare_renderer_payload(payload)
         requested_filename = requested_output_filename(payload, index)
         document_id = _output_id(payload, index)
         if document_id in used_document_ids:
@@ -223,6 +405,10 @@ def render_input_file(
             batch_manifest.append(
                 {
                     "document_id": document_id,
+                    "document_type": _document_type(payload),
+                    "document_type_resolution": (
+                        document_type_resolution.to_dict()
+                    ),
                     "status": "rejected",
                     "error": str(exc),
                 }
@@ -232,7 +418,9 @@ def render_input_file(
         batch_manifest.append(
             {
                 "document_id": document_id,
-                "status": "ok",
+                "document_type": _document_type(payload),
+                "document_type_resolution": document_type_resolution.to_dict(),
+                "status": _combined_render_status(rendered),
                 "output_filename": requested_filename,
                 "render_count": len(rendered),
                 "output_dir": str(document_output_dir),
@@ -296,7 +484,7 @@ def render_input_directory(
 
         for payload_index, payload in enumerate(payloads, start=1):
             document_index += 1
-            payload = _renderer_payload(payload)
+            payload, document_type_resolution = _prepare_renderer_payload(payload)
             requested_filename = requested_output_filename(
                 payload,
                 document_index,
@@ -319,23 +507,19 @@ def render_input_directory(
             selection["source_file"] = source_file
             selection["payload_index"] = payload_index
 
+            render_attempts: list[dict[str, object]] = []
             try:
-                rendered = render_generation_payload(
+                rendered, accepted_selection = _render_with_source_text_retries(
                     payload,
                     document_output_dir,
+                    assignment=assignment,
+                    document_type=document_type,
                     allow_failed=allow_failed,
-                    per_template=1,
-                    base_seed=assignment.render_seed,
-                    variation_offset=assignment.variation_offset,
-                    template_slugs={assignment.template_slug},
+                    attempt_log=render_attempts,
                 )
-                if len(rendered) != 1:
-                    raise RuntimeError(
-                        "Balanced rendering must produce exactly one output, "
-                        f"got {len(rendered)}"
-                    )
                 for entry in rendered:
                     entry["batch_selection"] = selection
+                    entry["render_attempts"] = render_attempts
                 _finalize_rendered_document(
                     payload,
                     document_output_dir,
@@ -354,25 +538,35 @@ def render_input_directory(
                         "source_file": source_file,
                         "payload_index": payload_index,
                         "document_type": document_type,
+                        "document_type_resolution": (
+                            document_type_resolution.to_dict()
+                        ),
                         "status": "rejected",
                         "stage": "render",
                         "selection": selection,
+                        "render_attempts": render_attempts,
                         "error": str(exc),
                     }
                 )
                 continue
 
+            render_status = _combined_render_status(rendered)
             documents.append(
                 {
                     "document_id": document_id,
                     "source_file": source_file,
                     "payload_index": payload_index,
                     "document_type": document_type,
-                    "status": "ok",
+                    "document_type_resolution": (
+                        document_type_resolution.to_dict()
+                    ),
+                    "status": render_status,
                     "output_filename": requested_filename,
                     "render_count": 1,
                     "output_dir": str(document_output_dir),
                     "selection": selection,
+                    "accepted_selection": accepted_selection,
+                    "render_attempts": render_attempts,
                 }
             )
 
@@ -383,7 +577,8 @@ def render_input_directory(
         "variation_count": variation_count,
         "document_count": document_index,
         "success_count": sum(
-            entry["status"] == "ok" for entry in documents
+            entry["status"] in SUCCESSFUL_RENDER_STATUSES
+            for entry in documents
         ),
         "rejected_count": sum(
             entry["status"] == "rejected" for entry in documents
@@ -461,12 +656,16 @@ def main() -> None:
             f"rejected={manifest['rejected_count']}"
         )
         for entry in manifest["documents"]:
-            selection = entry.get("selection") or {}
+            selection = (
+                entry.get("accepted_selection")
+                or entry.get("selection")
+                or {}
+            )
             suffix = (
                 " -> "
                 f"{selection.get('template_slug')}/"
                 f"variation-{selection.get('variation_index')}"
-                if entry["status"] == "ok"
+                if entry["status"] in SUCCESSFUL_RENDER_STATUSES
                 else f": {entry.get('error', 'rejected')}"
             )
             print(
@@ -491,7 +690,7 @@ def main() -> None:
             f"[{entry['status']}] {entry['document_id']}"
             + (
                 f" -> {entry['output_dir']}"
-                if entry["status"] == "ok"
+                if entry["status"] in SUCCESSFUL_RENDER_STATUSES
                 else f": {entry['error']}"
             )
         )

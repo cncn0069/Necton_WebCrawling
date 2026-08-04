@@ -50,7 +50,7 @@ _DENSITIES = ("balanced", "compact", "airy")
 _MAX_VARIATIONS_PER_TEMPLATE = 10
 _MAX_RESEARCH_TITLE_CHARACTERS = 300
 _MAX_RESEARCH_BLOCKS = 160
-_MAX_RESEARCH_CHARACTERS = 40_000
+_MAX_RESEARCH_TEXT_CHARACTERS_PER_PAGE = 4_000
 _MAX_RESEARCH_LIST_ITEMS = 600
 _MAX_RESEARCH_TABLE_ROWS = 500
 _MAX_RESEARCH_TABLE_CELLS = 2_500
@@ -270,7 +270,11 @@ _RESTRICTED_URL_FETCHER = _RestrictedURLFetcher(
 )
 
 
-def _validate_render_budget(base_context: Mapping[str, Any]) -> None:
+def _validate_render_budget(
+    base_context: Mapping[str, Any],
+    *,
+    max_pages: int,
+) -> None:
     """WeasyPrint 실행 전에 연구보고서 입력 복잡도를 제한한다."""
 
     title = str(base_context.get("title") or "")
@@ -338,6 +342,7 @@ def _validate_render_budget(base_context: Mapping[str, Any]) -> None:
                 for key in ("role", "name", "date")
             )
 
+    character_limit = max_pages * _MAX_RESEARCH_TEXT_CHARACTERS_PER_PAGE
     limits = (
         (
             list_item_count,
@@ -356,7 +361,7 @@ def _validate_render_budget(base_context: Mapping[str, Any]) -> None:
         ),
         (
             character_count,
-            _MAX_RESEARCH_CHARACTERS,
+            character_limit,
             "characters",
         ),
     )
@@ -427,7 +432,7 @@ def render_research_report_variations(
     if max_pages < 1:
         raise ValueError("max_pages must be at least 1")
 
-    _validate_render_budget(base_context)
+    _validate_render_budget(base_context, max_pages=max_pages)
     variants = _selected_variants(template_slugs)
     if not variants:
         raise ValueError("At least one research report template must be selected")

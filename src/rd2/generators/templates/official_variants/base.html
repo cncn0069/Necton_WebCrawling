@@ -4,11 +4,15 @@
   <meta charset="utf-8">
   <title>{{ title }}</title>
   <link rel="stylesheet" href="official_variants/styles.css">
+  <link rel="stylesheet" href="pagination.css">
   {% if variation_css|default("") %}
   <style id="document-variation">{{ variation_css|safe }}</style>
   {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %} {{ variation_class|default("") }}">
+<body class="{% block body_class %}{% endblock %} {{ variation_class|default("") }}{% if pagination_continuation|default(false) %} pagination-preview{% endif %}">
   {% block document %}{% endblock %}
+  {% if pagination_continuation|default(false) %}
+  {% include "partials/pagination_continuation.html" %}
+  {% endif %}
 </body>
 </html>

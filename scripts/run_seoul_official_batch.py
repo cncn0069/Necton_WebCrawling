@@ -8,7 +8,7 @@
 실제로 들어 있고, 부분공개 문서는 본문에 마스킹(`****`)과 `부분공개(6)` 같은
 근거 표기까지 남아 있다. 공문 형식을 배울 재료로는 이보다 나은 것이 없다.
 
-**입력은 두 가지다.**
+**입력은 세 가지다.**
 
 ``--source-dir``(기본)는 이미 내려받은 로컬 hwpx/pdf를 읽는다. 서울 소스는
 RDS에 없다 — 한국 정부 사이트가 EC2 IP를 차단해 서버에서는 수집이 안 되고
@@ -19,6 +19,11 @@ RDS에 없다 — 한국 정부 사이트가 EC2 IP를 차단해 서버에서는
 `****`와 `부분공개(6)` 표기가 ``mask_restoration`` route의 입력인데, 그게
 살아 있는 형태는 원본 파일이다. 파일이 없는 행은 기본적으로 건너뛰고,
 ``--allow-body-text``를 주면 ``body_text``로 스냅샷을 만들어 처리한다.
+
+``--extracted-root``는 canonical extraction-v2 run manifest에 allowlist된
+PDF/HWP/HWPX 추출본을 직접 읽는다. 원본 파일을 다시 파싱하지 않으며
+``needs_ocr`` 산출물은 LLM에 보내지 않는다. partial extraction run은
+``--allow-partial-extraction``을 명시한 파일럿에서만 허용한다.
 
 ``--commit-to-rds``를 주면 승인된(``accepted_s``) 생성물이 같은 ``documents``
 테이블에 S 행으로 들어간다. 템플릿 작업이 끝나기 전이라 PDF가 없으므로
@@ -48,6 +53,8 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import OpenAI  # noqa: E402
 
 from rd2.extraction.hwp_text import extract_hwp_document  # noqa: E402
+from rd2.extraction.pipeline import RUN_MANIFEST_NAME  # noqa: E402
+from rd2.extraction.storage import read_json_gz  # noqa: E402
 from rd2.extractors.pdf import extract_pdf  # noqa: E402
 from rd2.generators.output_naming import generation_output_filename  # noqa: E402
 from rd2.source_generation.classification_taxonomy import (  # noqa: E402
@@ -216,6 +223,72 @@ def _snapshot_from_texts(
     )
     # 첫 몇 줄에 제목이 들어 있는 경우가 많다. 없으면 문서 ID로 대체한다.
     title = next((t for t in texts if len(t) > 6), doc_id)
+    return snapshot, title
+
+
+def _snapshot_from_extracted_payload(
+    payload: dict,
+    *,
+    manifest_key: str,
+) -> tuple[SourceDocumentSnapshot, str] | None:
+    """Canonical extraction-v2 한 건을 신형 파이프라인 입력으로 옮긴다.
+
+    물리 페이지가 비어 있으면 SourcePage 계약상 담을 block이 없으므로 제외하고,
+    남은 페이지를 1부터 다시 번호 매긴다. block ID에는 원래 페이지 번호와 줄
+    순서를 남겨 생성 결과에서 추출본으로 역추적할 수 있게 한다.
+    """
+
+    if payload.get("schema_version") != 2:
+        raise ValueError("extracted input requires schema_version=2")
+    if payload.get("status") != "ok":
+        return None
+
+    source = str(payload.get("source") or "_unclassified")
+    source_path = str(payload.get("source_path") or "")
+    extraction_id = str(payload.get("extraction_id") or "")
+    source_sha256 = str(payload.get("source_sha256") or "")
+    if not source_path or not extraction_id or not source_sha256:
+        raise ValueError("extraction-v2 payload is missing provenance fields")
+
+    snapshot_pages: list[dict] = []
+    title_candidates: list[str] = []
+    for physical_index, page in enumerate(payload.get("pages") or [], start=1):
+        original_page = page.get("page") or physical_index
+        blocks: list[dict[str, str]] = []
+        for line_index, line in enumerate(page.get("lines") or []):
+            text = str(line.get("text") or "").strip()
+            if not text:
+                continue
+            blocks.append(
+                {
+                    "block_id": f"source-p{original_page}:l{line_index}",
+                    "text": text,
+                }
+            )
+            title_candidates.append(text)
+        if not blocks:
+            continue
+        snapshot_pages.append(
+            {
+                "page_number": len(snapshot_pages) + 1,
+                "blocks": blocks,
+            }
+        )
+
+    if not snapshot_pages:
+        return None
+
+    snapshot = SourceDocumentSnapshot.model_validate(
+        {
+            "source_document_id": f"{source}-{extraction_id[:16]}",
+            "source": source,
+            "manifest_key": manifest_key,
+            "source_sha256": source_sha256,
+            "pages": snapshot_pages,
+        }
+    )
+    fallback_title = Path(source_path).stem
+    title = next((text for text in title_candidates if len(text) > 6), fallback_title)
     return snapshot, title
 
 
@@ -453,6 +526,78 @@ def _resolve_selection(
     return selection, "front_relevance"
 
 
+def _resolve_extracted_artifact(extracted_root: Path, relative_path: str) -> Path:
+    root = extracted_root.resolve()
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"extraction artifact escapes extracted root: {relative_path!r}"
+        ) from exc
+    return candidate
+
+
+def _iter_extracted_items(
+    extracted_root: Path,
+    *,
+    allow_partial: bool,
+) -> "Iterator[SourceItem]":
+    """완결된 extraction run의 정상 산출물만 신형 LLM 파이프라인에 공급한다."""
+
+    extracted_root = extracted_root.resolve()
+    manifest_path = extracted_root / RUN_MANIFEST_NAME
+    manifest = read_json_gz(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"invalid extraction manifest: {manifest_path}")
+    run_status = manifest.get("status")
+    if run_status != "complete" and not (allow_partial and run_status == "partial"):
+        raise ValueError(
+            f"extraction run is not complete (status={run_status!r}); "
+            "use --allow-partial-extraction only for an intentional pilot"
+        )
+    run_id = str(manifest.get("run_id") or "")
+    if not run_id:
+        raise ValueError("extraction manifest is missing run_id")
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise ValueError("extraction manifest artifacts must be a list")
+
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("extraction manifest contains a non-object artifact")
+        # 새 OCR 정책상 needs_ocr는 일부 텍스트가 남아 있어도 템플릿 생성 입력으로
+        # 쓰지 않는다. OCR 완료 후 status=ok인 새 extraction run으로만 재진입한다.
+        if artifact.get("status") != "ok":
+            continue
+        output_path = artifact.get("output_path")
+        if not isinstance(output_path, str) or not output_path:
+            raise ValueError("extraction manifest artifact is missing output_path")
+        payload_path = _resolve_extracted_artifact(extracted_root, output_path)
+        payload = read_json_gz(payload_path)
+        if not isinstance(payload, dict):
+            raise ValueError(f"invalid extraction artifact: {payload_path}")
+        identity_fields = ("source_path", "extraction_id", "status")
+        for field in identity_fields:
+            if payload.get(field) != artifact.get(field):
+                raise ValueError(
+                    f"extraction manifest mismatch for {output_path}: {field}"
+                )
+        built = _snapshot_from_extracted_payload(
+            payload,
+            manifest_key=f"extraction-v2:{run_id}:{output_path}",
+        )
+        if built is None:
+            continue
+        snapshot, title = built
+        yield SourceItem(
+            snapshot=snapshot,
+            title=title,
+            display_name=str(payload["source_path"]),
+        )
+
+
 def _targets() -> list[GenerationTarget]:
     """이번 batch는 원문 참고 제6호 S 생성만 순환한다."""
 
@@ -528,7 +673,7 @@ def _attach_render_outputs(
         if record is None:
             continue
         record["render_status"] = entry.get("status")
-        if entry.get("status") != "ok":
+        if entry.get("status") not in {"ok", "ok_truncated"}:
             record["approval_status"] = SensitivePipelineStatus.PIPELINE_FAILED.value
             record["succeeded"] = False
             record["failure_stage"] = "render"
@@ -665,6 +810,17 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument(
+        "--extracted-root",
+        type=Path,
+        default=None,
+        help="canonical extraction-v2 root; manifest의 status=ok 산출물만 사용",
+    )
+    parser.add_argument(
+        "--allow-partial-extraction",
+        action="store_true",
+        help="partial extraction manifest의 정상 산출물을 파일럿 입력으로 허용",
+    )
+    parser.add_argument(
         "--source-name",
         default="seoul_opengov",
         help="snapshot.source에 기록할 출처 이름 (예: alio, PRISM, orginl_info)",
@@ -763,7 +919,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.from_rds:
+    if args.from_rds and args.extracted_root is not None:
+        parser.error("--from-rds and --extracted-root cannot be used together")
+    if args.allow_partial_extraction and args.extracted_root is None:
+        parser.error("--allow-partial-extraction requires --extracted-root")
+
+    if args.extracted_root is not None:
+        manifest_path = args.extracted_root / RUN_MANIFEST_NAME
+        if not manifest_path.is_file():
+            parser.error(f"extraction manifest가 없다: {manifest_path}")
+        print(f"extraction-v2 -> 최대 {args.count}건 처리: {manifest_path}")
+        items = _iter_extracted_items(
+            args.extracted_root,
+            allow_partial=args.allow_partial_extraction,
+        )
+    elif args.from_rds:
         read_connection = _connect_rds(args.rds_database)
         try:
             rows = _fetch_rds_rows(
@@ -1016,6 +1186,11 @@ def main() -> int:
                         json.dumps(
                             {
                                 "output_filename": output_filename,
+                                "ordering_agency": (
+                                    item.row.ordering_agency
+                                    if item.row is not None
+                                    else None
+                                ),
                                 "approval_status": sensitive_run.status.value,
                                 "consistency_assessment": (
                                     result.consistency_assessment.model_dump(
@@ -1242,9 +1417,20 @@ def main() -> int:
                 "classifier_model": args.classifier_model,
                 "generator_model": args.generator_model,
                 "validator_model": args.validator_model,
-                "input_mode": "rds" if args.from_rds else "files",
+                "input_mode": (
+                    "extraction-v2"
+                    if args.extracted_root is not None
+                    else ("rds" if args.from_rds else "files")
+                ),
                 "source_dir": (
-                    None if args.from_rds else str(args.source_dir)
+                    None
+                    if args.from_rds or args.extracted_root is not None
+                    else str(args.source_dir)
+                ),
+                "extracted_root": (
+                    str(args.extracted_root)
+                    if args.extracted_root is not None
+                    else None
                 ),
                 "rds_filter": (
                     {

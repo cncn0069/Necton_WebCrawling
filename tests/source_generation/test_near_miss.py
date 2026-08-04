@@ -59,7 +59,7 @@ def test_near_miss_is_optional_so_past_artifacts_still_parse():
 
     assessment = ConsistencyAssessment.model_validate(_open_assessment())
     assert assessment.near_miss == ()
-    assert assessment.contract_version == "2.2.0"
+    assert assessment.contract_version == "2.3.0"
 
 
 def test_near_miss_is_dropped_on_a_sensitive_verdict():
