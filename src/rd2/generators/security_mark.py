@@ -54,6 +54,15 @@ _REPO_ROOT = Path(__file__).parent.parent.parent.parent
 _LOGO_DIR = _REPO_ROOT / "logo"
 _CONFIDENTIAL_MARK_ASSET = _LOGO_DIR / "대외비.png"
 
+SYNTHETIC_SECURITY_STAMP_LABELS: tuple[str, ...] = (
+    "CONFIDENTIAL",
+    "TOP SECRET",
+    "RESTRICTED",
+    "NEED TO KNOW",
+)
+_SYNTHETIC_STAMP_SIZE_PX = (720, 220)
+_SYNTHETIC_STAMP_INK = (34, 39, 44, 255)
+
 # A4 @ ~150dpi (reportlab A4는 pt 단위 595x842 — 150dpi로 래스터화)
 _PAGE_SIZE_PX = (1240, 1754)
 _STAMP_SIZE_PX = (260, 100)
@@ -165,6 +174,75 @@ def generate_classification_stamp(output_path: Path, *, seed: int = 0) -> Path:
     noisy = _apply_noise(base, seed=seed, angle_range=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     noisy.save(output_path)
+    return output_path
+
+
+def generate_synthetic_security_stamp(output_path: Path, label: str) -> Path:
+    """어두운 단색 영문 보안 스탬프 PNG를 만든다.
+
+    실제 기관 자산이나 법정 등급 도안을 복제하지 않는 가상 표지다. 지원하는
+    문구를 고정해 오타와 임의의 공식 표지 생성을 막고, 하단에 ``VIRTUAL
+    SAMPLE``을 함께 넣어 합성 자산임을 이미지 자체에서도 식별할 수 있게 한다.
+    """
+
+    normalized = " ".join(str(label).strip().upper().split())
+    if normalized not in SYNTHETIC_SECURITY_STAMP_LABELS:
+        raise ValueError(f"알 수 없는 가상 보안 스탬프 문구: {label!r}")
+
+    width, height = _SYNTHETIC_STAMP_SIZE_PX
+    image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    outer = 10
+    inner = 22
+    draw.rounded_rectangle(
+        [outer, outer, width - outer - 1, height - outer - 1],
+        radius=8,
+        outline=_SYNTHETIC_STAMP_INK,
+        width=8,
+    )
+    draw.rectangle(
+        [inner, inner, width - inner - 1, height - inner - 1],
+        outline=_SYNTHETIC_STAMP_INK,
+        width=3,
+    )
+
+    header_font = _load_font(_KOREAN_FONT_BOLD_PATH, 24)
+    footer_font = _load_font(_KOREAN_FONT_PATH, 21)
+    label_size = 72
+    while label_size > 34:
+        label_font = _load_font(_KOREAN_FONT_BOLD_PATH, label_size)
+        label_box = draw.textbbox((0, 0), normalized, font=label_font)
+        if label_box[2] - label_box[0] <= width - 90:
+            break
+        label_size -= 2
+
+    def centered_x(text: str, font: ImageFont.ImageFont) -> float:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return (width - (bbox[2] - bbox[0])) / 2 - bbox[0]
+
+    draw.text(
+        (centered_x("SECURITY CLASSIFICATION", header_font), 37),
+        "SECURITY CLASSIFICATION",
+        font=header_font,
+        fill=_SYNTHETIC_STAMP_INK,
+    )
+    label_box = draw.textbbox((0, 0), normalized, font=label_font)
+    label_y = (height - (label_box[3] - label_box[1])) / 2 - label_box[1] + 3
+    draw.text(
+        (centered_x(normalized, label_font), label_y),
+        normalized,
+        font=label_font,
+        fill=_SYNTHETIC_STAMP_INK,
+    )
+    draw.text(
+        (centered_x("VIRTUAL SAMPLE", footer_font), height - 55),
+        "VIRTUAL SAMPLE",
+        font=footer_font,
+        fill=_SYNTHETIC_STAMP_INK,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_path, format="PNG", optimize=True)
     return output_path
 
 

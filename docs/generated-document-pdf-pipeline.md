@@ -111,11 +111,12 @@ python scripts/render_generated_documents.py data/render_inputs \
 
 ### 장문 배치와 12페이지 제한
 
-최종 PDF는 모든 문서 유형에서 최대 12페이지다. 12페이지를 생성 상한으로
+본문 PDF는 모든 문서 유형에서 최대 12페이지다. 12페이지를 생성 상한으로
 사용하지 않고, 먼저 입력 block 전체를 자연스럽게 페이지에 배치해 원문 보존을
 검증한 뒤 첫 12페이지만 남긴다. 13페이지 이후는 의도적으로 폐기하며 이 경우는
-`status: ok_truncated`로 구분한다. 보안표지는 이 절단이 끝난 최종 12페이지에
-적용된다.
+`status: ok_truncated`로 구분한다. 군사기밀 표지는 이 절단이 끝난 본문 앞에
+별도 한 장으로 붙으며 12페이지 제한에 포함하지 않는다. 따라서 본문이 12페이지인
+군사기밀 PDF의 실제 파일 장수는 13장이다.
 
 `manifest.json`에는 최종 `actual_pages`와 함께 다음 값이 기록된다.
 
@@ -133,15 +134,11 @@ python scripts/render_generated_documents.py data/render_inputs \
 ### C 문서 보안표지
 
 보안표지는 템플릿 HTML이 아니라 최종 PDF 공통 후처리 단계에서 적용한다.
-`generation_target.classification`이 `C`일 때만 표시되며 `S`와 `O`에는
-표지를 추가하지 않는다.
-
-일반기관 C 문서는 `logo/대외비.png`를 사용한다. 본문 SHA-256으로 페이지
-상·하단 둘레의 10개 후보 중 시작 위치를 정하고, 모든 페이지에서 비어 있는
-첫 위치를 선택한다. 한 PDF 안에서는 모든 페이지가 같은 위치를 사용한다.
-
-국방부·국가정보원 C 문서는 기존 등급 선택 로직이 정한 값을
-`generation_target.military_secret_grade`로 전달해야 한다.
+`generation_target.classification`이 `C`이면 단색 대외비 보안 스킨 10종 중
+하나를 seed로 재현 가능하게 선택한다. `military_secret_grade`가 명시되면 같은
+스킨에 등급별 앞표지와 본문 상·하단 표시를 더한다. S/O 문서는 변경하지 않는다.
+기관명과 정부부처 로고는 보안 스킨 적용 여부나 등급 판단에 사용하지 않는다.
+다만 매핑된 기관명은 기존 중앙 워터마크 선택에 계속 사용한다.
 
 ```json
 {
@@ -157,10 +154,35 @@ python scripts/render_generated_documents.py data/render_inputs \
 }
 ```
 
-허용 등급은 `1급`, `2급`, `3급`이며 해당 `logo/*급_비밀.png`를 모든 페이지의
-상·하단 중앙에 표시한다. 페이지 번호나 본문이 있으면 모든 페이지에 공통으로
-적용 가능한 범위 안에서 수직 이동한다. 군사기관 C에 등급이 없거나 일반기관에
-군사 등급이 있거나, 모든 후보 위치가 본문과 겹치면 해당 출력을 거부한다.
+등급이 없는 C 문서는 `대외비`, `CONFIDENTIAL`, `TOP SECRET`, `RESTRICTED`,
+`NEED TO KNOW` 가상 스탬프를 선택한 보안 스킨의 예약 여백에 표시한다. 모든
+가상 영문 스탬프에는 `VIRTUAL SAMPLE`이 포함되며 색상은 `#22272C` 단색이다.
+보안 스킨은 공문·연구보고서·회의록 등 본문 렌더러와 독립적이며 기존 payload에
+별도 필드를 요구하지 않는다.
+
+허용 군사기밀 등급은 `1급`, `2급`, `3급`이다. 해당
+`logo/*급_비밀_표지.png`를 적색·황색·
+청색으로 보정해 A4 새 페이지에 배치한 뒤 본문 앞에 붙인다. 본문 모든 면에는
+`logo/*급_비밀.png`를 상·하단 중앙에 표시한다. 페이지 번호나 본문이 있으면 모든
+본문 페이지를 원래 비율 그대로 상·하단 30pt, 좌우 12pt 안전영역 안에 맞춰
+넣고, 등급표시는 그 바깥 여백에 배치한다. 헤더·푸터가 빽빽하거나 장문 block이
+많은 템플릿에서도 본문을 가리지 않는다. 잘못된 등급이나 누락된 자산은 해당
+출력을 거부한다.
+
+보안 스킨 slug:
+
+```text
+01_classic_register
+02_report_band
+03_minimal_mark
+04_restricted_memo
+05_strategy_report
+06_controlled_sheet
+07_official_sensitive
+08_registry_control
+09_protected_technology
+10_need_to_know
+```
 
 공문 계열 템플릿 slug:
 
@@ -319,17 +341,12 @@ rule_04_notice_frame
 
 각 입력의 출력 폴더에 HTML, PDF, `manifest.json`이 생긴다.
 `manifest.json`에는 seed, 입력 해시, 기관명 선택, 원문 포함 검증,
-합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. C 문서의
-기관명이 로고 매핑에 있으면 별도 `agency_marking`에 기관 자산·중앙 배치·
-투명도도 기록한다. 배치 입력의 문서별 성공·실패는 `batch_manifest.json`에서
-확인한다.
+합성 도장 파라미터와 `security_marking` 적용 결과가 기록된다. 기관 로고용
+`agency_marking`은 기존과 같이 별도 필드에 기록한다. 보안 스킨 선택과 기밀
+등급은 기관 로고와 독립적으로 결정된다. 배치 입력의 문서별 성공·실패는
+`batch_manifest.json`에서 확인한다.
 
-기관 워터마크는 기존 템플릿 PDF를 먼저 완성한 뒤 모든 페이지의 같은 중앙
-위치에 투명한 회색 로고를 합성한다. 그 다음 기존 대외비 또는 군사기밀
-분류표지를 가장자리 여백에 넣는다. 입력의 `ordering_agency`는 렌더 경계에서
-`generated_document.agency_name`으로 전달되며, 외부 로고 파일 경로는 받지
-않는다. C 이외의 문서와 매핑되지 않은 기관에는 기관 워터마크를 넣지 않는다.
-전체 기관 매핑, 17개 자산의 사용 상태, 크기·투명도 기준은
+등급별 표지, 가상 스탬프와 기관 워터마크 자산 목록은
 [`logo/README.md`](../logo/README.md)를 따른다.
 
 실패 입력을 조사 목적으로만 렌더링할 때는
