@@ -34,6 +34,9 @@ from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
 )
 from rd2.generators.synthetic_scan import render_synthetic_scan_pdf
+from rd2.generators.synthetic_handwriting import (
+    render_synthetic_handwriting_pdf,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -357,6 +360,27 @@ def _finalize_rendered_document(
             entry["sensitive_evidence"] = evidence
         if assignment is None:
             continue
+        if not assignment.synthetic_handwriting:
+            entry["synthetic_handwriting"] = {
+                "applied": False,
+                "seed": assignment.synthetic_handwriting_seed,
+            }
+        else:
+            original_validation_scope = entry.get(
+                "source_text_validation_scope"
+            )
+            handwriting_result = render_synthetic_handwriting_pdf(
+                Path(str(entry["pdf"])),
+                Path(str(entry["pdf"])),
+                seed=assignment.synthetic_handwriting_seed,
+            )
+            handwriting_result[
+                "pre_handwriting_source_text_validation_scope"
+            ] = original_validation_scope
+            entry["synthetic_handwriting"] = handwriting_result
+            entry["source_text_validation_scope"] = (
+                "pre_handwriting_pdf"
+            )
         if not assignment.synthetic_scan:
             entry["synthetic_scan"] = {
                 "applied": False,
@@ -594,6 +618,9 @@ def render_input_directory(
                     "accepted_selection": accepted_selection,
                     "render_attempts": render_attempts,
                     "synthetic_scan": rendered[0].get("synthetic_scan"),
+                    "synthetic_handwriting": rendered[0].get(
+                        "synthetic_handwriting"
+                    ),
                 }
             )
 
@@ -614,6 +641,13 @@ def render_input_directory(
             bool(
                 isinstance(entry.get("synthetic_scan"), dict)
                 and entry["synthetic_scan"].get("applied")
+            )
+            for entry in documents
+        ),
+        "synthetic_handwriting_count": sum(
+            bool(
+                isinstance(entry.get("synthetic_handwriting"), dict)
+                and entry["synthetic_handwriting"].get("applied")
             )
             for entry in documents
         ),
@@ -699,11 +733,25 @@ def main() -> None:
                 " -> "
                 f"{selection.get('template_slug')}/"
                 f"variation-{selection.get('variation_index')}/"
-                + (
-                    "scan"
-                    if isinstance(entry.get("synthetic_scan"), dict)
-                    and entry["synthetic_scan"].get("applied")
-                    else "digital"
+                + "+".join(
+                    (
+                        *(
+                            ("handwriting",)
+                            if isinstance(
+                                entry.get("synthetic_handwriting"), dict
+                            )
+                            and entry["synthetic_handwriting"].get(
+                                "applied"
+                            )
+                            else ()
+                        ),
+                        (
+                            "scan"
+                            if isinstance(entry.get("synthetic_scan"), dict)
+                            and entry["synthetic_scan"].get("applied")
+                            else "digital"
+                        ),
+                    )
                 )
                 if entry["status"] in SUCCESSFUL_RENDER_STATUSES
                 else f": {entry.get('error', 'rejected')}"
