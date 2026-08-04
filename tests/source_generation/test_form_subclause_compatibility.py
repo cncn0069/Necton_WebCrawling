@@ -1,33 +1,20 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
-    ClauseNumber,
     DocumentForm,
     SubclauseKey,
 )
-from rd2.source_generation.contracts import FailureCode, SourceEvidenceLevel
+from rd2.source_generation.contracts import SourceEvidenceLevel
 from rd2.source_generation.document_form_compatibility import (
     FormSubclauseCompatibility,
     compatibility_counts,
     form_subclause_compatibility,
     render_form_subclause_bridge_guidance,
 )
-from rd2.source_generation.document_select import prepare_document_selection
-from rd2.source_generation.pipeline import (
-    GenerationPlanningError,
-    build_generation_plan,
-)
-
-from .v2_fixtures import snapshot, source_assessment, target
-
-
-def _selection():
-    selection = prepare_document_selection(snapshot()).selection
-    assert selection is not None
-    return selection
+from .v2_fixtures import source_assessment
 
 
 def test_compatibility_policy_classifies_all_272_pairs():
@@ -87,69 +74,21 @@ def test_bridge_guidance_requires_both_core_form_and_target_content():
     )
 
 
-def test_planner_remaps_a_hard_conflict_to_first_non_conflicting_candidate():
-    assessment = source_assessment(
-        document_form=DocumentForm.POLICY_MATERIAL,
-        subclause=SubclauseKey.PETITIONER_PII,
-        primary_subclause=SubclauseKey.PETITIONER_PII,
-        compatible_subclauses=(SubclauseKey.BUSINESS_STRATEGY,),
-    )
+def test_conflicting_primary_subclause_is_rejected_at_the_assessment_contract():
+    """"갈아탈 후보가 없다"는 상태를 계약이 애초에 못 만들게 한다.
 
-    plan = build_generation_plan(
-        assessment=assessment,
-        requested_target=target(
-            clause=ClauseNumber.CLAUSE_6,
+    이전에는 판별기가 형식과 충돌하는 1순위를 낼 수 있었고, 후보 목록까지 전부
+    충돌하면 계획 단계에서 ``SOURCE_INCOMPATIBLE``로 끝났다. 1순위를 그대로
+    생성 목표로 쓰기로 한 이상(폴백 없음) 그 검사는 판별 단계로 올라가야 한다 —
+    계획까지 가서 버리면 판별 호출 하나가 통째로 낭비된다.
+    """
+
+    with pytest.raises(ValidationError) as exc_info:
+        source_assessment(
+            document_form=DocumentForm.POLICY_MATERIAL,
             subclause=SubclauseKey.PETITIONER_PII,
-        ),
-        snapshot=snapshot(),
-        selection=_selection(),
-        sensitive_seed="민원인의 개인 연락처",
-    )
-
-    assert plan.final_target.clause_no == ClauseNumber.CLAUSE_7
-    assert plan.final_target.subclause_key == SubclauseKey.BUSINESS_STRATEGY
-
-
-def test_planner_rejects_a_hard_conflict_without_a_viable_candidate():
-    assessment = source_assessment(
-        document_form=DocumentForm.POLICY_MATERIAL,
-        subclause=SubclauseKey.PETITIONER_PII,
-        primary_subclause=SubclauseKey.PETITIONER_PII,
-        compatible_subclauses=(SubclauseKey.SUBJECT_PII,),
-        evidence_level=SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
-    )
-
-    with pytest.raises(GenerationPlanningError) as exc_info:
-        build_generation_plan(
-            assessment=assessment,
-            requested_target=target(
-                clause=ClauseNumber.CLAUSE_6,
-                subclause=SubclauseKey.PETITIONER_PII,
-            ),
-            snapshot=snapshot(),
-            selection=_selection(),
-            sensitive_seed="민원인의 개인 연락처",
+            primary_subclause=SubclauseKey.PETITIONER_PII,
+            evidence_level=SourceEvidenceLevel.CONTEXTUAL_ANCHOR_ONLY,
         )
 
-    assert exc_info.value.code == FailureCode.SOURCE_INCOMPATIBLE
-    assert "no source-compatible subclause" in str(exc_info.value)
-
-
-def test_source_aligned_hard_conflict_is_rejected_instead_of_relabelled():
-    assessment = source_assessment(
-        classification=CsoClassification.S,
-        document_form=DocumentForm.PRESS_RELEASE,
-        clause=ClauseNumber.CLAUSE_6,
-        subclause=SubclauseKey.PERSONNEL_PII,
-    )
-
-    with pytest.raises(GenerationPlanningError) as exc_info:
-        build_generation_plan(
-            assessment=assessment,
-            requested_target=target(),
-            snapshot=snapshot(),
-            selection=_selection(),
-        )
-
-    assert exc_info.value.code == FailureCode.SOURCE_INCOMPATIBLE
-    assert "source legal target conflicts" in str(exc_info.value)
+    assert "conflicts with document form policy_material" in str(exc_info.value)

@@ -39,3 +39,6 @@ admin_status_sample_pdfs/
 scratch_*
 일일리포트_*.md
 비공식_*
+
+# codex가 만드는 git worktree (본체 저장소에 커밋할 대상이 아님)
+.codex-worktrees/

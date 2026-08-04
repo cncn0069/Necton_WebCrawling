@@ -15,7 +15,7 @@ from rd2.generators.research_report_rendering import (
     build_research_variation_specs,
     render_research_report_variations,
 )
-from scripts.render_generated_documents import render_input_file
+from scripts.report.render_generated_documents import render_input_file
 
 
 def _research_payload() -> dict:

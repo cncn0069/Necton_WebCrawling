@@ -1,0 +1,131 @@
+"""정보공개포털 O트랙 어댑터 대량 수집 스크립트.
+
+실제 사이트에서 문서를 수집해 스키마 검증 + 저장까지 end-to-end로 확인한다.
+collect_molit.py와 동일한 체크포인트 구조 — 이 소스는 목록 조회가 순수 JSON
+AJAX 한 번뿐이라(PRISM처럼 행마다 브라우저 클릭이 필요 없음) skip 기반 재개만
+으로 충분하다(open_go_kr.py의 fetch_list 독스트링 참고).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import date, datetime
+from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
+from rd2.adapters.conformance import assert_conformance  # noqa: E402
+from rd2.adapters.open_go_kr import OpenGoKrAdapter  # noqa: E402
+from rd2.storage.db import DocumentStore  # noqa: E402
+
+
+def _load_checkpoint(path: Path) -> int:
+    """마지막으로 완료 처리한 목록 위치(0-based 건수)를 읽는다. 파일이 없으면 0."""
+    if not path.exists():
+        return 0
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("processed", 0)
+    except (json.JSONDecodeError, OSError):
+        return 0
+
+
+def _save_checkpoint(path: Path, processed: int) -> None:
+    """매 건 처리 직후 즉시 기록 — 중간에 죽어도 다음 실행이 여기서부터 이어간다."""
+    path.write_text(json.dumps({"processed": processed}, ensure_ascii=False), encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("count", type=int, help="수집할 건수")
+    parser.add_argument(
+        "--start-date", default="2013-01-01",
+        help="목록 조회 시작일 YYYY-MM-DD (기본: 2013-01-01)",
+    )
+    parser.add_argument(
+        "--end-date", default=None,
+        help="목록 조회 종료일 YYYY-MM-DD (기본: 오늘)",
+    )
+    parser.add_argument(
+        "--skip", type=int, default=None,
+        help="목록 앞에서 건너뛸 건수. 생략하면 체크포인트 파일의 이어할 위치를 사용",
+    )
+    parser.add_argument(
+        "--checkpoint", default=None,
+        help="진행 상황 저장 파일 경로 (기본: rd2.db.open_go_kr_checkpoint.json)",
+    )
+    parser.add_argument(
+        "--reset-checkpoint", action="store_true",
+        help="체크포인트를 무시하고 --skip(기본 0)부터 새로 시작",
+    )
+    args = parser.parse_args()
+
+    repo_root = Path(__file__).parent.parent
+    # 파일명은 SQLite 시절 명명 규칙(rd2.db.<source>_checkpoint.json)을 그대로 유지 —
+    # DB가 더 이상 파일이 아니지만 다른 소스 체크포인트 파일들과 이름 일관성을 위해.
+    checkpoint_path = (
+        Path(args.checkpoint) if args.checkpoint else repo_root / "rd2.db.open_go_kr_checkpoint.json"
+    )
+
+    if args.reset_checkpoint:
+        base_skip = args.skip or 0
+    elif args.skip is not None:
+        base_skip = args.skip
+    else:
+        base_skip = _load_checkpoint(checkpoint_path)
+
+    start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+    end_date = (
+        datetime.strptime(args.end_date, "%Y-%m-%d").date() if args.end_date else date.today()
+    )
+
+    print(f"Checkpoint file: {checkpoint_path}")
+    print(f"Starting from position: {base_skip}")
+    print(f"Date range: {start_date} ~ {end_date}")
+
+    adapter = OpenGoKrAdapter()
+
+    collected = 0
+    quarantined = 0
+    processed_position = base_skip
+    docs = []
+    with DocumentStore() as store:
+        try:
+            for raw_item in adapter.fetch_list(
+                start_date=start_date, end_date=end_date, max_items=args.count, skip=base_skip
+            ):
+                try:
+                    detail = adapter.parse_detail(raw_item)
+                    doc = adapter.to_schema(detail)
+                except Exception as exc:  # noqa: BLE001
+                    store.quarantine(raw_item, str(exc))
+                    quarantined += 1
+                    print(f"QUARANTINED: {exc}")
+                    processed_position += 1
+                    _save_checkpoint(checkpoint_path, processed_position)
+                    continue
+
+                stored = store.upsert(doc)
+                docs.append(doc)
+                collected += 1
+                print(f"[{'stored' if stored else 'dup-skip'}] {doc.title!r}")
+                print(f"    agency={doc.ordering_agency!r} dept={doc.department!r}")
+                print(f"    disclosure={doc.disclosure_status.value!r} cso={doc.cso_classification.value!r}")
+
+                processed_position += 1
+                _save_checkpoint(checkpoint_path, processed_position)
+        finally:
+            print()
+            print(f"Processed: {collected}, Quarantined: {quarantined}")
+            print(f"Checkpoint now at position: {processed_position} ({checkpoint_path})")
+            print(f"Total O-track docs in DB (전체 소스 합산): {store.count_documents(cso_classification='O')}")
+            if docs:
+                assert_conformance(adapter.source_name, docs)
+                print("Conformance: PASS")
+
+
+if __name__ == "__main__":
+    main()

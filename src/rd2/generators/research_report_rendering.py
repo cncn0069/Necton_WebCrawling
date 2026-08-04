@@ -14,11 +14,12 @@ from pathlib import Path
 import random
 from typing import Any, Collection, Mapping, Sequence
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import fitz
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from weasyprint import HTML
-from weasyprint.urls import URLFetcher
+
+from rd2.generators.weasyprint_runtime import HTML, URLFetcher
 
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -252,7 +253,11 @@ class _RestrictedURLFetcher(URLFetcher):
     def fetch(self, url: str, headers: Mapping[str, str] | None = None) -> Any:
         parsed = urlparse(url)
         if parsed.scheme == "file":
-            resource_path = Path(unquote(parsed.path)).resolve()
+            # ``unquote``만 쓰면 윈도우에서 file:///C:/... 의 앞 슬래시가
+            # 남아 경로가 ``C:CODE\...``로 뭉개진다 - 자산이 검색 루트
+            # 밖으로 보여 번들 CSS까지 차단된다. url2pathname이 플랫폼별
+            # 변환을 담당한다(POSIX에서는 결과가 같다).
+            resource_path = Path(url2pathname(parsed.path)).resolve()
             if not any(
                 resource_path.is_relative_to(root)
                 for root in _ALLOWED_ASSET_ROOTS

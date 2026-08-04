@@ -3,7 +3,7 @@ import json
 import pytest
 
 from rd2.generators import generate
-from rd2.generators.clause_data import CLAUSES, ClauseDefinition
+from rd2.disclosure.clause_data import CLAUSES, ClauseDefinition
 from rd2.schema.models import CsoClassification, DisclosureStatus
 
 

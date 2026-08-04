@@ -1,11 +1,6 @@
-import sys
 from pathlib import Path
 
 import pytest
-
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
 
 from rename_korean_paths import _migrate_db, _rename_folders, _translate_path_str, _validate  # noqa: E402
 
@@ -40,7 +35,8 @@ def _seed_db(*, source: str, doc_type: str, body_file_path: str | None) -> None:
             cur.execute(
                 "INSERT INTO documents (dedup_key, cso_classification, title, "
                 "ordering_agency, source, doc_type, body_file_path, other_file_paths, "
-                "disclosure_status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "disclosure_status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     f"{source}::https://example.com/1",
                     "O",
@@ -51,6 +47,8 @@ def _seed_db(*, source: str, doc_type: str, body_file_path: str | None) -> None:
                     body_file_path,
                     "",
                     "공개",
+                    # generated_yn은 명시하지 않는다 — DEFAULT x'30'이 '0'
+                    # (수집분)을 채운다.
                 ),
             )
         store._conn.commit()

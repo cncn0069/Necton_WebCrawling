@@ -1,4 +1,4 @@
-from rd2.generators.agency_categories import (
+from rd2.disclosure.agency_categories import (
     CATEGORY_CENTRAL_MINISTRY,
     CATEGORY_EDUCATION_OFFICE,
     CATEGORY_METRO_LOCAL_GOVERNMENT,

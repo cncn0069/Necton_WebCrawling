@@ -7,7 +7,7 @@
 
 import pytest
 
-from rd2.generators.agency_categories import AGENCY_CATEGORIES
+from rd2.disclosure.agency_categories import AGENCY_CATEGORIES
 from rd2.generators.candidate_profile import ProfileRow
 from rd2.generators.coverage_plan import (
     CellRecord,

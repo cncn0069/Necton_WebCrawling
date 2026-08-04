@@ -5,10 +5,6 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = str(Path(__file__).parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
 import run_pipeline  # noqa: E402
 
 
@@ -24,9 +20,9 @@ def test_from_scratch_runs_unified_extractor_then_candidates(monkeypatch):
     run_pipeline.main()
 
     assert [command[1] for command in commands] == [
-        "scripts/extract_documents.py",
-        "scripts/find_candidates.py",
-        "scripts/run_llm_augment.py",
+        "scripts/extract/extract_documents.py",
+        "scripts/augment/find_candidates.py",
+        "scripts/augment/run_llm_augment.py",
     ]
     assert commands[0][2:] == ["--source", "all"]
     assert commands[1][2:] == ["--clause", "5"]
@@ -77,6 +73,6 @@ def test_partial_candidate_override_is_forwarded_to_candidate_and_llm_stages(mon
     run_pipeline.main()
 
     assert commands[0][1:] == [
-        "scripts/find_candidates.py", "--clause", "5", "--allow-partial",
+        "scripts/augment/find_candidates.py", "--clause", "5", "--allow-partial",
     ]
     assert "--allow-partial-candidates" in commands[1]

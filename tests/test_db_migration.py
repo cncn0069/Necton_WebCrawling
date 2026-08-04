@@ -5,6 +5,7 @@ import pymysql
 import pytest
 from dotenv import load_dotenv
 
+from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.storage.db import DocumentStore
 from rd2.storage.naming import DOC_TYPE_OFFICIAL_DOCUMENT, SOURCE_OPEN_GO_KR
 
@@ -230,6 +231,64 @@ def test_check_constraint_rejects_invalid_disclosure_status():
                 )
     finally:
         store._conn.rollback()
+        store.close()
+
+
+def test_generated_yn_defaults_existing_rows_to_collected():
+    """generated_yn 컬럼이 없던 DB를 열면 컬럼이 추가되고 기존 행은 전부 '0'
+    (수집분)이 된다 — DEFAULT x'30'이 ADD COLUMN 시점에 채운다. 별도 백필
+    UPDATE가 없는 것이 요점이다."""
+    conn = _raw_connection()
+    try:
+        _create_old_schema_db(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO documents (dedup_key, payload_json, cso_classification) "
+                "VALUES (%s, %s, %s)",
+                (f"{SOURCE_OPEN_GO_KR}::https://open.go.kr/5", "{}", "O"),
+            )
+    finally:
+        conn.close()
+
+    store = DocumentStore(database=_TEST_DATABASE)
+    try:
+        with store._conn.cursor() as cur:
+            cur.execute("SELECT generated_yn FROM documents")
+            assert cur.fetchone()[0] == b"0"
+        assert _is_nullable(store, "generated_yn") is False
+    finally:
+        store.close()
+
+
+def test_legacy_data_origin_column_is_relaxed_not_dropped():
+    """RDS에 없는 구 data_origin 컬럼은 지우지 않고 nullable로 푼다.
+
+    NOT NULL로 남겨두면 그 컬럼을 더 이상 채우지 않는 지금의 INSERT가 1364로
+    죽는다. 그렇다고 DROP하면 되돌릴 수 없으므로 값은 그대로 둔다.
+    """
+    conn = _raw_connection()
+    try:
+        _create_old_schema_db(conn, extra_columns=",\n data_origin VARCHAR(1) NOT NULL")
+    finally:
+        conn.close()
+
+    store = DocumentStore(database=_TEST_DATABASE)
+    try:
+        assert _is_nullable(store, "data_origin") is True
+        # 컬럼이 남아 있어도 새 INSERT가 통과해야 한다. 이 코드가 더는
+        # data_origin을 채우지 않으므로, 풀어주지 않았다면 여기서 1364로 죽는다.
+        assert store.upsert(
+            Document(
+                title="풀린 컬럼 확인",
+                ordering_agency="기관",
+                disclosure_status=DisclosureStatus.OPEN,
+                cso_classification=CsoClassification.O,
+                source=SOURCE_OPEN_GO_KR,
+                source_url="https://open.go.kr/relax",
+                is_synthetic=False,
+            )
+        )
+    finally:
         store.close()
 
 

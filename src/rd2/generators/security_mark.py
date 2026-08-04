@@ -42,7 +42,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from rd2.generators.agency_resolver import MILITARY_SECRET_MARK_FILENAMES
+from rd2.disclosure.military_secret import MILITARY_SECRET_MARK_FILENAMES
 
 _WATERMARK_CHARS = ("가", "나", "다", "라", "마", "바", "사")
 WATERMARK_VARIANT_COUNT = len(_WATERMARK_CHARS)
