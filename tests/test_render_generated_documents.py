@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import scripts.render_generated_documents as render_cli
+import scripts.report.render_generated_documents as render_cli
 from rd2.generators.output_naming import (
     generation_output_filename,
     rename_rendered_files,
     requested_output_filename,
 )
-from scripts.render_generated_documents import (
+from scripts.report.render_generated_documents import (
     _prepare_renderer_payload,
     _renderer_payload,
 )

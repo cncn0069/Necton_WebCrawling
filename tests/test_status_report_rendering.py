@@ -15,7 +15,7 @@ from rd2.generators.status_report_rendering import (
     build_status_report_variation_specs,
     render_status_report_variations,
 )
-from scripts.render_generated_documents import render_input_file
+from scripts.report.render_generated_documents import render_input_file
 
 
 def _payload() -> dict:

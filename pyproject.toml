@@ -1,3 +1,11 @@
+# 스크립트가 `import rd2`를 할 수 있는 근거는 이 설정 하나다. 예전에는
+# scripts/_common.py가 실행 시점에 sys.path를 고쳐 넣었는데, 그 방식은 스크립트가
+# scripts/ 바로 아래 있을 때만 동작해서 폴더를 나눌 수 없었다. 설치로 대신한다:
+#     pip install -e .        (deploy/README.md 2번과 같은 절차)
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "rd2-training-data"
 version = "0.1.0"

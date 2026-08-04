@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from rd2.generators.clause_data import CLAUSES, ClauseDefinition
 from rd2.generators.doc_templates import ApprovalState, DocTemplateSpec
@@ -94,7 +94,7 @@ def _strip_synthetic_label(title: str) -> str:
     return stripped
 
 
-def _default_client() -> OpenAI:
+def default_client() -> OpenAI:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -102,6 +102,22 @@ def _default_client() -> OpenAI:
             "환경변수로 OpenAI API 키를 설정하세요."
         )
     return OpenAI(api_key=api_key)
+
+
+#: 이전 이름. 스크립트가 밑줄 이름을 import해 쓰고 있었다 — 부르는 쪽이 있는
+#: 순간 그건 private이 아니다.
+_default_client = default_client
+
+
+def is_rate_limited(exc: BaseException) -> bool:
+    """재시도해도 되는 429인가.
+
+    이걸 여기 두는 이유는 호출하는 쪽이 ``openai``를 import하지 않게 하려는
+    것이다. 모델 공급자를 아는 파일은 이 모듈 하나로 족하고, 재시도 정책을
+    가진 쪽은 "재시도해도 되는가"만 물으면 된다.
+    """
+
+    return isinstance(exc, RateLimitError)
 
 
 # [별표 2](군사기밀 보호법 시행령 제5조제1항)의 등급 설명을 요약한 프롬프트용 라벨.

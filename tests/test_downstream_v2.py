@@ -9,10 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
 import run_llm_augment as run_llm  # noqa: E402
 import test_reconstruct_pdf as reconstruct  # noqa: E402
 

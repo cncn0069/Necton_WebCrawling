@@ -15,7 +15,7 @@ from rd2.generators.meeting_minutes_rendering import (
     build_meeting_minutes_variation_specs,
     render_meeting_minutes_variations,
 )
-from scripts.render_generated_documents import render_input_file
+from scripts.report.render_generated_documents import render_input_file
 
 
 def _payload() -> dict:

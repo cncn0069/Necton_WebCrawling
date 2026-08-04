@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import sys
 from pathlib import Path
 
 import pymupdf
@@ -31,10 +30,6 @@ from rd2.extraction.storage import (
 )
 from rd2.extractors.excel import ExtractedExcelDocument
 from rd2.extractors.hwp import ExtractedHwpDocument
-
-_SCRIPTS_DIR = str(Path(__file__).parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
 
 import extract_documents as extraction_cli  # noqa: E402
 

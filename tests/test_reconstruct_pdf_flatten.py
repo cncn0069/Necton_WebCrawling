@@ -5,7 +5,7 @@ import fitz
 
 
 def _load_reconstructor():
-    script = Path(__file__).parents[1] / "scripts" / "test_reconstruct_pdf.py"
+    script = Path(__file__).parents[1] / "scripts" / "legacy" / "test_reconstruct_pdf.py"
     spec = importlib.util.spec_from_file_location("reconstruct_pdf", script)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

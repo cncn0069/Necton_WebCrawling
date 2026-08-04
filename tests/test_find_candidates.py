@@ -5,10 +5,6 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
 import find_candidates as fc  # noqa: E402
 
 

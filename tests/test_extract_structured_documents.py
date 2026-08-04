@@ -1,12 +1,7 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-
-_SCRIPTS_DIR = str(Path(__file__).parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
 
 import extract_structured_documents as script  # noqa: E402
 from rd2.extractors.hwp import ExtractedHwpDocument  # noqa: E402

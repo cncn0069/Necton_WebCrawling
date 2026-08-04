@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.explain_cs_provenance import explain_row
+from scripts.evaluate.explain_cs_provenance import explain_row
 
 
 def test_span_seeded_report_explains_original_and_span():
