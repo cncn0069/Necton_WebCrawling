@@ -58,8 +58,10 @@ from rd2.source_generation.classification_taxonomy import (  # noqa: E402
     expected_classification,
 )
 from rd2.source_generation.contracts import (  # noqa: E402
+    DocumentSelection,
     GenerationMode,
     GenerationTarget,
+    RelevanceSelectionResponse,
     SensitiveConsistencyAssessment,
     SensitivePipelineStatus,
     SourceDocumentSnapshot,
@@ -70,8 +72,11 @@ from rd2.source_generation.evidence import (  # noqa: E402
     evidence_from_inserted_text,
 )
 from rd2.source_generation.document_select import (  # noqa: E402
+    DocumentSelectionError,
     SelectionConfig,
+    finalize_relevance_selection,
     prepare_document_selection,
+    render_source_blocks,
 )
 from rd2.source_generation.pipeline import (  # noqa: E402
     OpenAIResponsesGateway,
@@ -82,7 +87,10 @@ from rd2.source_generation.pipeline import (  # noqa: E402
 from rd2.source_generation.minimal_prompt import (  # noqa: E402
     MINIMAL_PROMPT_VERSION,
 )
-from rd2.source_generation.prompts import build_prompt_bundle  # noqa: E402
+from rd2.source_generation.prompts import (  # noqa: E402
+    build_prompt_bundle,
+    render_relevance_user_prompt,
+)
 from rd2.source_generation.rds_writeback import (  # noqa: E402
     SourceRow,
     build_generated_document,
@@ -387,6 +395,64 @@ def _iter_file_items(
         )
 
 
+def _resolve_selection(
+    snapshot: SourceDocumentSnapshot,
+    *,
+    gateway,
+    model: str,
+    max_output_tokens: int,
+    selection_config: SelectionConfig,
+    prompt_bundle,
+) -> tuple[DocumentSelection | None, str]:
+    """긴 원문이면 앞부분에서 관련 block만 고르게 하고, 아니면 전문을 쓴다.
+
+    ``prepare_document_selection``은 ``page_threshold``(85쪽)를 넘는 문서에
+    selection 대신 relevance 요청을 낸다. 그 요청을 처리하지 않고 건너뛰면
+    긴 문서가 통째로 빠진다 — 감사보고서가 주로 여기 걸렸다. 여기서 요청을
+    한 번의 LLM 호출로 selection으로 바꾼다.
+
+    반환값은 (selection, 사유)다. selection이 None이면 사유가 왜 못 골랐는지
+    말한다 — 호출부가 그대로 세어 배치 끝에 보고한다.
+    """
+
+    try:
+        prepared = prepare_document_selection(snapshot, selection_config)
+    except DocumentSelectionError as exc:
+        return None, f"selection_error:{exc.code.value}"
+    if prepared.selection is not None:
+        return prepared.selection, "full_document"
+
+    request = prepared.relevance_request
+    assert request is not None  # PreparedSelection이 둘 중 하나를 보장한다
+    definition = prompt_bundle.definition("relevance")
+    try:
+        call = gateway.parse(
+            model=model,
+            system_prompt=definition.system_prompt,
+            user_prompt=render_relevance_user_prompt(
+                render_source_blocks(request.candidate_blocks),
+                max_selected_blocks=selection_config.max_selected_blocks,
+            ),
+            response_model=RelevanceSelectionResponse,
+            max_output_tokens=max_output_tokens,
+        )
+    except Exception as exc:  # noqa: BLE001 - 한 문서 실패가 배치를 끊지 않는다
+        return None, f"relevance_call_failed:{type(exc).__name__}"
+
+    if not isinstance(call.parsed, RelevanceSelectionResponse):
+        return None, "relevance_wrong_contract"
+    try:
+        selection = finalize_relevance_selection(
+            snapshot,
+            request,
+            call.parsed,
+            selection_config,
+        )
+    except DocumentSelectionError as exc:
+        return None, f"relevance_invalid:{exc.code.value}"
+    return selection, "front_relevance"
+
+
 def _targets() -> list[GenerationTarget]:
     """이번 batch는 원문 참고 제6호 S 생성만 순환한다."""
 
@@ -689,6 +755,12 @@ def main() -> int:
     parser.add_argument("--generator-model", default="gpt-4o")
     parser.add_argument("--validator-model", default="gpt-4o-mini")
     parser.add_argument("--max-attempts", type=int, default=2)
+    parser.add_argument(
+        "--resume-from-index",
+        type=int,
+        default=0,
+        help="이 인덱스(1-based)부터 이어서 처리한다. 로그의 [N/총건] 기준으로 지정한다",
+    )
     args = parser.parse_args()
 
     if args.from_rds:
@@ -764,6 +836,11 @@ def main() -> int:
     payload_path = args.out_dir / "render_payloads.jsonl"
 
     done = 0
+    skipped = 0
+    #: selection 단계에서 빠진 원문의 사유별 집계. 조용히 건너뛰면 배치가
+    #: 왜 목표 건수를 못 채웠는지 사후에 알 수 없다.
+    selection_drops: dict[str, int] = {}
+    selection_methods: dict[str, int] = {}
     report_records: list[dict] = []
     with records_path.open("w", encoding="utf-8") as records, payload_path.open(
         "w", encoding="utf-8"
@@ -771,10 +848,31 @@ def main() -> int:
         for item in items:
             if done >= args.count:
                 break
-            snapshot, title = item.snapshot, item.title
-            prepared = prepare_document_selection(snapshot, selection_config)
-            if prepared.selection is None:
+            if done + 1 < args.resume_from_index:
+                done += 1
+                skipped += 1
                 continue
+            snapshot, title = item.snapshot, item.title
+            selection, selection_reason = _resolve_selection(
+                snapshot,
+                gateway=gateway,
+                model=args.classifier_model,
+                max_output_tokens=config.max_classifier_output_tokens,
+                selection_config=selection_config,
+                prompt_bundle=prompt_bundle,
+            )
+            if selection is None:
+                selection_drops[selection_reason] = (
+                    selection_drops.get(selection_reason, 0) + 1
+                )
+                print(
+                    f"[skip] {snapshot.source_document_id} "
+                    f"({snapshot.page_count}쪽) {selection_reason}"
+                )
+                continue
+            selection_methods[selection_reason] = (
+                selection_methods.get(selection_reason, 0) + 1
+            )
 
             done += 1
             source_text = "\n\n".join(
@@ -798,7 +896,7 @@ def main() -> int:
 
             sensitive_run = run_source_sensitive_pipeline(
                 snapshot=snapshot,
-                selection=prepared.selection,
+                selection=selection,
                 counterfactual_target=target,
                 gateway=gateway,
                 config=config,
@@ -813,6 +911,12 @@ def main() -> int:
                 "source_row_id": item.row.id if item.row is not None else None,
                 "source_title": title,
                 "source_block_count": sum(len(p.blocks) for p in snapshot.pages),
+                "source_page_count": snapshot.page_count,
+                # 전문을 봤는지 앞부분에서 골라 봤는지. 긴 원문의 결과를
+                # 따로 집계하려면 이 값이 있어야 한다.
+                "selection_method": selection.method.value,
+                "selection_truncated": selection.truncated,
+                "selected_block_count": len(selection.selected_block_ids),
                 "source_text": source_text,
                 "target_source": target_source,
                 "requested_target": (
@@ -1184,6 +1288,16 @@ def main() -> int:
         print(
             f"RDS 기록: 신규 {rds_inserted} / 중복스킵 {rds_skipped} / 실패 {rds_failed}"
         )
+    if selection_methods:
+        detail = " / ".join(
+            f"{name} {count}" for name, count in sorted(selection_methods.items())
+        )
+        print(f"selection 경로: {detail}")
+    if selection_drops:
+        detail = " / ".join(
+            f"{reason} {count}" for reason, count in sorted(selection_drops.items())
+        )
+        print(f"selection 탈락 {sum(selection_drops.values())}건: {detail}")
     print(f"\n{done}건 -> {records_path}")
     return 0
 
