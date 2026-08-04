@@ -199,6 +199,18 @@ def generated_document_json(
     return json.dumps(dumped, ensure_ascii=False)
 
 
+# C트랙(3단계 경로)에는 아직 이 자리에 해당하는 게이트가 없다.
+#
+# ``should_commit_c_track``을 두었다가 뺐다(2026-08-05). 거르는 근거가
+# ``CTrackCoTResponse.drift_markers``(낱말 목록)였는데 A/B/C 대조 15회에서
+# 정밀도 18%였고, 잘 쓴 문장에 더 잘 붙어 켜두면 좋은 문서를 더 많이 버렸다 —
+# 근거는 ``contracts.py``의 그 자리에 남겼다.
+#
+# 대신 세울 지표 후보는 (1) 한 줄에 붙은 빈 곳의 목록, (2) 상대를 주어로 끝나는
+# 문형이다. 둘 다 15건에 아직 안 돌려봤다. 그때까지 C트랙은 전량이 코퍼스
+# 후보이고, 거르는 판단은 사람이 한다.
+
+
 def should_commit(
     *,
     status: SensitivePipelineStatus,

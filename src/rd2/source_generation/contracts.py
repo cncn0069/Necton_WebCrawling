@@ -517,6 +517,130 @@ class GeneratorResponse(ContractModel):
         return self
 
 
+# 낱말 목록으로 분석의 드리프트를 재려고 했다가 **철회했다**(2026-08-05).
+# 다시 만들지 않도록 근거를 남긴다.
+#
+# ``OPERATIONAL_DRIFT_MARKERS = ("느슨해지","느슨한","악용","은폐","걸리지 않는",
+# "우회")``를 ``security_analysis``에 걸고 걸린 건을 코퍼스에서 뺐다. A/B/C 대조
+# 15회(3 프롬프트 판본 × 5 사건)로 재보니 쓸 수 없었다.
+#
+# - **정밀도 18%.** 잡은 11문장 중 진짜 문제는 2개였다. ``은폐``·``우회``가 걸린
+#   문장은 대부분 "…가 무력화됨"으로 끝나는, 우리가 쓰라고 지정한 바로 그
+#   형태였다("사전 대비·은폐·교란 대응이 가능해져 단계별 통제 효과가 무력화됨").
+# - **낱말 둘만 바꾸면 통과한다.** 진짜 문제였던 문장에서 ``교대 공백``→``교대
+#   미배치 구간``, ``느슨해지는``→``감시 밀도가 낮은``으로 바꾸면 내용이 그대로인
+#   채 검사만 못 본다.
+# - **방향이 거꾸로다.** 잘 쓴 결과 프레임 문장에 더 잘 붙어서, 게이트로 켜두면
+#   좋은 문서를 더 많이 버린다. 15회에서 마커가 가장 많은 arm이 프롬프트가 가장
+#   나은 arm이었다.
+# - **arm과 무관하게 뜬다.** A 0.6 / B 0.4 / C 1.0 — 프롬프트를 바꿔도 안 움직이고
+#   목록의 6개 중 3개는 15회 동안 한 번도 안 나왔다.
+#
+# 진짜 신호는 낱말이 아니라 둘이었다. (1) 한 줄에 붙은 **빈 곳의 목록**(결원 시각
+# + 순찰 주기 + 교대 공백), (2) 상대를 주어로 끝나는 **문형**("…선택할 수 있음"
+# 대 "…무력화됨"). 둘 다 바꿔 쓰기로 못 빠져나간다. 지표로 세우려면 그쪽이다 —
+# 아직 세우지 않았다.
+
+
+#: **클래스 docstring은 모델이 읽는다.** pydantic v2가 docstring을 JSON Schema의
+#: ``description``으로 싣고 ``gateway.parse``가 그 스키마를 그대로 요청에 넣는다.
+#: 감사 실측(2026-08-05): 여기 있던 설계 근거 docstring 때문에 스키마에
+#: ``[비공개 근거]``·``[출력 순서]``·``minimal_prompt``·``GeneratorResponse``가
+#: 실려 나갔다 — 앞 둘은 v2 프롬프트가 **의도적으로 지운 절 이름**이라, 모델은
+#: 프롬프트에 없는 절을 가리키는 설명을 함께 읽고 있었다.
+#:
+#: 그래서 아래 세 계약의 설계 근거는 전부 이 ``#:`` 주석으로 내린다. 필드 위
+#: ``#:`` 주석과 모듈 주석은 스키마에 실리지 않는다. docstring 자리에는 모델이
+#: 읽어도 되는 한 줄만 남긴다.
+#:
+#: ``SecurityAnalysis``는 ``GeneratorResponse.ground_plan``과 같은 자리다 — 계획을
+#: 문서보다 앞 필드에 두면 문서가 그 계획을 따르고, 뒤로 돌리면 이미 쓴 문서를
+#: 사후에 합리화한다. ``c_track_templates``의 ``[비공개 근거]`` 절이 하던 말을 이
+#: 두 필드가 받는다.
+class SecurityAnalysis(ContractModel):
+    """문서를 쓰기 전에 적는 유출 경로 분석."""
+
+    #: 유출되면 이 세부조항이 막는 것을 노리는 사람이 무엇을 할 수 있는지.
+    vulnerability: NonEmptyText
+    #: 그래서 어느 직무가 무력화되는지.
+    impact: NonEmptyText
+
+
+#: ``block_id``를 함께 받는 것이 요점이다. 문구만 받으면 모델이 본문에 없는 말을
+#: 지어낸다 — ``EvidenceQuote``가 인용문을 원문과 대조하는 것과 같은 처방이고,
+#: 여기서는 대조 대상이 자기가 방금 쓴 문서다.
+class ConfidentialSnippet(ContractModel):
+    """본문에서 그대로 옮긴 민감 문구 하나와 그 문구가 있는 block."""
+
+    block_id: NonEmptyText
+    quote: NonEmptyText
+
+
+#: **왜 IR 밖인가.** ``GeneratorResponse``와 같다 — 검증기에는
+#: ``GeneratedDocumentIR``만 떼어 넘긴다. 분석과 발췌가 문서 안에 있으면 검증기가
+#: "어디가 왜 민감한지"를 읽고 채점하게 되어 일치율이 무의미해진다.
+#:
+#: **필드 순서가 곧 사고 순서다.** 분석 → 문서 → 발췌·사유. 발췌는 이미 쓴 본문을
+#: 가리켜야 하므로 문서 뒤여야 하고, 분석은 본문을 이끌어야 하므로 앞이어야 한다.
+#: ``document`` 안에서 ``blocks``가 ``title`` 앞에 오는 것도 같은 장치의 한 겹
+#: 안쪽이다.
+#:
+#: ``legal_basis``를 두지 않는다. 조항은 ``CTrackTemplate.clause_no``가 이미 잠근
+#: 값이라 모델이 항상 맞힌다 — 검증력 없이 토큰만 쓰는 필드다. DB에 적을 값은
+#: 호출부가 템플릿에서 가져온다.
+class CTrackCoTResponse(ContractModel):
+    """3단계(분석-작성-기록) 생성 결과."""
+
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
+    security_analysis: SecurityAnalysis
+    document: GeneratedDocumentIR
+    #: 하한이 3인 것은 실호출(2026-08-05)에서 정했다. 1이었을 때 모델이 정확히
+    #: 하나만 냈고, 하필 그 하나가 본문의 다른 절과 수치가 어긋나는 block이었다.
+    #: 로그가 문서의 한 자리만 가리키면 "가장 민감한 문구"를 고른 것이 아니라
+    #: 처음 눈에 띈 것을 집은 것이 된다.
+    confidential_snippets: tuple[ConfidentialSnippet, ...] = Field(min_length=3)
+    #: 이 문서가 왜 해당 호 비공개로 저장되는지. 분석과 발췌를 가리켜 적는다.
+    reasoning_for_storage: NonEmptyText
+
+    # 메서드 docstring은 스키마에 실리지 않는다(클래스 docstring만 실린다).
+    #
+    # 발췌를 block 단위로 좁히는 것은 ``EvidenceQuote.locate_in`` 쪽 판단을
+    # 따른다. 저쪽이 문서 전체로 넓힌 것은 PDF 추출기가 block 경계를 사람 눈과
+    # 다르게 자르기 때문인데, 여기서는 block을 만든 것이 추출기가 아니라 생성기
+    # 자신이라 경계가 어긋날 자리가 없다.
+    #
+    # 공백만 무시한다. 개조식 항목은 들여쓰기가 곧 깊이라(``BULLET_MARKERS``)
+    # 모델이 발췌하면서 앞뒤 공백을 흘리기 쉽다.
+    @model_validator(mode="after")
+    def _snippets_must_be_in_the_document(self) -> "CTrackCoTResponse":
+        """발췌가 그 block에 글자 그대로 있는지 대조한다."""
+
+        quotes = {
+            (snippet.block_id, condense_whitespace(snippet.quote))
+            for snippet in self.confidential_snippets
+        }
+        if len(quotes) != len(self.confidential_snippets):
+            raise ValueError("duplicate confidential snippet")
+        # 세 발췌가 한 block에서 나오면 로그가 문서의 한 자리만 가리킨다.
+        if len({snippet.block_id for snippet in self.confidential_snippets}) < 2:
+            raise ValueError("confidential snippets must come from at least two blocks")
+
+        for snippet in self.confidential_snippets:
+            needle = condense_whitespace(snippet.quote)
+            if not needle:
+                raise ValueError(
+                    f"confidential snippet for block {snippet.block_id!r} "
+                    "has no visible characters"
+                )
+            haystack = condense_whitespace(self.document.block_text(snippet.block_id))
+            if needle not in haystack:
+                raise ValueError(
+                    "confidential snippet not found in block "
+                    f"{snippet.block_id!r}: {_truncate(snippet.quote)!r}"
+                )
+        return self
+
+
 class SourceTextBlock(ContractModel):
     block_id: NonEmptyText
     text: NonEmptyText
