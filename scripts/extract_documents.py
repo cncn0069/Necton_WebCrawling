@@ -1,4 +1,4 @@
-"""Extract PDF/HWP/HWPX sources into canonical v2 ``.json.gz`` artifacts."""
+"""Extract PDF/HWP/HWPX/XLSX sources into canonical v2 ``.json.gz`` artifacts."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--format",
         dest="source_format",
-        choices=("all", "pdf", "hwp", "hwpx"),
+        choices=("all", "pdf", "hwp", "hwpx", "xlsx", "xlsm"),
         default="all",
         help="source format to extract",
     )
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.document is not None:
         document = args.document.resolve()
         if document.suffix.lower() not in SUPPORTED_SUFFIXES:
-            parser.error("--document must be a PDF, HWP, or HWPX file")
+            parser.error("--document must be a PDF, HWP, HWPX, XLSX, or XLSM file")
         requested_suffix = None if args.source_format == "all" else f".{args.source_format}"
         if requested_suffix and document.suffix.lower() != requested_suffix:
             parser.error("--document extension does not match --format")

@@ -6,12 +6,15 @@ from pathlib import Path
 
 import pymupdf
 import pytest
+from openpyxl import Workbook
 
-from rd2.extraction import hwp_text, storage
+from rd2.extraction import excel_text, hwp_text, storage
+from rd2.extraction.excel_text import extract_excel_document
 from rd2.extraction.hwp_text import extract_hwp_document
 from rd2.extraction.pdf_text import _physical_line_payload, extract_pdf_document
 from rd2.extraction.pipeline import (
     RUN_MANIFEST_NAME,
+    extraction_metadata_for,
     iter_source_documents,
     process_document,
     run_extraction,
@@ -25,6 +28,7 @@ from rd2.extraction.storage import (
     read_json_gz,
     write_json_gz_atomic,
 )
+from rd2.extractors.excel import ExtractedExcelDocument
 from rd2.extractors.hwp import ExtractedHwpDocument
 
 _SCRIPTS_DIR = str(Path(__file__).parent.parent / "scripts")
@@ -317,6 +321,134 @@ def test_encrypted_hwp_is_quarantined_without_fake_page(tmp_path: Path, monkeypa
     assert payload["error"] == "encrypted"
     assert payload["quality"]["needs_quarantine"] is True
     assert payload["pages"] == []
+
+
+def _make_workbook(path: Path, sheets: list[tuple[str, list[list]]]) -> None:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for name, rows in sheets:
+        worksheet = workbook.create_sheet(title=name)
+        for row in rows:
+            worksheet.append(row)
+    workbook.save(path)
+    workbook.close()
+
+
+def test_excel_v2_maps_each_worksheet_to_a_page_of_markdown_rows(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "31_활동내역.xlsx")
+    _make_workbook(
+        source_path,
+        [
+            ("2024년 1차", [["이사", "회차"], ["홍길동", 3]]),
+            ("2024년 2차", [["이사"], ["김철수"]]),
+        ],
+    )
+
+    payload = extract_excel_document(source_path, data_root=data_root)
+
+    assert payload["schema_version"] == 2
+    assert payload["source_format"] == "xlsx"
+    assert payload["doc_id"] == "31"
+    assert payload["status"] == "ok"
+    assert payload["error"] is None
+    assert payload["extraction"]["extractor"] == "openpyxl"
+    assert [page["page"] for page in payload["pages"]] == [1, 2]
+
+    first_page = payload["pages"][0]
+    assert set(first_page) == {"page", "width_pt", "height_pt", "rotation", "lines"}
+    assert (first_page["width_pt"], first_page["height_pt"], first_page["rotation"]) == (
+        None,
+        None,
+        None,
+    )
+    assert [line["text"] for line in first_page["lines"]] == [
+        "2024년 1차",
+        "| 이사 | 회차 |",
+        "| 홍길동 | 3 |",
+    ]
+    # 시트 이름 줄은 어느 행에도 속하지 않고, 행에서 나온 줄만 행 번호로 묶인다.
+    assert [line["block_id"] for line in first_page["lines"]] == [None, 0, 1]
+    assert all(line["bbox_pt"] is None for line in first_page["lines"])
+    assert all(line["style_runs"] == [] for line in first_page["lines"])
+    # line_id는 워크북 전체에서 이어지고, order는 페이지 안에서 다시 0부터 센다.
+    assert [line["line_id"] for line in payload["pages"][1]["lines"]] == [3, 4, 5]
+    assert [line["order"] for line in payload["pages"][1]["lines"]] == [0, 1, 2]
+
+
+def test_excel_v2_wraps_an_oversized_cell_without_losing_text(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "memo.xlsx")
+    long_text = "가" * (excel_text._MAX_CELL_CHARS + 5)
+    _make_workbook(source_path, [("Sheet1", [[long_text]])])
+
+    payload = extract_excel_document(source_path, data_root=data_root)
+    lines = payload["pages"][0]["lines"][1:]  # 시트 이름 줄 제외
+
+    assert payload["status"] == "ok"
+    assert payload["quality"]["warnings"] == ["oversized_cell_split"]
+    assert all(len(line["text"]) <= excel_text._MAX_LOGICAL_LINE_CHARS for line in lines)
+    assert "".join(line["text"].strip("| ") for line in lines) == long_text
+    assert all(line["block_id"] == 0 for line in lines)
+
+
+def test_empty_workbook_is_a_successful_needs_ocr_snapshot(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "empty.xlsx")
+    _make_workbook(source_path, [("Sheet1", [])])
+
+    payload = extract_excel_document(source_path, data_root=data_root)
+
+    # 시트 이름 줄만 남은 워크북은 "내용 있음"이 아니다 — 시트는 비어 있어도
+    # 항상 이름을 갖기 때문이다.
+    assert payload["status"] == "needs_ocr"
+    assert payload["error"] is None
+    assert payload["quality"]["has_text_layer"] is False
+    assert payload["quality"]["needs_quarantine"] is False
+    assert payload["quality"]["pages_needing_ocr"] == [1]
+    assert payload["quality"]["warnings"] == ["little_or_no_text"]
+    assert [line["text"] for line in payload["pages"][0]["lines"]] == ["Sheet1"]
+
+
+def test_encrypted_workbook_is_quarantined_without_fake_page(tmp_path: Path, monkeypatch):
+    data_root, source_path = _source_path(tmp_path, "locked.xlsx")
+    source_path.write_bytes(b"placeholder")
+    monkeypatch.setattr(
+        excel_text,
+        "extract_excel",
+        lambda path: ExtractedExcelDocument(
+            source_path=path,
+            is_encrypted=True,
+            error="encrypted_document",
+        ),
+    )
+
+    payload = extract_excel_document(source_path, data_root=data_root)
+
+    assert payload["status"] == "quarantine"
+    assert payload["error"] == "encrypted_document"
+    assert payload["quality"]["needs_quarantine"] is True
+    assert payload["quality"]["warnings"] == ["encrypted"]
+    assert payload["pages"] == []
+
+
+def test_pipeline_routes_workbooks_to_the_openpyxl_extractor(tmp_path: Path):
+    data_root, source_path = _source_path(tmp_path, "42_현황.xlsx")
+    extracted_root = data_root / "extracted"
+    _make_workbook(source_path, [("Sheet1", [["항목", "값"]])])
+
+    assert extraction_metadata_for(source_path)["extractor"] == "openpyxl"
+    assert [path.name for path in iter_source_documents(data_root, source_format="xlsx")] == [
+        "42_현황.xlsx"
+    ]
+
+    action, output_path, payload = process_document(
+        source_path,
+        data_root=data_root,
+        extracted_root=extracted_root,
+    )
+
+    assert action == "processed"
+    assert output_path.name == "42_현황.xlsx.json.gz"
+    assert payload["status"] == "ok"
+    assert read_json_gz(output_path)["pages"][0]["lines"][-1]["text"] == "| 항목 | 값 |"
 
 
 def test_output_path_preserves_source_extension_for_same_stem(tmp_path: Path):
