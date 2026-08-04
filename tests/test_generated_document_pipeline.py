@@ -289,8 +289,104 @@ def _block_kinds(block_union: object) -> set[str]:
     }
 
 
+def _insert_key_value_block(
+    payload: dict,
+    *,
+    index: int,
+    block_id: str,
+    key: str,
+    value: str,
+) -> dict:
+    document = payload["result"]["generated_document"]
+    document["blocks"].insert(
+        index,
+        {
+            "kind": "key_value",
+            "block_id": block_id,
+            "entries": [{"key": key, "value": value}],
+        },
+    )
+    return document
+
+
 def test_renderer_block_kinds_match_generated_document_ir() -> None:
     assert _block_kinds(GeneratedBlock) == _block_kinds(DocumentBlock)
+
+
+@pytest.mark.parametrize("key", ("문서번호", "시행일자"))
+@pytest.mark.parametrize("value", ("", "   "))
+def test_renderer_accepts_missing_header_fields_without_draft_status(
+    key: str,
+    value: str,
+) -> None:
+    payload = _payload()
+    assert "administrative_statuses" not in payload["result"]["generation_target"]
+    document = _insert_key_value_block(
+        payload,
+        index=0,
+        block_id="header",
+        key=key,
+        value=value,
+    )
+    document["body_text"] = f"{key}: {value}\n\n{document['body_text']}"
+
+    parsed = parse_generation_payload(payload).result.generated_document
+
+    assert parsed.blocks[0].entries[0].key == key
+    assert parsed.blocks[0].entries[0].value == value
+
+
+@pytest.mark.parametrize("key", ("수신", "담당자"))
+@pytest.mark.parametrize("value", ("", "   "))
+def test_renderer_rejects_other_blank_key_value_fields(
+    key: str,
+    value: str,
+) -> None:
+    payload = _payload()
+    _insert_key_value_block(
+        payload,
+        index=0,
+        block_id="header",
+        key=key,
+        value=value,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="blank key-value is only allowed for draft document number/date",
+    ):
+        parse_generation_payload(payload)
+
+
+def test_renderer_rejects_blank_key_after_key_validator_refactor() -> None:
+    payload = _payload()
+    _insert_key_value_block(
+        payload,
+        index=0,
+        block_id="header",
+        key="   ",
+        value="기획과-17",
+    )
+
+    with pytest.raises(ValidationError, match="key must not be blank"):
+        parse_generation_payload(payload)
+
+
+def test_renderer_rejects_blank_draft_header_field_outside_first_block() -> None:
+    payload = _payload()
+    _insert_key_value_block(
+        payload,
+        index=1,
+        block_id="late-header",
+        key="시행일자",
+        value="",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="blank draft header values are only allowed in the first block",
+    ):
+        parse_generation_payload(payload)
 
 
 def test_structured_blocks_are_the_source_of_truth_for_template_context() -> None:
