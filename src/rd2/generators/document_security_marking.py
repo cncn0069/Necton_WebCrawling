@@ -40,7 +40,7 @@ from rd2.source_generation.contracts import GenerationTarget, TargetClassificati
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _LOGO_DIR = _REPO_ROOT / "logo"
 
-_MILITARY_MARK_HEIGHT_PT = 20.0
+_MILITARY_MARK_HEIGHT_PT = 25.0
 _MILITARY_MARK_EDGE_OFFSET_PT = 2.0
 
 _POINTS_PER_CM = 72.0 / 2.54

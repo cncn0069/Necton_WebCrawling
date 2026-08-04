@@ -14,6 +14,7 @@ from rd2.generators.document_security_marking import (
 )
 from rd2.generators.confidential_security_templates import (
     CONFIDENTIAL_SECURITY_TEMPLATE_SLUGS,
+    SECURITY_MARK_HEIGHT_PT,
 )
 from rd2.source_generation.classification_taxonomy import ClauseNumber, SubclauseKey
 from rd2.source_generation.contracts import (
@@ -138,6 +139,12 @@ def test_military_secret_adds_unlimited_front_cover_and_body_marks(
                 for xref in {image[0] for image in page.get_images(full=True)}
             )
             assert image_rect_count == 2
+            image_rects = [
+                rect
+                for image in page.get_images(full=True)
+                for rect in page.get_image_rects(image[0])
+            ]
+            assert all(rect.height == pytest.approx(25.0) for rect in image_rects)
 
 
 def test_grade_without_agency_name_still_gets_cover(tmp_path: Path) -> None:
@@ -185,6 +192,8 @@ def test_c_document_without_grade_gets_monochrome_confidential_skin(
     }
     assert marking["content_page_count"] == 1
     assert marking["final_pdf_page_count"] == 1
+    mark_rect = marking["placement"]["body"]["page_placements"][0]["mark_rect"]
+    assert mark_rect[3] - mark_rect[1] == pytest.approx(SECURITY_MARK_HEIGHT_PT)
     assert "agency_marking" not in manifest[0]
     with fitz.open(pdf_path) as document:
         assert document.page_count == 1

@@ -21,6 +21,8 @@ _WHITE = (1.0, 1.0, 1.0)
 
 BODY_SAFE_TOP_BOTTOM_PT = 30.0
 BODY_SAFE_LEFT_RIGHT_PT = 12.0
+SECURITY_LABEL_SCALE = 1.25
+SECURITY_MARK_HEIGHT_PT = 17.0 * SECURITY_LABEL_SCALE
 
 ConfidentialLayout = Literal[
     "classic_register",
@@ -171,7 +173,7 @@ def _text(
     page.insert_text(
         fitz.Point(x, y),
         value,
-        fontsize=size,
+        fontsize=size * SECURITY_LABEL_SCALE,
         fontname="helv",
         color=color,
         rotate=rotate,
@@ -184,7 +186,7 @@ def _mark_rect(
     *,
     image_ratio: float,
     anchor: str,
-    height: float = 17.0,
+    height: float = SECURITY_MARK_HEIGHT_PT,
 ) -> fitz.Rect:
     width = height * image_ratio
     margin = 5.0
