@@ -24,6 +24,11 @@ from rd2.generators.output_naming import (
     rename_rendered_files,
     requested_output_filename,
 )
+from rd2.generators.payload_document_type import (
+    PayloadDocumentTypeResolution,
+    apply_payload_document_type,
+    resolve_payload_document_type,
+)
 from rd2.generators.paged_output import RenderedSourceTextError
 from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
@@ -183,6 +188,14 @@ def _renderer_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "receipt": payload.get("generation_receipt"),
         "provenance": artifact.get("provenance"),
     }
+
+
+def _prepare_renderer_payload(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], PayloadDocumentTypeResolution]:
+    projected = _renderer_payload(payload)
+    resolution = resolve_payload_document_type(projected)
+    return apply_payload_document_type(projected, resolution), resolution
 
 
 def _uses_verbatim_renderer(payload: dict[str, Any]) -> bool:
@@ -357,7 +370,7 @@ def render_input_file(
     used_document_ids: set[str] = set()
 
     for index, payload in enumerate(payloads, start=1):
-        payload = _renderer_payload(payload)
+        payload, document_type_resolution = _prepare_renderer_payload(payload)
         requested_filename = requested_output_filename(payload, index)
         document_id = _output_id(payload, index)
         if document_id in used_document_ids:
@@ -392,6 +405,10 @@ def render_input_file(
             batch_manifest.append(
                 {
                     "document_id": document_id,
+                    "document_type": _document_type(payload),
+                    "document_type_resolution": (
+                        document_type_resolution.to_dict()
+                    ),
                     "status": "rejected",
                     "error": str(exc),
                 }
@@ -401,6 +418,8 @@ def render_input_file(
         batch_manifest.append(
             {
                 "document_id": document_id,
+                "document_type": _document_type(payload),
+                "document_type_resolution": document_type_resolution.to_dict(),
                 "status": _combined_render_status(rendered),
                 "output_filename": requested_filename,
                 "render_count": len(rendered),
@@ -465,7 +484,7 @@ def render_input_directory(
 
         for payload_index, payload in enumerate(payloads, start=1):
             document_index += 1
-            payload = _renderer_payload(payload)
+            payload, document_type_resolution = _prepare_renderer_payload(payload)
             requested_filename = requested_output_filename(
                 payload,
                 document_index,
@@ -519,6 +538,9 @@ def render_input_directory(
                         "source_file": source_file,
                         "payload_index": payload_index,
                         "document_type": document_type,
+                        "document_type_resolution": (
+                            document_type_resolution.to_dict()
+                        ),
                         "status": "rejected",
                         "stage": "render",
                         "selection": selection,
@@ -535,6 +557,9 @@ def render_input_directory(
                     "source_file": source_file,
                     "payload_index": payload_index,
                     "document_type": document_type,
+                    "document_type_resolution": (
+                        document_type_resolution.to_dict()
+                    ),
                     "status": render_status,
                     "output_filename": requested_filename,
                     "render_count": 1,

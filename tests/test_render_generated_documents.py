@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import scripts.render_generated_documents as render_cli
 from rd2.generators.output_naming import (
     generation_output_filename,
     rename_rendered_files,
     requested_output_filename,
 )
-from scripts.render_generated_documents import _renderer_payload
+from scripts.render_generated_documents import (
+    _prepare_renderer_payload,
+    _renderer_payload,
+)
 
 
 def test_renderer_projection_preserves_military_secret_grade():
@@ -100,6 +105,241 @@ def test_renderer_carries_agency_into_existing_result_without_overwriting_input(
         "행정안전부"
     )
     assert missing["result"]["generated_document"] == {}
+
+
+def test_renderer_preparation_infers_missing_document_type_from_provenance():
+    payload = {
+        "provenance": {"document_form": "meeting_minutes"},
+        "result": {
+            "generated_document": {
+                "title": "정기 운영위원회 회의록",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "block_id": "p1",
+                        "text": "회의 결과를 기록한다.",
+                    }
+                ],
+            }
+        },
+    }
+
+    prepared, resolution = _prepare_renderer_payload(payload)
+
+    assert resolution.source == "inferred"
+    assert resolution.document_type == "meeting_minutes"
+    assert prepared["result"]["source_classification"] == {
+        "document_type": "meeting_minutes"
+    }
+    assert "source_classification" not in payload["result"]
+
+
+def test_renderer_projection_infers_form_from_pipeline_source_classification():
+    payload = {
+        "source_assessment": {
+            "source_classification": {
+                "document_form": "meeting_minutes",
+                "classification": "S",
+            }
+        },
+        "generation_plan": {
+            "generation_route": "anchored",
+            "final_target": {"classification": "S"},
+        },
+        "generation_artifact": {
+            "contract_version": "2.3.0",
+            "generated_document": {
+                "contract_version": "2.3.0",
+                "title": "정기 운영위원회 회의록",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "block_id": "p1",
+                        "text": "회의 결과를 기록한다.",
+                    }
+                ],
+            },
+            "provenance": {"source_document_id": "source-1"},
+        },
+    }
+
+    prepared, resolution = _prepare_renderer_payload(payload)
+
+    assert resolution.document_form == "meeting_minutes"
+    assert resolution.document_type == "meeting_minutes"
+    assert prepared["result"]["source_classification"] == {
+        "document_form": "meeting_minutes",
+        "classification": "S",
+        "document_type": "meeting_minutes",
+    }
+
+
+def test_directory_batch_routes_inferred_type_and_records_resolution(
+    tmp_path: Path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    payload = {
+        "output_filename": "운영위원회 회의록.pdf",
+        "provenance": {"document_form": "meeting_minutes"},
+        "result": {
+            "contract_version": "2.3.0",
+            "generation_route": "anchored",
+            "generated_document": {
+                "contract_version": "2.3.0",
+                "title": "운영위원회 회의록",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "block_id": "p1",
+                        "text": "회의 결과를 기록한다.",
+                    }
+                ],
+            },
+        },
+    }
+    (input_dir / "payload.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def fake_render(
+        prepared_payload: dict,
+        document_output_dir: Path,
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        assert prepared_payload["result"]["source_classification"] == {
+            "document_type": "meeting_minutes"
+        }
+        template_slug = next(iter(kwargs["template_slugs"]))
+        assert str(template_slug).startswith("meeting_")
+        template_dir = document_output_dir / str(template_slug)
+        template_dir.mkdir(parents=True)
+        pdf_path = template_dir / "generated.pdf"
+        html_path = template_dir / "generated.html"
+        pdf_path.write_bytes(b"%PDF")
+        html_path.write_text("<html></html>", encoding="utf-8")
+        return [
+            {
+                "status": "ok",
+                "template_slug": template_slug,
+                "variation_slug": "01_test",
+                "pdf": str(pdf_path),
+                "html": str(html_path),
+            }
+        ]
+
+    monkeypatch.setattr(render_cli, "render_generation_payload", fake_render)
+    monkeypatch.setattr(
+        render_cli,
+        "verify_rendered_sensitive_evidence",
+        lambda *_args, **_kwargs: [],
+    )
+
+    manifest = render_cli.render_input_directory(
+        input_dir,
+        output_dir,
+        selection_seed=20260804,
+    )
+
+    assert manifest["success_count"] == 1
+    assert manifest["rejected_count"] == 0
+    document = manifest["documents"][0]
+    assert document["document_type"] == "meeting_minutes"
+    assert document["selection"]["renderer_family"] == "meeting_minutes"
+    assert document["document_type_resolution"] == {
+        "document_type": "meeting_minutes",
+        "source": "inferred",
+        "document_form": "meeting_minutes",
+        "reason": "document_form:meeting_minutes",
+    }
+
+
+def test_single_file_manifest_records_inference_on_success_and_rejection(
+    tmp_path: Path,
+    monkeypatch,
+):
+    def payload(title: str, filename: str) -> dict:
+        return {
+            "output_filename": filename,
+            "provenance": {"document_form": "meeting_minutes"},
+            "result": {
+                "contract_version": "2.3.0",
+                "generation_route": "anchored",
+                "generated_document": {
+                    "contract_version": "2.3.0",
+                    "title": title,
+                    "blocks": [
+                        {
+                            "kind": "paragraph",
+                            "block_id": "p1",
+                            "text": "회의 결과를 기록한다.",
+                        }
+                    ],
+                },
+            },
+        }
+
+    input_path = tmp_path / "payloads.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                payload("성공 회의록", "성공.pdf"),
+                payload("실패 회의록", "실패.pdf"),
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_render(
+        prepared_payload: dict,
+        document_output_dir: Path,
+        **_kwargs: object,
+    ) -> list[dict[str, object]]:
+        assert prepared_payload["result"]["source_classification"] == {
+            "document_type": "meeting_minutes"
+        }
+        if prepared_payload["result"]["generated_document"]["title"].startswith(
+            "실패"
+        ):
+            raise ValueError("render rejected")
+        template_dir = document_output_dir / "meeting_01_registry"
+        template_dir.mkdir(parents=True)
+        pdf_path = template_dir / "generated.pdf"
+        html_path = template_dir / "generated.html"
+        pdf_path.write_bytes(b"%PDF")
+        html_path.write_text("<html></html>", encoding="utf-8")
+        return [
+            {
+                "status": "ok",
+                "template_slug": "meeting_01_registry",
+                "variation_slug": "01_test",
+                "pdf": str(pdf_path),
+                "html": str(html_path),
+            }
+        ]
+
+    monkeypatch.setattr(render_cli, "render_generation_payload", fake_render)
+    monkeypatch.setattr(
+        render_cli,
+        "verify_rendered_sensitive_evidence",
+        lambda *_args, **_kwargs: [],
+    )
+
+    manifest = render_cli.render_input_file(input_path, tmp_path / "output")
+
+    assert [entry["status"] for entry in manifest] == ["ok", "rejected"]
+    for entry in manifest:
+        assert entry["document_type"] == "meeting_minutes"
+        assert entry["document_type_resolution"] == {
+            "document_type": "meeting_minutes",
+            "source": "inferred",
+            "document_form": "meeting_minutes",
+            "reason": "document_form:meeting_minutes",
+        }
 
 
 def test_requested_filename_preserves_korean_source_stem():
