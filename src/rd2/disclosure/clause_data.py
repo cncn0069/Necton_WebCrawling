@@ -30,9 +30,9 @@ class ClauseDefinition:
     # 다양해지려면 이 리스트 자체가 목표 건수에 가까울수록 유리하다.
     scenario_prompts: list[str] = field(default_factory=list)
     # scenario_prompts[i]와 같은 인덱스로 짝지어지는, 그 시나리오에 그럴싸한 기관
-    # 풀(agency_resolver.MARKING_SPEC_AGENCY_WHITELIST[clause_no]의 부분집합).
-    # 비워두면(기본값) agency_resolver가 조항 전체 화이트리스트에서 고른다 — 5~8호처럼
-    # 화이트리스트 자체가 없는 조항은 이 필드도 채우지 않는다. 1~4호(C트랙)는 채워야
+    # 풀(agency_resolver.FALLBACK_AGENCY_WHITELIST[clause_no]의 부분집합).
+    # 비워두면(기본값) agency_resolver가 조항 전체 화이트리스트에서 고른다. 1~4호
+    # C트랙은 시나리오별 맥락 차이가 커 이 필드를 채워야
     # "외교부가 군사대비태세 문서를 쓴다" 같은 시나리오-기관 불일치를 막을 수 있다
     # (2026-07-21 사용자 지적으로 스코프 재확정 — 이전엔 조항 단위 랜덤만 허용했었다).
     scenario_agencies: list[list[str]] = field(default_factory=list)
@@ -166,7 +166,7 @@ CLAUSES: dict[str, ClauseDefinition] = {
         # 납북자·국군포로, 국가보안유공자)를 반영해 4개 추가 — 기존 8개는 "국민 생명
         # ·신체·재산 보호"의 일반 재해·안전 시나리오라 PDF 표의 개별 항목과는 결이
         # 달라 유지하고, 새 4개로 PDF의 구체 항목을 보강했다. 새 시나리오는 국가정보원
-        # ·통일부 소관이라 agency_resolver.MARKING_SPEC_AGENCY_WHITELIST["3"]에도
+        # ·통일부 소관이라 agency_resolver.FALLBACK_AGENCY_WHITELIST["3"]에도
         # 두 기관을 함께 추가해야 한다(시나리오-기관 불일치 방지).
         scenario_agencies=[
             ["산업통상자원부", "행정안전부"],

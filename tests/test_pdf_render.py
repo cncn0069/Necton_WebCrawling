@@ -14,7 +14,6 @@ from rd2.generators.pdf_render import (
     render_document_pdf,
 )
 from rd2.generators.security_mark import (
-    generate_agency_letterhead_mark,
     generate_classification_stamp,
     generate_military_secret_content_notice,
     generate_page_watermark,
@@ -199,24 +198,6 @@ class TestClassificationGatedMarking:
             watermark_path=watermark_path, stamp_path=stamp_path,
         )
         assert output.exists()
-
-    def test_agency_mark_only_applied_for_c_classification(self, tmp_path):
-        """agency_mark_path(좌상단 기관 마크)도 대외비/워터마크와 같은 C 전용 게이팅을 따른다."""
-        agency_mark_path = generate_agency_letterhead_mark(tmp_path / "mark.png", "국정원.png", seed=1)
-
-        c_output = tmp_path / "c_doc.pdf"
-        render_document_pdf(
-            _sample_row(cso_classification="C"), CATEGORY_METRO_LOCAL_GOVERNMENT, c_output,
-            agency_mark_path=agency_mark_path,
-        )
-
-        s_output = tmp_path / "s_doc.pdf"
-        render_document_pdf(
-            _sample_row(cso_classification="S"), CATEGORY_METRO_LOCAL_GOVERNMENT, s_output,
-            agency_mark_path=agency_mark_path,
-        )
-
-        assert c_output.stat().st_size > s_output.stat().st_size
 
     def test_footer_caption_path_renders_larger_pdf(self, tmp_path):
         """비밀표시 규정 제9항 붉은 문구 — footer_caption_path 유무에 따라 PDF 크기가

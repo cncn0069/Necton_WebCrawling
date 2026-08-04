@@ -33,6 +33,38 @@ from rd2.generators.status_report_rendering import (
 from scripts.report import render_generated_documents as render_cli
 
 
+def _fake_synthetic_scan(
+    _source_pdf: Path,
+    _output_pdf: Path,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    return {
+        "applied": True,
+        "seed": seed,
+        "image_only": True,
+        "page_count": 1,
+        "page_parameters": [],
+    }
+
+
+def _fake_synthetic_handwriting(
+    _source_pdf: Path,
+    _output_pdf: Path,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    return {
+        "applied": True,
+        "seed": seed,
+        "image_only": True,
+        "page_count": 1,
+        "font": "NanumHanYunCe",
+        "fallback_character_count": 0,
+        "fallback_characters": {},
+    }
+
+
 @pytest.mark.parametrize(
     ("document_type", "expected_prefix", "expected_count"),
     (
@@ -108,6 +140,16 @@ def test_twenty_thousand_assignments_are_balanced_and_reproducible() -> None:
     for counts in variation_counts.values():
         assert set(counts) == {1, 2, 3}
         assert max(counts.values()) - min(counts.values()) <= 1
+
+    scan_counts = Counter(
+        assignment.synthetic_scan for assignment in assignments
+    )
+    assert scan_counts == {False: 10_000, True: 10_000}
+
+    handwriting_counts = Counter(
+        assignment.synthetic_handwriting for assignment in assignments
+    )
+    assert handwriting_counts == {False: 17_500, True: 2_500}
 
     second_selector = BalancedTemplateSelector(seed=7719, variation_count=3)
     repeated = [
@@ -219,6 +261,16 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
         ]
 
     monkeypatch.setattr(render_cli, "render_generation_payload", fake_render)
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_scan_pdf",
+        _fake_synthetic_scan,
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_handwriting_pdf",
+        _fake_synthetic_handwriting,
+    )
 
     manifest = render_cli.render_input_directory(
         input_dir,
@@ -253,6 +305,12 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
         (output_dir / "batch_manifest.json").read_text(encoding="utf-8")
     )
     assert saved["selection_seed"] == 2026
+    assert saved["synthetic_scan_count"] == 6
+    assert saved["synthetic_handwriting_count"] == sum(
+        bool(document["selection"]["synthetic_handwriting"])
+        for document in saved["documents"]
+    )
+    assert saved["synthetic_handwriting_count"] in {1, 2}
 
 
 def test_directory_batch_rejects_output_inside_input(tmp_path: Path) -> None:
@@ -325,6 +383,16 @@ def test_directory_batch_retries_source_miss_with_same_template_compact(
         ]
 
     monkeypatch.setattr(render_cli, "render_generation_payload", fake_render)
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_scan_pdf",
+        _fake_synthetic_scan,
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_handwriting_pdf",
+        _fake_synthetic_handwriting,
+    )
 
     manifest = render_cli.render_input_directory(
         input_dir,

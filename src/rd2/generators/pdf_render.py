@@ -473,7 +473,6 @@ def _render_context(
     row: dict,
     category: str,
     watermark_path: Path | None,
-    agency_mark_path: Path | None = None,
 ) -> dict:
     layout = LAYOUT_SPECS.get(category, LAYOUT_SPECS[CATEGORY_PUBLIC_CORPORATION])
     doc_type = row.get("doc_type") or ""
@@ -495,7 +494,6 @@ def _render_context(
         "base_uri": _TEMPLATE_DIR.resolve().as_uri() + "/",
         "css": Markup(_embedded_css()),
         "watermark_uri": _file_uri(watermark_path),
-        "agency_mark_uri": _file_uri(agency_mark_path),
     }
     context.update(_body_context(row, template.body_format if template else context["generic_body_format"], status))
     if template:
@@ -639,15 +637,12 @@ def render_document_pdf(
     watermark_path: Path | None = None,
     stamp_path: Path | None = None,
     stamp_top_path: Path | None = None,
-    agency_mark_path: Path | None = None,
     footer_caption_path: Path | None = None,
 ) -> Path:
     """공개 진입점. C 문서에만 페이지 반복 워터마크와 스탬프를 적용한다.
 
     stamp_top_path는 군사기밀 [별표 2] 등급 마크처럼 상단·하단 양쪽에 같은 마크를
     붙여야 하는 경우에만 넘긴다 — 일반 "대외비" 마크는 하단(stamp_path)만 쓴다.
-    agency_mark_path는 문서 좌상단에 한 번 표시하는 기관 마크(레터헤드)다 — 대외비/
-    군사기밀 마크와 별개로, C 문서에만 적용한다(2026-07-21 사용자 결정).
     footer_caption_path는 하단 스탬프(stamp_path) 아래에 추가로 쌓는 범용 캡션
     이미지다(2026-07-27 추가) — 비밀표시 규정 제9항의 "군사기밀 포함" 붉은 문구
     (일반 기관 대외비 문서용)와 [별표 2] 7호 재분류 근거 박스(군사기밀 등급 문서용)가
@@ -658,10 +653,9 @@ def render_document_pdf(
     effective_stamp = (stamp_path or security_mark_path) if confidential else None
     effective_stamp_top = stamp_top_path if confidential else None
     effective_watermark = watermark_path if confidential else None
-    effective_agency_mark = agency_mark_path if confidential else None
     effective_footer_caption = footer_caption_path if confidential else None
     env = Environment(loader=FileSystemLoader(_TEMPLATE_DIR), autoescape=select_autoescape(("html",)))
-    context = _render_context(row, category, effective_watermark, effective_agency_mark)
+    context = _render_context(row, category, effective_watermark)
     template = context["template"]
     if row.get("cso_subclause_key") and template is None:
         raise ValueError(
