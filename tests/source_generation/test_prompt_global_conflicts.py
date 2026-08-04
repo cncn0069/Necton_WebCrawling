@@ -3,6 +3,7 @@
 from rd2.source_generation.classification_taxonomy import (
     DocumentForm,
     SubclauseKey,
+    render_generation_detail_guidance,
 )
 from rd2.source_generation.prompts import (
     PROMPT_BUNDLE_VERSION,
@@ -158,4 +159,34 @@ def test_only_general_validator_carries_document_form_other_definition():
 
 
 def test_prompt_bundle_version_bumped_for_global_conflict_resolution():
-    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-03-v52"
+    # v53: 실측 배치(2026-08-03)에서 드러난 두 충돌을 고쳤다 —
+    # audit_material/inspection_report 경계를 `점검`이라는 낱말이 아니라 점검
+    # 대상으로 가르고, meeting_minutes 형식의 `의결 명시` 요구와
+    # decision_review의 `확정 전` 요건이 부딪히는 자리를 생성 규칙에 적었다.
+    assert PROMPT_BUNDLE_VERSION == "source-generation-prompts-2026-08-03-v53"
+
+
+def test_decision_review_rule_resolves_the_meeting_minutes_의결_conflict():
+    """회의록 형식의 `의결 명시` 요구와 decision_review의 `확정 전`이 부딪힌다.
+
+    실측(2026-08-03 배치): decision_review 목표 18건 중 17건이 제외됐고 전부
+    meeting_minutes였다. 생성물은 `원안 수정안이 통과되었다`, `추진이
+    확정되었다`처럼 안건이 끝난 회의록이었고, 검증기는 일반 회의록이라고 봤다.
+    통과한 1건만 `확정 전 내부 검토`와 대안 비교를 함께 갖췄다.
+
+    meeting_minutes의 generation_detail은 `표결이 있으면 찬성·반대·기권 수를
+    명시한다`고 요구하므로, 표결 자체를 막을 수는 없다. 대신 그 결과를 확정으로
+    적지 말라고 생성 규칙에서 가른다.
+    """
+
+    bundle = build_prompt_bundle()
+    generator = bundle.definition("generator").system_prompt
+
+    # 형식 지침은 그대로 표결을 요구한다 — 규칙이 이 요구와 공존해야 한다.
+    detail = render_generation_detail_guidance(DocumentForm.MEETING_MINUTES)
+    assert "표결이 있으면" in detail
+
+    # 생성 규칙이 확정 표현을 금지하고 대안 비교를 요구한다.
+    assert "확정으로 적지 않는다" in generator
+    assert "원안대로 의결" in generator
+    assert "비교 대상이 둘 이상" in generator

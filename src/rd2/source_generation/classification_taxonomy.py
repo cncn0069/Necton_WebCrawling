@@ -1275,13 +1275,19 @@ DOCUMENT_FORM_DEFINITIONS: Mapping[DocumentForm, DocumentFormDefinition] = Mappi
         ),
         DocumentForm.AUDIT_MATERIAL: DocumentFormDefinition(
             label="감사자료",
-            definition="감사·검사의 계획, 수행, 지적사항과 처분을 담은 문서",
+            definition=(
+                "감사·검사의 계획, 수행, 지적사항과 처분을 담은 문서. "
+                "사람의 복무·공직기강·회계·업무 적정성을 대상으로 하면 제목에 "
+                "`점검`이 들어가도 이쪽이다"
+            ),
             includes=(
                 "감사 대상과 기간, 표본 선정 기준",
                 "지적사항, 조치 요구, 처분 의견",
+                "복무감사, 공직기강 특별점검, 복무점검처럼 사람의 복무·기강을 "
+                "대상으로 한 점검 결과",
             ),
             excludes=(
-                "설비·보안 상태 점검이면 inspection_report",
+                "점검 대상이 시설·장비·시스템·보안 **상태**이면 inspection_report",
                 "감사와 무관한 일반 업무 결과는 report",
             ),
             generation_detail=(
@@ -1486,13 +1492,24 @@ DOCUMENT_FORM_DEFINITIONS: Mapping[DocumentForm, DocumentFormDefinition] = Mappi
         ),
         DocumentForm.INSPECTION_REPORT: DocumentFormDefinition(
             label="점검보고서",
-            definition="시설·시스템·보안 상태를 점검한 결과와 취약점을 담은 문서",
+            definition=(
+                "시설·장비·시스템·보안의 **상태**를 점검한 결과와 취약점을 담은 "
+                "문서. 점검 **대상이 사물**일 때만 이쪽이다"
+            ),
             includes=(
                 "점검 항목과 기준, 발견된 취약점과 위험도",
                 "보안 진단 결과, 조치 필요 사항과 기한",
             ),
             excludes=(
                 "회계·업무 적정성 감사면 audit_material",
+                # 실측(2026-08-03): `2026년도 3차 복무감사결과`, `공직기강 특별점검
+                # 감사결과` 등 15건이 제목의 `점검`만 보고 이쪽으로 왔다. 같은
+                # 배치에서 제목이 거의 같은 `2026년도 복무감사결과`는
+                # audit_material로 가서 통과했다 — 판별이 갈리는 자리다.
+                # audit_inspection이 이 형식과 CONFLICT라 15건 전부 계획 단계에서
+                # 끝났다. 구분 기준은 `점검`이라는 낱말이 아니라 점검 대상이다.
+                "복무·공직기강·인사처럼 **사람**을 대상으로 한 점검이면 제목에 "
+                "`점검`이 있어도 audit_material",
                 "발견한 위험에 대한 대응 절차 설계면 response_plan",
             ),
             generation_detail=(

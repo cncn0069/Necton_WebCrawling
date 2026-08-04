@@ -206,3 +206,32 @@ def test_other_means_outside_defined_forms_and_allows_unknown_form_label():
     assert "other_document_form" in guidance
     assert "형식 불명" in guidance
     assert all("other_document_form에" not in item for item in other.required_elements)
+
+
+def test_inspection_report_boundary_turns_on_target_not_the_word_점검():
+    """`점검`이라는 낱말이 아니라 점검 대상이 두 형식을 가른다.
+
+    실측(2026-08-03 배치): `2026년도 3차 복무감사결과`, `공직기강 특별점검
+    감사결과` 등 15건이 inspection_report로 분류돼 계획 단계에서 전부 끝났다
+    (inspection_report × audit_inspection은 CONFLICT다). 같은 배치에서 제목이
+    거의 같은 `2026년도 복무감사결과`는 audit_material로 가서 통과했다.
+    사람을 대상으로 한 복무·기강 점검은 감사자료다.
+    """
+
+    audit = DOCUMENT_FORM_DEFINITIONS[DocumentForm.AUDIT_MATERIAL]
+    inspection = DOCUMENT_FORM_DEFINITIONS[DocumentForm.INSPECTION_REPORT]
+
+    # 감사자료가 복무·기강 점검을 자기 것으로 명시한다.
+    assert any("복무" in item and "기강" in item for item in audit.includes)
+    assert "점검" in audit.definition
+
+    # 점검보고서는 대상이 사물일 때로 한정하고, 사람 대상은 넘긴다.
+    assert "사물" in inspection.definition
+    assert any(
+        "복무" in item and "audit_material" in item for item in inspection.excludes
+    )
+
+    # 두 규칙이 판별기가 실제로 읽는 지침에 함께 나타나야 의미가 있다.
+    guidance = render_document_form_guidance()
+    assert "사람의 복무·기강을 대상으로 한 점검 결과" in guidance
+    assert "점검 **대상이 사물**일 때만" in guidance

@@ -55,7 +55,7 @@ from rd2.source_generation.document_form import (
 from rd2.source_generation.document_select import SelectionConfig
 from rd2.source_generation.sensitive_policy import render_sensitive_policy_guidance
 
-PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-03-v52"
+PROMPT_BUNDLE_VERSION = "source-generation-prompts-2026-08-03-v53"
 
 TAXONOMY_GUIDANCE = render_taxonomy_guidance()
 SENSITIVE_TAXONOMY_GUIDANCE = render_taxonomy_guidance(
@@ -607,6 +607,14 @@ SENSITIVE_CLAUSE_GENERATION_GUIDANCE = f"""\
   쓴다. 진행 중이라는 상태는 결재란 빈칸이 드러내므로 "아직 최종 확정되지 않은
   내부 검토 단계", "지금 공개되면 지장을 줄 수 있다" 같은 문장을 근거로 삼지
   않는다 — 그런 문구는 법적 근거가 되지 못한다.
+  본문에 **비교 대상이 둘 이상 있어야 한다** — 대안 A와 B, 또는 부서별로 갈린
+  의견이 각각 무엇이고 왜 그런지가 있어야 검토 내용이 성립한다. 안건 목록과
+  발언 요지만 있으면 그냥 회의록이다.
+  회의록 형식과 겹칠 때 주의한다: 형식 지침은 표결 결과를 명시하라고 요구하지만
+  그 결과를 **확정으로 적지 않는다**. "원안대로 의결", "추진이 확정되었다",
+  "최종 통과"처럼 안건이 끝난 것으로 쓰면 이 세부유형의 요건이 사라진다. 표결은
+  검토 의견이 어떻게 갈렸는지를 보이는 중간 집계로 적고, 안건은 상위 결재·후속
+  회의로 넘어가는 상태로 남긴다.
 - personnel_management이면 출제·채점 기준·면접위원 구성·승진 심사 기준·확정 전
   인사계획을 작성하고, 공개 시 인사 절차의 공정한 수행에 생길 지장을 드러낸다.
 
