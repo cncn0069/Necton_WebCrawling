@@ -33,6 +33,7 @@ from rd2.generators.paged_output import RenderedSourceTextError
 from rd2.generators.pdf_sensitive_evidence import (
     verify_rendered_sensitive_evidence,
 )
+from rd2.generators.synthetic_scan import render_synthetic_scan_pdf
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_OUTPUT_DIR = _REPO_ROOT / "output" / "pdf" / "generated_documents"
@@ -344,6 +345,8 @@ def _finalize_rendered_document(
     document_output_dir: Path,
     rendered: list[dict[str, object]],
     requested_filename: str | None,
+    *,
+    assignment: BalancedTemplateAssignment | None = None,
 ) -> None:
     rename_rendered_files(rendered, requested_filename)
     evidence_results = verify_rendered_sensitive_evidence(payload, rendered)
@@ -352,6 +355,28 @@ def _finalize_rendered_document(
         evidence = evidence_by_pdf.get(str(entry["pdf"]))
         if evidence is not None:
             entry["sensitive_evidence"] = evidence
+        if assignment is None:
+            continue
+        if not assignment.synthetic_scan:
+            entry["synthetic_scan"] = {
+                "applied": False,
+                "seed": assignment.synthetic_scan_seed,
+            }
+            continue
+
+        original_validation_scope = entry.get(
+            "source_text_validation_scope"
+        )
+        scan_result = render_synthetic_scan_pdf(
+            Path(str(entry["pdf"])),
+            Path(str(entry["pdf"])),
+            seed=assignment.synthetic_scan_seed,
+        )
+        scan_result["pre_scan_source_text_validation_scope"] = (
+            original_validation_scope
+        )
+        entry["synthetic_scan"] = scan_result
+        entry["source_text_validation_scope"] = "pre_scan_pdf"
     _write_document_manifest(document_output_dir, rendered)
 
 
@@ -525,6 +550,7 @@ def render_input_directory(
                     document_output_dir,
                     rendered,
                     requested_filename,
+                    assignment=assignment,
                 )
             except (
                 GeneratedDocumentPipelineError,
@@ -567,6 +593,7 @@ def render_input_directory(
                     "selection": selection,
                     "accepted_selection": accepted_selection,
                     "render_attempts": render_attempts,
+                    "synthetic_scan": rendered[0].get("synthetic_scan"),
                 }
             )
 
@@ -582,6 +609,13 @@ def render_input_directory(
         ),
         "rejected_count": sum(
             entry["status"] == "rejected" for entry in documents
+        ),
+        "synthetic_scan_count": sum(
+            bool(
+                isinstance(entry.get("synthetic_scan"), dict)
+                and entry["synthetic_scan"].get("applied")
+            )
+            for entry in documents
         ),
         "documents": documents,
     }
@@ -664,7 +698,13 @@ def main() -> None:
             suffix = (
                 " -> "
                 f"{selection.get('template_slug')}/"
-                f"variation-{selection.get('variation_index')}"
+                f"variation-{selection.get('variation_index')}/"
+                + (
+                    "scan"
+                    if isinstance(entry.get("synthetic_scan"), dict)
+                    and entry["synthetic_scan"].get("applied")
+                    else "digital"
+                )
                 if entry["status"] in SUCCESSFUL_RENDER_STATUSES
                 else f": {entry.get('error', 'rejected')}"
             )

@@ -15,6 +15,21 @@ from scripts.render_generated_documents import (
 )
 
 
+def _fake_synthetic_scan(
+    _source_pdf: Path,
+    _output_pdf: Path,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    return {
+        "applied": True,
+        "seed": seed,
+        "image_only": True,
+        "page_count": 1,
+        "page_parameters": [],
+    }
+
+
 def test_renderer_projection_preserves_military_secret_grade():
     payload = {
         "generation_plan": {
@@ -236,6 +251,11 @@ def test_directory_batch_routes_inferred_type_and_records_resolution(
         render_cli,
         "verify_rendered_sensitive_evidence",
         lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "render_synthetic_scan_pdf",
+        _fake_synthetic_scan,
     )
 
     manifest = render_cli.render_input_directory(

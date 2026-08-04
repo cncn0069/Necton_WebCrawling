@@ -92,6 +92,8 @@ class BalancedTemplateAssignment:
     variation_index: int
     selection_seed: int
     render_seed: int
+    synthetic_scan: bool
+    synthetic_scan_seed: int
     document_type_index: int
 
     @property
@@ -166,6 +168,19 @@ class BalancedTemplateSelector:
         variation_index = variation_cycle[variation_offset]
         self._template_positions[template_key] = variation_position + 1
 
+        scan_epoch, scan_offset = divmod(type_position, 2)
+        scan_cycle = [False, True]
+        random.Random(
+            _stable_seed(
+                self.seed,
+                type_key,
+                resolved_family,
+                "synthetic_scan",
+                scan_epoch,
+            )
+        ).shuffle(scan_cycle)
+        synthetic_scan = scan_cycle[scan_offset]
+
         return BalancedTemplateAssignment(
             document_type=document_type,
             renderer_family=resolved_family,
@@ -177,6 +192,14 @@ class BalancedTemplateSelector:
                 type_key,
                 item_key,
                 type_position,
+            ),
+            synthetic_scan=synthetic_scan,
+            synthetic_scan_seed=_stable_seed(
+                self.seed,
+                type_key,
+                item_key,
+                type_position,
+                "synthetic_scan_effects",
             ),
             document_type_index=type_position,
         )
