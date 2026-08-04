@@ -65,6 +65,7 @@ from rd2.generators.synthetic_approval_stamps import (
     generate_synthetic_approval_stamp,
 )
 from rd2.source_generation.classification_taxonomy import SemanticDocumentType
+from rd2.source_generation.header_fields import DRAFT_BLANK_HEADER_KEYS
 #: 메이저 버전 2대만 받는다. ``GeneratedDocumentContract``는 렌더러가 필요한 IR
 #: 부분만 호환 계약으로 다시 선언해 소스 계약의 마이너 변경을 자유롭게 받는다.
 #: ``generation_target``도 과거 산출물의 부가 메타데이터를 보존하는 느슨한 계약을
@@ -194,10 +195,21 @@ class KeyValueEntry(_ContractModel):
     key: str
     value: str
 
-    @field_validator("key", "value")
+    @field_validator("key")
     @classmethod
-    def _validate_non_empty(cls, value: str, info: Any) -> str:
-        return _non_empty(value, info.field_name)
+    def _validate_key(cls, value: str) -> str:
+        return _non_empty(value, "key")
+
+    @model_validator(mode="after")
+    def _blank_value_is_only_for_draft_header_fields(self) -> "KeyValueEntry":
+        # 렌더러는 과거·counterfactual payload도 살려야 하므로 target의 초안 여부를
+        # 다시 판정하지 않는다. 원문에 없을 수 있는 두 표제부 값만 구조적으로
+        # 허용하고, 확정문서 적합성은 생성 단계의 check_document_form이 진단한다.
+        if not self.value.strip() and self.key not in DRAFT_BLANK_HEADER_KEYS:
+            raise ValueError(
+                "blank key-value is only allowed for draft document number/date"
+            )
+        return self
 
 
 class KeyValueBlock(_ContractModel):
@@ -414,6 +426,16 @@ class GeneratedDocumentContract(_ContractModel):
             raise ValueError("block_id values must be unique")
         if not self.blocks and not (self.body_text and self.body_text.strip()):
             raise ValueError("blocks or body_text must contain document content")
+        for index, block in enumerate(self.blocks):
+            if not isinstance(block, KeyValueBlock):
+                continue
+            if (
+                any(not entry.value.strip() for entry in block.entries)
+                and index != 0
+            ):
+                raise ValueError(
+                    "blank draft header values are only allowed in the first block"
+                )
         return self
 
 

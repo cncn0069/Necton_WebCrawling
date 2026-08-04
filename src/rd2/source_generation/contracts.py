@@ -32,6 +32,7 @@ from rd2.source_generation.classification_taxonomy import (
     expected_classification,
     subclause_belongs_to_clause,
 )
+from rd2.source_generation.header_fields import DRAFT_BLANK_HEADER_KEYS
 
 CONTRACT_SCHEMA_VERSION = "2.3.0"
 
@@ -209,9 +210,6 @@ class BulletListBlock(ContractModel):
 
     def render_text(self) -> str:
         return "\n".join(f"- {item}" for item in self.items)
-
-
-DRAFT_BLANK_HEADER_KEYS: frozenset[str] = frozenset({"문서번호", "시행일자"})
 
 
 class KeyValueEntry(ContractModel):
