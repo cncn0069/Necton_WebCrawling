@@ -1704,6 +1704,7 @@ def render_generation_payload(
             target=generation_target,
             agency_name=document.agency_name,
             content_sha256=content_sha256,
+            selection_seed=seed,
         )
 
         # 보안표지는 위에서 status="ok"인 산출물에 먼저 적용한다. 게시 상한을
