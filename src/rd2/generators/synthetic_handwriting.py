@@ -73,15 +73,39 @@ def _dominant_background(
     return tuple(int(channel) for channel in selected)
 
 
-def _text_spans(page: fitz.Page) -> list[dict[str, Any]]:
+def _text_spans(
+    page: fitz.Page,
+    *,
+    protected_margin_pt: tuple[float, float] | None = None,
+) -> list[dict[str, Any]]:
+    safe_rect = None
+    if protected_margin_pt is not None:
+        top_bottom, left_right = protected_margin_pt
+        safe_rect = fitz.Rect(
+            left_right,
+            top_bottom,
+            page.rect.width - left_right,
+            page.rect.height - top_bottom,
+        )
     spans: list[dict[str, Any]] = []
     for block in page.get_text("dict").get("blocks", []):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
             for span in line.get("spans", []):
-                if str(span.get("text", "")).strip():
-                    spans.append(span)
+                if not str(span.get("text", "")).strip():
+                    continue
+                span_rect = fitz.Rect(span["bbox"])
+                span_center = fitz.Point(
+                    (span_rect.x0 + span_rect.x1) / 2,
+                    (span_rect.y0 + span_rect.y1) / 2,
+                )
+                if safe_rect is not None and not safe_rect.contains(span_center):
+                    # C/군사기밀 프레임의 상·하단 라벨과 합성 provenance는
+                    # 정규 보안표지다. 손글씨 효과가 그 문구를 필기체로 바꾸면
+                    # 한 문서 안에서 본문 효과와 보안 등급 표현이 충돌한다.
+                    continue
+                spans.append(span)
     return spans
 
 
@@ -91,6 +115,7 @@ def _render_handwriting_page(
     seed: int,
     dpi: int,
     handwriting_font: fitz.Font,
+    protected_margin_pt: tuple[float, float] | None = None,
 ) -> tuple[bytes, Counter[str]]:
     scale = dpi / 72
     pixmap = page.get_pixmap(
@@ -107,7 +132,10 @@ def _render_handwriting_page(
     fallback_characters: Counter[str] = Counter()
     rng = random.Random(seed)
 
-    for span in _text_spans(page):
+    for span in _text_spans(
+        page,
+        protected_margin_pt=protected_margin_pt,
+    ):
         text = str(span.get("text", ""))
         x0, y0, x1, y1 = span["bbox"]
         origin_x, baseline_y = span.get("origin", (x0, y1))
@@ -194,6 +222,7 @@ def render_synthetic_handwriting_pdf(
     *,
     seed: int,
     dpi: int = SYNTHETIC_HANDWRITING_DPI,
+    protected_margin_pt: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """PDF를 한윤체 기반 이미지 전용 손글씨본으로 만든다.
 
@@ -219,6 +248,7 @@ def render_synthetic_handwriting_pdf(
                 seed=_page_seed(seed, page_index),
                 dpi=dpi,
                 handwriting_font=handwriting_font,
+                protected_margin_pt=protected_margin_pt,
             )
             fallback_characters.update(page_fallbacks)
             source_page = source[page_index]
@@ -275,4 +305,12 @@ def render_synthetic_handwriting_pdf(
         "fallback_font": FALLBACK_FONT_NAME,
         "fallback_character_count": sum(fallback_characters.values()),
         "fallback_characters": dict(sorted(fallback_characters.items())),
+        "protected_margin_pt": (
+            {
+                "top_bottom": protected_margin_pt[0],
+                "left_right": protected_margin_pt[1],
+            }
+            if protected_margin_pt is not None
+            else None
+        ),
     }

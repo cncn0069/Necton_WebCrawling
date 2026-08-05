@@ -53,6 +53,7 @@ def _fake_synthetic_handwriting(
     _output_pdf: Path,
     *,
     seed: int,
+    **_kwargs,
 ) -> dict[str, object]:
     return {
         "applied": True,

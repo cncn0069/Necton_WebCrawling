@@ -1,16 +1,6 @@
 @page pagination-continuation {
   size: A4;
   margin: 17mm 18mm 18mm;
-  @top-center {
-    color: #666;
-    content: "본문 연속본";
-    font-size: 7pt;
-  }
-  @top-right {
-    color: #666;
-    content: string(continuation-agency);
-    font-size: 7pt;
-  }
   @bottom-right {
     color: #666;
     content: counter(page);
@@ -27,29 +17,6 @@
   page: pagination-continuation;
 }
 
-.pagination-continuation-header {
-  align-items: baseline;
-  border-bottom: .35mm solid #333;
-  display: flex;
-  gap: 5mm;
-  justify-content: space-between;
-  margin-bottom: 5mm;
-  padding-bottom: 2mm;
-}
-
-.pagination-continuation-header span {
-  color: #666;
-  flex: 1 1 auto;
-  font-size: 8pt;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  string-set: continuation-agency content();
-}
-.pagination-continuation-header strong {
-  flex: 0 0 auto;
-  font-size: 8.5pt;
-  letter-spacing: .8mm;
-}
 .pagination-continuation > h1 {
   font-size: 16pt;
   line-height: 1.35;

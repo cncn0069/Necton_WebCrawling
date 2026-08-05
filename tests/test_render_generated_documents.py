@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import fitz
+
 import scripts.render_generated_documents as render_cli
 from rd2.generators.balanced_batch_selection import BalancedTemplateAssignment
 from rd2.generators.output_naming import (
@@ -36,6 +38,7 @@ def _fake_synthetic_handwriting(
     _output_pdf: Path,
     *,
     seed: int,
+    **_kwargs,
 ) -> dict[str, object]:
     return {
         "applied": True,
@@ -101,6 +104,74 @@ def test_scan_marks_security_metadata_as_pre_scan(tmp_path: Path, monkeypatch):
     marking = rendered[0]["security_marking"]
     assert marking["stage"] == "pre_scan"
     assert marking["baked_into_scan"] is True
+
+
+def test_security_handwriting_and_scan_run_in_order_without_losing_manifest(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from rd2.generators.document_security_marking import (
+        apply_security_marking_to_manifest,
+    )
+
+    output_dir = tmp_path / "document"
+    output_dir.mkdir()
+    pdf_path = output_dir / "generated.pdf"
+    html_path = output_dir / "generated.html"
+    source = fitz.open()
+    page = source.new_page(width=360, height=480)
+    page.insert_text((54, 100), "Generated body text", fontsize=12)
+    source.save(pdf_path)
+    source.close()
+    html_path.write_text("<html></html>", encoding="utf-8")
+    rendered = [
+        {
+            "status": "ok",
+            "pdf": str(pdf_path),
+            "html": str(html_path),
+        }
+    ]
+    apply_security_marking_to_manifest(
+        rendered,
+        target={"classification": "C"},
+        selection_seed=7,
+    )
+    assignment = _scan_assignment()
+    assignment = BalancedTemplateAssignment(
+        **(
+            assignment.to_dict()
+            | {
+                "synthetic_handwriting": True,
+                "synthetic_handwriting_seed": 17,
+            }
+        )
+    )
+    monkeypatch.setattr(
+        render_cli,
+        "verify_rendered_sensitive_evidence",
+        lambda *_args, **_kwargs: [],
+    )
+
+    render_cli._finalize_rendered_document(
+        {},
+        output_dir,
+        rendered,
+        None,
+        assignment=assignment,
+    )
+
+    marking = rendered[0]["security_marking"]
+    assert marking["stage"] == "pre_handwriting"
+    assert marking["baked_into_handwriting"] is True
+    assert marking["baked_into_scan"] is True
+    assert rendered[0]["synthetic_handwriting"]["protected_margin_pt"] == {
+        "top_bottom": 30.0,
+        "left_right": 12.0,
+    }
+    with fitz.open(pdf_path) as final_pdf:
+        assert final_pdf.page_count == 1
+        assert not final_pdf[0].get_text()
+        assert final_pdf[0].get_images(full=True)
 
 
 def test_cleanup_removes_rejected_pdf_html_and_manifest(tmp_path: Path):

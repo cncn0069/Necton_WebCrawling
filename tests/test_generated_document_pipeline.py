@@ -406,6 +406,57 @@ def test_structured_blocks_are_the_source_of_truth_for_template_context() -> Non
     assert "정책연구 목적과의 부합성" in source_text_atoms(document)
 
 
+def test_official_context_compacts_marked_heading_and_bullet_blocks() -> None:
+    payload = _payload()
+    payload["result"]["generated_document"]["blocks"] = [
+        {
+            "kind": "paragraph",
+            "block_id": "heading",
+            "text": "□ 추진 배경 및 경위임",
+        },
+        {
+            "kind": "bullet_list",
+            "block_id": "items",
+            "items": [
+                "○ 첫 번째 확인사항임",
+                "- 두 번째 확인사항임",
+                "※ 외부 공유 금지임",
+            ],
+        },
+        {
+            "kind": "paragraph",
+            "block_id": "intro",
+            "text": "일반적인 설명 문장입니다.",
+        },
+    ]
+    payload["result"]["generated_document"]["body_text"] = (
+        "□ 추진 배경 및 경위임\n\n"
+        "- ○ 첫 번째 확인사항임\n"
+        "- - 두 번째 확인사항임\n"
+        "- ※ 외부 공유 금지임\n\n"
+        "일반적인 설명 문장입니다."
+    )
+
+    envelope = parse_generation_payload(payload)
+    context = build_template_context(envelope, seed=100)
+
+    assert context["intro"] == ""
+    assert context["sections"][0] == {
+        "text": "추진 배경 및 경위임",
+        "items": [
+            {"label": "가", "text": "첫 번째 확인사항임"},
+            {"label": "나", "text": "두 번째 확인사항임"},
+            {"label": "다", "text": "참고: 외부 공유 금지임"},
+        ],
+    }
+    assert context["sections"][1]["text"] == "일반적인 설명 문장입니다."
+    assert len(context["source_blocks"]) == 2
+    assert context["source_blocks"][0]["kind"] == "paragraph"
+    assert "□" not in context["source_blocks"][0]["text"]
+    assert "○" not in context["source_blocks"][0]["text"]
+    assert "※" not in context["source_blocks"][0]["text"]
+
+
 def test_attachment_reference_matches_generated_document_ir_contract() -> None:
     envelope = parse_generation_payload(_add_attachment_reference(_payload()))
     document = envelope.result.generated_document
@@ -468,7 +519,7 @@ def test_missing_document_metadata_is_not_synthesized() -> None:
     context = build_template_context(envelope, seed=100)
 
     assert context["source_agency_name"] == ""
-    assert context["source_agency_category"] == "generic_public"
+    assert context["source_agency_category"] == ""
     assert context["signers"] == []
     for key in (
         "recipient",
@@ -668,21 +719,12 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
     assert all(Path(str(entry["pdf"])).is_file() for entry in manifest)
     assert all(Path(str(entry["html"])).is_file() for entry in manifest)
     assert all("security_marking" not in entry for entry in manifest)
-    assert len(
-        {entry["identity"]["agency_name"] for entry in manifest}
-    ) == 1
-    assert len(
-        {entry["identity"]["agency_pool_index"] for entry in manifest}
-    ) == 1
-    assert all(entry["identity"]["agency_pool_size"] == 300 for entry in manifest)
-    assert all(
-        entry["identity"]["organization_category"] == "generic_public"
-        for entry in manifest
-    )
-    assert all(
-        entry["identity"]["selection_category"] == "generic_public"
-        for entry in manifest
-    )
+    assert all(entry["identity"]["identity_source"] == "none" for entry in manifest)
+    assert all(entry["identity"]["agency_name"] == "" for entry in manifest)
+    assert all(entry["identity"]["agency_pool_index"] is None for entry in manifest)
+    assert all(entry["identity"]["agency_pool_size"] == 0 for entry in manifest)
+    assert all(entry["identity"]["organization_category"] is None for entry in manifest)
+    assert all(entry["identity"]["selection_category"] is None for entry in manifest)
 
     rendered_text = ""
     for entry in manifest:
@@ -709,6 +751,7 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
         "최종 판정",
         "조건부 적합",
         "재점검",
+        "라온공공정책지원원",
     ):
         assert synthetic_text not in rendered_text
 

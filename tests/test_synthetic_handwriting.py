@@ -8,6 +8,7 @@ import fitz
 from rd2.generators.synthetic_handwriting import (
     FALLBACK_FONT_NAME,
     HANDWRITING_FONT_NAME,
+    _text_spans,
     render_synthetic_handwriting_pdf,
 )
 
@@ -99,3 +100,15 @@ def test_handwriting_is_reproducible_image_only_and_uses_glyph_fallback(
         ]
         assert all(not page.get_text() for page in rendered)
         assert all(len(page.get_images(full=True)) == 1 for page in rendered)
+
+
+def test_security_margin_text_is_not_selected_for_handwriting() -> None:
+    document = fitz.open()
+    page = document.new_page(width=360, height=480)
+    page.insert_text((24, 18), "CONFIDENTIAL", fontsize=8)
+    page.insert_text((54, 100), "Generated body text", fontsize=12)
+
+    spans = _text_spans(page, protected_margin_pt=(30.0, 12.0))
+
+    assert [span["text"] for span in spans] == ["Generated body text"]
+    document.close()
