@@ -1218,7 +1218,10 @@ def build_template_context(
                 long_sections.append(
                     {
                         "title": " / ".join(normalized_columns),
-                        "items": _presentation_list_items(flattened_rows),
+                        "items": _presentation_list_items(
+                            flattened_rows,
+                            normalize=presentation_normalization,
+                        ),
                     }
                 )
 
@@ -1368,6 +1371,9 @@ def build_research_report_context(
     """입력 block 순서를 보존한 연구보고서 전용 context를 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     ordered_blocks = _presentation_blocks(
         document.blocks,
         normalize=presentation_normalization,
@@ -1393,9 +1399,9 @@ def build_research_report_context(
 
     return {
         "document_type_label": "연구보고서",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],
@@ -1412,6 +1418,9 @@ def build_press_release_context(
     """입력 순서를 보존해 보도자료 전용 context를 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
     metadata_context = _build_document_metadata_context(
         envelope,
@@ -1513,9 +1522,9 @@ def build_press_release_context(
 
     return {
         "document_type_label": "보도자료",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "header_meta": header_meta,
         "render_items": render_items,
         "signers": metadata_context["signers"],
@@ -1533,6 +1542,9 @@ def build_administrative_rule_context(
     """행정규칙 block 순서를 유지한 렌더링 context를 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     source_classification = envelope.result.source_classification
     if source_classification is None:
         raise ValueError("Administrative rule rendering requires document_type")
@@ -1578,11 +1590,15 @@ def build_administrative_rule_context(
         else:
             raise TypeError(f"Unsupported generated block: {type(block)!r}")
 
-    metadata_context = build_template_context(envelope, seed=seed)
+    metadata_context = build_template_context(
+        envelope,
+        seed=seed,
+        presentation_normalization=presentation_normalization,
+    )
     return {
         "document_type_label": _ADMINISTRATIVE_RULE_LABELS[document_type],
-        "title": _presentation_plain_text(document.title),
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "title": display_text(document.title),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1598,6 +1614,9 @@ def build_interpretation_compilation_context(
     """공문과 같은 5종 block을 순서 그대로 질의회시집 context로 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     blocks = _presentation_blocks(
         document.blocks,
         normalize=presentation_normalization,
@@ -1607,7 +1626,11 @@ def build_interpretation_compilation_context(
             isinstance(block, TableBlock) and len(block.columns) >= 7
         )
 
-    metadata_context = build_template_context(envelope, seed=seed)
+    metadata_context = build_template_context(
+        envelope,
+        seed=seed,
+        presentation_normalization=presentation_normalization,
+    )
     title_length = len(re.sub(r"\s+", "", document.title))
     if title_length >= 70:
         title_class = "title-extra-long"
@@ -1618,9 +1641,9 @@ def build_interpretation_compilation_context(
 
     return {
         "document_type_label": "질의회시집",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1636,6 +1659,9 @@ def build_guide_context(
     """공문과 같은 5종 block을 순서 그대로 guide context로 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     blocks = _presentation_blocks(
         document.blocks,
         normalize=presentation_normalization,
@@ -1645,7 +1671,11 @@ def build_guide_context(
             isinstance(block, TableBlock) and len(block.columns) >= 7
         )
 
-    metadata_context = build_template_context(envelope, seed=seed)
+    metadata_context = build_template_context(
+        envelope,
+        seed=seed,
+        presentation_normalization=presentation_normalization,
+    )
     title_length = len(re.sub(r"\s+", "", document.title))
     if title_length >= 70:
         title_class = "title-extra-long"
@@ -1656,9 +1686,9 @@ def build_guide_context(
 
     return {
         "document_type_label": "GUIDE",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1674,6 +1704,9 @@ def build_status_report_context(
     """공문과 같은 5종 block을 순서 그대로 현황보고 context로 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     ordered_blocks = _presentation_blocks(
         document.blocks,
         normalize=presentation_normalization,
@@ -1700,9 +1733,9 @@ def build_status_report_context(
 
     return {
         "document_type_label": "현황·통계자료",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],
@@ -1719,6 +1752,9 @@ def build_meeting_minutes_context(
     """공통 5종 block을 순서 그대로 독립 회의록 context로 만든다."""
 
     document = envelope.result.generated_document
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     ordered_blocks = _presentation_blocks(
         document.blocks,
         normalize=presentation_normalization,
@@ -1745,9 +1781,9 @@ def build_meeting_minutes_context(
 
     return {
         "document_type_label": "회의록",
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "has_wide_blocks": any(
             block["is_wide"]
@@ -1771,6 +1807,9 @@ def build_notice_context(
         envelope.result.source_classification.document_type.value
         if envelope.result.source_classification
         else None
+    )
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
     )
     if document_type not in _NOTICE_DOCUMENT_TYPES:
         raise ValueError(
@@ -1806,9 +1845,9 @@ def build_notice_context(
 
     return {
         "document_type_label": _NOTICE_DOCUMENT_TYPE_LABELS[document_type],
-        "title": _presentation_plain_text(document.title),
+        "title": display_text(document.title),
         "title_class": title_class,
-        "agency_name": _presentation_plain_text(document.agency_name or ""),
+        "agency_name": display_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],

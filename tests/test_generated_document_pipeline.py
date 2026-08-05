@@ -771,6 +771,46 @@ def test_all_templates_preserve_every_source_atom(tmp_path: Path) -> None:
         assert synthetic_text not in rendered_text
 
 
+def test_official_continuation_keeps_source_content_out_of_preview_cover(
+    tmp_path: Path,
+) -> None:
+    """장문 공문은 서식 표지와 원본 연속본문을 중복 출력하지 않는다."""
+
+    payload = _payload()
+    document = payload["result"]["generated_document"]
+    document["title"] = "장문 공문 중복 방지 회귀 테스트"
+    document["body_text"] = None
+    document["blocks"] = [
+        {
+            "kind": "paragraph",
+            "block_id": f"continuation-{index:02d}",
+            "text": f"[연속원문{index:02d}] 이 항목은 한 번만 출력되어야 합니다.",
+        }
+        for index in range(1, 14)
+    ]
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        per_template=1,
+        base_seed=20260805,
+    )
+
+    assert len(manifest) == 10
+    for entry in manifest:
+        html = Path(str(entry["html"])).read_text(encoding="utf-8")
+        assert 'class="pagination-continuation"' in html
+        assert "<main class=\"pagination-continuation\">\n  <h1>" not in html
+
+        with fitz.open(str(entry["pdf"])) as rendered:
+            rendered_text = _normalized(
+                "\n".join(page.get_text() for page in rendered)
+            )
+        assert rendered_text.count(_normalized(document["title"])) == 1
+        for index in range(1, 14):
+            assert rendered_text.count(f"[연속원문{index:02d}]") == 1
+
+
 def test_c_payload_without_military_grade_gets_confidential_security_skin(
     tmp_path: Path,
 ) -> None:
