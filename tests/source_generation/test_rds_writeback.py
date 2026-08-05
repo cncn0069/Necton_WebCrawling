@@ -139,6 +139,7 @@ def test_generated_row_inherits_source_metadata_and_marks_its_origin():
     assert doc.ordering_agency == "서울특별시"
     assert doc.department == "품질지도과"
     assert doc.production_date == date(2026, 7, 20)
+    # 형식을 모르는 호출에서만 원문 라벨이 그대로 남는다.
     assert doc.doc_type == "official_document"
     # is_synthetic 컬럼이 없어졌으므로 source 접두사가 유일한 구분자다.
     assert doc.source == "gen_seoul_opengov"
@@ -175,6 +176,26 @@ def test_source_url_is_stable_so_reruns_do_not_duplicate_rows():
         _target(subclause=SubclauseKey.PERSONNEL_PII),
     )
     assert other != first
+
+
+def test_document_form_beats_the_inherited_english_label():
+    """생성분의 ``doc_type``은 원문에서 왔든 아니든 6칸 한글이다.
+
+    물려받은 값을 먼저 읽던 때는 원문에서 온 경로만 ``official_document``로
+    들어가 ``WHERE data_origin='G'`` 안에 영어와 한글이 섞였다.
+    """
+
+    doc = build_generated_document(
+        document=_document(),
+        plan=_plan(),
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(doc_type="official_document"),
+        document_form=DocumentForm.REPORT,
+    )
+
+    assert doc.doc_type == "현황보고서"
+    # 물려받는 나머지 컬럼은 그대로다 — 바뀐 것은 이 한 칸뿐이다.
+    assert doc.ordering_agency == "서울특별시"
 
 
 def test_row_without_source_metadata_falls_back_to_the_document_form():

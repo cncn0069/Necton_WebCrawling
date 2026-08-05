@@ -383,16 +383,24 @@ def build_generated_document(
         target=target,
         generation_route=generation_route,
     )
-    doc_type = inherited.doc_type
-    if not doc_type and document_form is not None:
-        # 수집 라벨이 없으면 문서형식을 대신 쓴다. 비워두면 파일 저장 경로
-        # (files.py)가 미분류 버킷으로 떨어진다.
-        #
-        # **형식 값을 그대로 넣지 않는다.** 생성 쪽 17종을 이 컬럼의 6칸으로
-        # 몰아주는 것이 마지막에 붙는 어댑터의 일이다(``doc_type_bucket``).
-        # 원래 형식은 생성물 envelope의 ``source_classification.document_form``
-        # 에 그대로 남아 있으므로 여기서 합쳐도 되짚을 수 있다.
-        doc_type = doc_type_for_form(document_form)
+    # **형식이 원문 라벨을 이긴다.** 이 함수가 만드는 행은 전부 생성분
+    # (``generated_text``가 차 있고 ``data_origin='G'``)이고, 생성분의
+    # ``doc_type``은 6칸 한글이라는 것이 컬럼 규약이다. 물려받은 값을 먼저
+    # 읽던 때는 원문에서 온 경로만 영어 코드(``official_document``)로 들어가
+    # 같은 ``WHERE data_origin='G'`` 안에 두 어휘가 섞였다.
+    #
+    # **형식 값을 그대로 넣지도 않는다.** 생성 쪽 17종을 6칸으로 몰아주는 것이
+    # 마지막에 붙는 어댑터의 일이다(``doc_type_bucket``). 원래 형식은 생성물
+    # envelope의 ``source_classification.document_form``에 그대로 남아 있으므로
+    # 여기서 합쳐도 되짚을 수 있다.
+    #
+    # 형식을 모르는 호출만 원문 라벨로 떨어진다. 비워두면 파일 저장 경로
+    # (files.py)가 미분류 버킷으로 떨어지므로 아무것도 없는 것보다는 낫다.
+    doc_type = (
+        doc_type_for_form(document_form)
+        if document_form is not None
+        else inherited.doc_type
+    )
 
     return Document(
         title=document.title,
