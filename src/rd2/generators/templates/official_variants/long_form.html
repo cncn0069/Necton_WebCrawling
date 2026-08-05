@@ -27,7 +27,7 @@
         <div><span>{{ "%02d"|format(loop.index) }}</span></div>
         <div>
           <h3>{{ section.title }}</h3>
-          <ol>{% for item in section["items"] %}<li>{{ item }}</li>{% endfor %}</ol>
+          <ol>{% for item in section["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>{% endfor %}</ol>
         </div>
       </article>
       {% endfor %}
@@ -55,7 +55,7 @@
         <div><span>{{ "%02d"|format(loop.index + 4) }}</span></div>
         <div>
           <h3>{{ section.title }}</h3>
-          <ol>{% for item in section["items"] %}<li>{{ item }}</li>{% endfor %}</ol>
+          <ol>{% for item in section["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>{% endfor %}</ol>
         </div>
       </article>
       {% endfor %}

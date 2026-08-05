@@ -444,9 +444,24 @@ def test_official_context_compacts_marked_heading_and_bullet_blocks() -> None:
     assert context["sections"][0] == {
         "text": "추진 배경 및 경위임",
         "items": [
-            {"label": "가", "text": "첫 번째 확인사항임"},
-            {"label": "나", "text": "두 번째 확인사항임"},
-            {"label": "다", "text": "참고: 외부 공유 금지임"},
+            {
+                "label": "가",
+                "text": "첫 번째 확인사항임",
+                "level": 0,
+                "role": "bullet",
+            },
+            {
+                "label": "",
+                "text": "두 번째 확인사항임",
+                "level": 1,
+                "role": "bullet",
+            },
+            {
+                "label": "",
+                "text": "참고: 외부 공유 금지임",
+                "level": 0,
+                "role": "note",
+            },
         ],
     }
     assert context["sections"][1]["text"] == "일반적인 설명 문장입니다."

@@ -41,7 +41,7 @@
       <div>
         <h3>{{ section.text }}</h3>
         {% if section["items"] %}
-        <dl>{% for item in section["items"] %}<div><dt>{{ item.label }}.</dt><dd>{{ item.text }}</dd></div>{% endfor %}</dl>
+        <dl>{% for item in section["items"] %}<div class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em"><dt>{% if item.label %}{{ item.label }}.{% endif %}</dt><dd>{{ item.text }}</dd></div>{% endfor %}</dl>
         {% endif %}
       </div>
     </article>

@@ -480,20 +480,6 @@ def source_text_atoms(
     return tuple(atom for atom in atoms if atom.strip())
 
 
-def _list_items(items: list[str]) -> list[dict[str, str]]:
-    return [
-        {
-            "label": (
-                _LIST_LABELS[index]
-                if index < len(_LIST_LABELS)
-                else str(index + 1)
-            ),
-            "text": item,
-        }
-        for index, item in enumerate(items)
-    ]
-
-
 # LLM이 목록 계층을 표현하려고 붙이는 표기다. 구조화 계약의 ``kind``가
 # 이미 목록/제목 역할을 가지고 있으므로 PDF 표시 단계에서는 중복 표기를
 # 제거한다. 본문 중간의 하이픈·괄호·날짜 구분자는 보존하고 줄 시작만
@@ -503,6 +489,21 @@ _PRESENTATION_MARKER_RE = re.compile(
 )
 _PRESENTATION_NOTE_MARKER_RE = re.compile(r"^\s*※\s*")
 _PRESENTATION_HEADING_MARKER_RE = re.compile(r"^\s*[□■◆◇▣]\s*")
+_PRESENTATION_CHILD_MARKER_RE = re.compile(r"^\s*[-–—]\s*")
+
+
+def _presentation_plain_text(value: str) -> str:
+    """의미를 바꾸지 않는 표시용 유니코드·공백 정리만 적용한다."""
+
+    text = unicodedata.normalize("NFKC", str(value))
+    text = "".join(
+        character
+        for character in text
+        if unicodedata.category(character) not in {"Cc", "Cf"}
+        or character in "\n\t"
+    )
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _presentation_text(value: str) -> str:
@@ -513,20 +514,222 @@ def _presentation_text(value: str) -> str:
     바꾼다. 이 함수는 원본 계약 객체가 아닌 템플릿 context에만 적용된다.
     """
 
-    text = unicodedata.normalize("NFKC", str(value))
-    text = "".join(
-        character
-        for character in text
-        if unicodedata.category(character) not in {"Cc", "Cf"}
-        or character in "\n\t"
-    )
+    text = _presentation_plain_text(value)
     note = bool(_PRESENTATION_NOTE_MARKER_RE.match(text))
     text = _PRESENTATION_MARKER_RE.sub("", text, count=1)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if note and text:
         text = f"참고: {text}"
     return text
+
+
+def _presentation_list_item(
+    value: str,
+    *,
+    normalize: bool = True,
+) -> dict[str, str | int]:
+    """목록 기호를 템플릿용 계층 정보로 바꾼다.
+
+    ``BulletListBlock``은 평면 문자열 배열이라 원본 계약에는 들여쓰기 필드가
+    없다. LLM이 쓴 줄 시작 ``-``만 표시 단계의 하위 항목으로 해석한다. 원문은
+    바꾸지 않고, 템플릿이 자체 불릿과 들여쓰기를 그릴 수 있게 한다.
+    """
+
+    if not normalize:
+        return {"text": str(value), "level": 0, "role": "bullet"}
+
+    text = _presentation_plain_text(value)
+    if _PRESENTATION_NOTE_MARKER_RE.match(text):
+        text = _PRESENTATION_NOTE_MARKER_RE.sub("", text, count=1).strip()
+        return {
+            "text": f"참고: {text}" if text else "참고:",
+            "level": 0,
+            "role": "note",
+        }
+    if _PRESENTATION_CHILD_MARKER_RE.match(text):
+        return {
+            "text": _PRESENTATION_CHILD_MARKER_RE.sub("", text, count=1).strip(),
+            "level": 1,
+            "role": "bullet",
+        }
+    return {
+        "text": _PRESENTATION_MARKER_RE.sub("", text, count=1).strip(),
+        "level": 0,
+        "role": "bullet",
+    }
+
+
+def _presentation_list_items(
+    items: list[str],
+    *,
+    normalize: bool = True,
+) -> list[dict[str, str | int]]:
+    return [
+        _presentation_list_item(item, normalize=normalize)
+        for item in items
+    ]
+
+
+def _presentation_item_text(item: Mapping[str, object] | str) -> str:
+    if isinstance(item, Mapping):
+        return str(item.get("text") or "")
+    return str(item)
+
+
+def _list_items(
+    items: list[Mapping[str, object] | str],
+) -> list[dict[str, str | int]]:
+    """공문 템플릿용 목록 label과 표시 계층을 함께 만든다."""
+
+    result: list[dict[str, str | int]] = []
+    top_level_index = 0
+    for item in items:
+        text = _presentation_item_text(item)
+        level = (
+            int(item.get("level") or 0)
+            if isinstance(item, Mapping)
+            else 0
+        )
+        role = (
+            str(item.get("role") or "bullet")
+            if isinstance(item, Mapping)
+            else "bullet"
+        )
+        label = ""
+        if level == 0 and role == "bullet":
+            label = (
+                _LIST_LABELS[top_level_index]
+                if top_level_index < len(_LIST_LABELS)
+                else str(top_level_index + 1)
+            )
+            top_level_index += 1
+        result.append(
+            {
+                "label": label,
+                "text": text,
+                "level": level,
+                "role": role,
+            }
+        )
+    return result
+
+
+def _presentation_block_dict(
+    block: GeneratedBlock,
+    *,
+    normalize: bool = True,
+) -> dict[str, Any]:
+    """원본 block을 유지한 채 템플릿에만 줄 표시 규칙을 적용한다."""
+
+    rendered = block.model_dump(mode="json")
+    if not normalize:
+        # 모든 전용 템플릿은 목록을 ``text/level/role`` 형태로 받는다.
+        # 정규화를 끈 경로에서는 원문 문자열을 보존하되 템플릿 자료형만
+        # 일관되게 맞춘다.
+        if isinstance(block, BulletListBlock):
+            rendered["items"] = _presentation_list_items(
+                list(block.items),
+                normalize=False,
+            )
+        return rendered
+    if isinstance(block, ParagraphBlock):
+        rendered["text"] = _presentation_text(block.text)
+    elif isinstance(block, KeyValueBlock):
+        rendered["entries"] = [
+            {
+                "key": _presentation_plain_text(entry.key),
+                "value": _presentation_plain_text(entry.value),
+            }
+            for entry in block.entries
+        ]
+    elif isinstance(block, BulletListBlock):
+        rendered["items"] = _presentation_list_items(list(block.items))
+    elif isinstance(block, TableBlock):
+        rendered["columns"] = [
+            _presentation_plain_text(value) for value in block.columns
+        ]
+        rendered["rows"] = [
+            [_presentation_plain_text(value) for value in row]
+            for row in block.rows
+        ]
+    elif isinstance(block, AttachmentReferenceBlock):
+        rendered["attachment_id"] = _presentation_plain_text(block.attachment_id)
+        rendered["label"] = _presentation_plain_text(block.label)
+        rendered["description"] = (
+            _presentation_plain_text(block.description)
+            if block.description
+            else None
+        )
+    else:
+        raise TypeError(f"Unsupported generated block: {type(block)!r}")
+    return rendered
+
+
+def _presentation_blocks(
+    blocks: list[GeneratedBlock],
+    *,
+    normalize: bool = True,
+) -> list[dict[str, Any]]:
+    return [
+        _presentation_block_dict(block, normalize=normalize)
+        for block in blocks
+    ]
+
+
+def _presentation_source_text_atoms(
+    document: GeneratedDocumentContract,
+    *,
+    include_administrative_event_dates: bool = False,
+) -> tuple[str, ...]:
+    """표시용 context와 같은 변환을 거친 PDF 검증 단위를 반환한다."""
+
+    atoms: list[str] = [
+        _presentation_plain_text(document.agency_name)
+    ] if document.agency_name else []
+    for block in document.blocks:
+        if isinstance(block, ParagraphBlock):
+            atoms.append(_presentation_text(block.text))
+        elif isinstance(block, KeyValueBlock):
+            for entry in block.entries:
+                atoms.extend(
+                    (
+                        _presentation_plain_text(entry.key),
+                        _presentation_plain_text(entry.value),
+                    )
+                )
+        elif isinstance(block, BulletListBlock):
+            atoms.extend(
+                _presentation_item_text(item)
+                for item in _presentation_list_items(list(block.items))
+            )
+        elif isinstance(block, TableBlock):
+            atoms.extend(_presentation_plain_text(value) for value in block.columns)
+            for row in block.rows:
+                atoms.extend(_presentation_plain_text(value) for value in row)
+        elif isinstance(block, AttachmentReferenceBlock):
+            atoms.extend(
+                (
+                    _presentation_plain_text(block.attachment_id),
+                    _presentation_plain_text(block.label),
+                )
+            )
+            if block.description:
+                atoms.append(_presentation_plain_text(block.description))
+        else:
+            raise TypeError(f"Unsupported generated block: {type(block)!r}")
+    metadata = document.document_metadata
+    if metadata and metadata.approval_line:
+        for slot in metadata.approval_line.slots:
+            atoms.append(_presentation_plain_text(slot.role))
+            if slot.name:
+                atoms.append(_presentation_plain_text(slot.name))
+            if slot.approved_at:
+                atoms.append(slot.approved_at.isoformat())
+    if metadata:
+        for event in metadata.administrative_events:
+            if include_administrative_event_dates:
+                atoms.append(event.date.isoformat())
+            atoms.append(_presentation_plain_text(event.text))
+    return tuple(atom for atom in atoms if atom.strip())
 
 
 def _is_presentation_heading(
@@ -571,7 +774,10 @@ def _presentation_groups(
                 "items": (
                     []
                     if isinstance(block, ParagraphBlock)
-                    else list(block.items)
+                    else _presentation_list_items(
+                        list(block.items),
+                        normalize=False,
+                    )
                 ),
             }
             for block in blocks
@@ -592,9 +798,7 @@ def _presentation_groups(
                         "kind": "section",
                         "block_id": block.block_id,
                         "text": text,
-                        "items": [
-                            _presentation_text(item) for item in following.items
-                        ],
+                        "items": _presentation_list_items(list(following.items)),
                     }
                 )
                 index += 2
@@ -613,7 +817,7 @@ def _presentation_groups(
                     "kind": "bullet_list",
                     "block_id": block.block_id,
                     "text": "",
-                    "items": [_presentation_text(item) for item in block.items],
+                    "items": _presentation_list_items(list(block.items)),
                 }
             )
         index += 1
@@ -632,7 +836,7 @@ def _presentation_source_blocks(
     """
 
     if not normalize:
-        return [block.model_dump(mode="json") for block in blocks]
+        return _presentation_blocks(blocks, normalize=False)
 
     output: list[dict[str, Any]] = []
     index = 0
@@ -644,7 +848,10 @@ def _presentation_source_blocks(
         ):
             assert isinstance(following, BulletListBlock)
             lines = [_presentation_text(block.text)]
-            lines.extend(_presentation_text(item) for item in following.items)
+            lines.extend(
+                _presentation_item_text(item)
+                for item in _presentation_list_items(list(following.items))
+            )
             output.append(
                 {
                     "kind": "paragraph",
@@ -669,8 +876,8 @@ def _presentation_source_blocks(
                     "block_id": block.block_id,
                     "entries": [
                         {
-                            "key": _presentation_text(entry.key),
-                            "value": _presentation_text(entry.value),
+                            "key": _presentation_plain_text(entry.key),
+                            "value": _presentation_plain_text(entry.value),
                         }
                         for entry in block.entries
                     ],
@@ -681,7 +888,7 @@ def _presentation_source_blocks(
                 {
                     "kind": "bullet_list",
                     "block_id": block.block_id,
-                    "items": [_presentation_text(item) for item in block.items],
+                    "items": _presentation_list_items(list(block.items)),
                 }
             )
         elif isinstance(block, TableBlock):
@@ -689,9 +896,11 @@ def _presentation_source_blocks(
                 {
                     "kind": "table",
                     "block_id": block.block_id,
-                    "columns": [_presentation_text(value) for value in block.columns],
+                    "columns": [
+                        _presentation_plain_text(value) for value in block.columns
+                    ],
                     "rows": [
-                        [_presentation_text(value) for value in row]
+                        [_presentation_plain_text(value) for value in row]
                         for row in block.rows
                     ],
                 }
@@ -701,10 +910,10 @@ def _presentation_source_blocks(
                 {
                     "kind": "attachment_reference",
                     "block_id": block.block_id,
-                    "attachment_id": block.attachment_id,
-                    "label": _presentation_text(block.label),
+                    "attachment_id": _presentation_plain_text(block.attachment_id),
+                    "label": _presentation_plain_text(block.label),
                     "description": (
-                        _presentation_text(block.description)
+                        _presentation_plain_text(block.description)
                         if block.description
                         else None
                     ),
@@ -863,7 +1072,9 @@ def build_template_context(
     """구조화 blocks를 기존 공문 템플릿 공통 context로 변환한다."""
 
     document = envelope.result.generated_document
-    display_text = _presentation_text if presentation_normalization else str
+    display_text = (
+        _presentation_plain_text if presentation_normalization else str
+    )
     groups = _presentation_groups(
         document.blocks,
         normalize=presentation_normalization,
@@ -896,7 +1107,13 @@ def build_template_context(
             )
             long_sections.append(
                 {"title": text, "items": items} if items else
-                {"title": "", "items": [text]}
+                {
+                    "title": "",
+                    "items": _presentation_list_items(
+                        [text],
+                        normalize=False,
+                    ),
+                }
             )
             checklist_items.append(
                 {
@@ -909,7 +1126,7 @@ def build_template_context(
             checklist_items.extend(
                 {
                     "group": "목록",
-                    "text": item,
+                    "text": _presentation_item_text(item),
                     "owner": "",
                     "status": "",
                 }
@@ -922,7 +1139,7 @@ def build_template_context(
             checklist_items.extend(
                 {
                     "group": "목록",
-                    "text": item,
+                    "text": _presentation_item_text(item),
                     "owner": "",
                     "status": "",
                 }
@@ -1001,13 +1218,21 @@ def build_template_context(
                 long_sections.append(
                     {
                         "title": " / ".join(normalized_columns),
-                        "items": flattened_rows,
+                        "items": _presentation_list_items(flattened_rows),
                     }
                 )
 
     for event in metadata_context["administrative_events"]:
         sections.append({"text": event["text"], "items": []})
-        long_sections.append({"title": "", "items": [event["text"]]})
+        long_sections.append(
+            {
+                "title": "",
+                "items": _presentation_list_items(
+                    [event["text"]],
+                    normalize=False,
+                ),
+            }
+        )
         checklist_items.append(
             {
                 "group": "행정 처리",
@@ -1032,6 +1257,8 @@ def build_template_context(
                     {
                         "label": str(item["label"]),
                         "text": _preview_text(str(item["text"]), limit=180),
+                        "level": int(item.get("level") or 0),
+                        "role": str(item.get("role") or "bullet"),
                     }
                     for item in section["items"][:4]
                 ],
@@ -1042,7 +1269,13 @@ def build_template_context(
             {
                 "title": _preview_text(str(section["title"]), limit=80),
                 "items": [
-                    _preview_text(str(item), limit=220)
+                        {
+                            **item,
+                            "text": _preview_text(
+                                _presentation_item_text(item),
+                                limit=220,
+                            ),
+                        }
                     for item in section["items"][:4]
                 ],
             }
@@ -1130,20 +1363,21 @@ def build_research_report_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """입력 block 순서를 보존한 연구보고서 전용 context를 만든다."""
 
     document = envelope.result.generated_document
-    ordered_blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    ordered_blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, ordered_blocks, strict=True):
         if isinstance(block, TableBlock):
             rendered["column_count"] = len(block.columns)
             rendered["is_wide"] = len(block.columns) >= 8
         else:
             rendered["is_wide"] = False
-        ordered_blocks.append(rendered)
-
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
     metadata_context = _build_document_metadata_context(
         envelope,
@@ -1159,9 +1393,9 @@ def build_research_report_context(
 
     return {
         "document_type_label": "연구보고서",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],
@@ -1173,6 +1407,7 @@ def build_press_release_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """입력 순서를 보존해 보도자료 전용 context를 만든다."""
 
@@ -1183,9 +1418,11 @@ def build_press_release_context(
         seed=resolved_seed,
     )
 
-    ordered_blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    ordered_blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, ordered_blocks, strict=True):
         rendered["is_lead"] = False
         rendered["is_summary"] = False
         rendered["is_footer_details"] = False
@@ -1197,8 +1434,6 @@ def build_press_release_context(
             )
         else:
             rendered["is_wide"] = False
-        ordered_blocks.append(rendered)
-
     header_meta: dict[str, Any] | None = None
     if ordered_blocks and ordered_blocks[0]["kind"] == "key_value":
         header_meta = ordered_blocks.pop(0)
@@ -1278,9 +1513,9 @@ def build_press_release_context(
 
     return {
         "document_type_label": "보도자료",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "header_meta": header_meta,
         "render_items": render_items,
         "signers": metadata_context["signers"],
@@ -1293,6 +1528,7 @@ def build_administrative_rule_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """행정규칙 block 순서를 유지한 렌더링 context를 만든다."""
 
@@ -1306,10 +1542,14 @@ def build_administrative_rule_context(
 
     blocks: list[dict[str, Any]] = []
     for block in document.blocks:
+        rendered = _presentation_block_dict(
+            block,
+            normalize=presentation_normalization,
+        )
         if isinstance(block, ParagraphBlock):
             style_class = ""
             label = ""
-            content = block.text
+            content = str(rendered["text"])
             article_match = _ARTICLE_RE.match(block.text)
             if _CHAPTER_RE.match(block.text):
                 style_class = "is-chapter"
@@ -1328,53 +1568,21 @@ def build_administrative_rule_context(
                     "content": content,
                 }
             )
-        elif isinstance(block, KeyValueBlock):
-            blocks.append(
-                {
-                    "kind": block.kind,
-                    "block_id": block.block_id,
-                    "entries": [
-                        {"key": entry.key, "value": entry.value}
-                        for entry in block.entries
-                    ],
-                }
-            )
-        elif isinstance(block, BulletListBlock):
-            blocks.append(
-                {
-                    "kind": block.kind,
-                    "block_id": block.block_id,
-                    "items": list(block.items),
-                }
-            )
-        elif isinstance(block, TableBlock):
-            blocks.append(
-                {
-                    "kind": block.kind,
-                    "block_id": block.block_id,
-                    "columns": list(block.columns),
-                    "rows": [list(row) for row in block.rows],
-                    "is_wide": len(block.columns) >= 7,
-                }
-            )
-        elif isinstance(block, AttachmentReferenceBlock):
-            blocks.append(
-                {
-                    "kind": block.kind,
-                    "block_id": block.block_id,
-                    "attachment_id": block.attachment_id,
-                    "label": block.label,
-                    "description": block.description or "",
-                }
-            )
+        elif isinstance(
+            block,
+            (KeyValueBlock, BulletListBlock, TableBlock, AttachmentReferenceBlock),
+        ):
+            if isinstance(block, TableBlock):
+                rendered["is_wide"] = len(block.columns) >= 7
+            blocks.append(rendered)
         else:
             raise TypeError(f"Unsupported generated block: {type(block)!r}")
 
     metadata_context = build_template_context(envelope, seed=seed)
     return {
         "document_type_label": _ADMINISTRATIVE_RULE_LABELS[document_type],
-        "title": document.title,
-        "agency_name": document.agency_name or "",
+        "title": _presentation_plain_text(document.title),
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1385,17 +1593,19 @@ def build_interpretation_compilation_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """공문과 같은 5종 block을 순서 그대로 질의회시집 context로 만든다."""
 
     document = envelope.result.generated_document
-    blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, blocks, strict=True):
         rendered["is_wide"] = (
             isinstance(block, TableBlock) and len(block.columns) >= 7
         )
-        blocks.append(rendered)
 
     metadata_context = build_template_context(envelope, seed=seed)
     title_length = len(re.sub(r"\s+", "", document.title))
@@ -1408,9 +1618,9 @@ def build_interpretation_compilation_context(
 
     return {
         "document_type_label": "질의회시집",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1421,17 +1631,19 @@ def build_guide_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """공문과 같은 5종 block을 순서 그대로 guide context로 만든다."""
 
     document = envelope.result.generated_document
-    blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, blocks, strict=True):
         rendered["is_wide"] = (
             isinstance(block, TableBlock) and len(block.columns) >= 7
         )
-        blocks.append(rendered)
 
     metadata_context = build_template_context(envelope, seed=seed)
     title_length = len(re.sub(r"\s+", "", document.title))
@@ -1444,9 +1656,9 @@ def build_guide_context(
 
     return {
         "document_type_label": "GUIDE",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": blocks,
         "signers": metadata_context["signers"],
         "administrative_events": metadata_context["administrative_events"],
@@ -1457,19 +1669,21 @@ def build_status_report_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """공문과 같은 5종 block을 순서 그대로 현황보고 context로 만든다."""
 
     document = envelope.result.generated_document
-    ordered_blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    ordered_blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, ordered_blocks, strict=True):
         if isinstance(block, TableBlock):
             rendered["column_count"] = len(block.columns)
             rendered["is_wide"] = len(block.columns) >= 7
         else:
             rendered["is_wide"] = False
-        ordered_blocks.append(rendered)
 
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
     metadata_context = _build_document_metadata_context(
@@ -1486,9 +1700,9 @@ def build_status_report_context(
 
     return {
         "document_type_label": "현황·통계자료",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],
@@ -1500,19 +1714,21 @@ def build_meeting_minutes_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """공통 5종 block을 순서 그대로 독립 회의록 context로 만든다."""
 
     document = envelope.result.generated_document
-    ordered_blocks: list[dict[str, Any]] = []
-    for block in document.blocks:
-        rendered = block.model_dump(mode="json")
+    ordered_blocks = _presentation_blocks(
+        document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(document.blocks, ordered_blocks, strict=True):
         if isinstance(block, TableBlock):
             rendered["column_count"] = len(block.columns)
             rendered["is_wide"] = len(block.columns) >= 7
         else:
             rendered["is_wide"] = False
-        ordered_blocks.append(rendered)
 
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
     metadata_context = _build_document_metadata_context(
@@ -1529,9 +1745,9 @@ def build_meeting_minutes_context(
 
     return {
         "document_type_label": "회의록",
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "has_wide_blocks": any(
             block["is_wide"]
@@ -1547,6 +1763,7 @@ def build_notice_context(
     envelope: GenerationEnvelope,
     *,
     seed: int | None = None,
+    presentation_normalization: bool = True,
 ) -> dict[str, Any]:
     """입력 block 순서와 값만 보존한 공고 계열 전용 context를 만든다."""
 
@@ -1561,12 +1778,17 @@ def build_notice_context(
             + ", ".join(sorted(_NOTICE_DOCUMENT_TYPES))
         )
 
-    ordered_blocks: list[dict[str, Any]] = []
-    for block in envelope.result.generated_document.blocks:
-        rendered = block.model_dump(mode="json")
+    ordered_blocks = _presentation_blocks(
+        envelope.result.generated_document.blocks,
+        normalize=presentation_normalization,
+    )
+    for block, rendered in zip(
+        envelope.result.generated_document.blocks,
+        ordered_blocks,
+        strict=True,
+    ):
         if isinstance(block, TableBlock):
             rendered["column_count"] = len(block.columns)
-        ordered_blocks.append(rendered)
 
     document = envelope.result.generated_document
     resolved_seed = seed if seed is not None else _deterministic_seed(envelope)
@@ -1584,9 +1806,9 @@ def build_notice_context(
 
     return {
         "document_type_label": _NOTICE_DOCUMENT_TYPE_LABELS[document_type],
-        "title": document.title,
+        "title": _presentation_plain_text(document.title),
         "title_class": title_class,
-        "agency_name": document.agency_name or "",
+        "agency_name": _presentation_plain_text(document.agency_name or ""),
         "blocks": ordered_blocks,
         "signers": metadata_context["signers"],
         "approval_manifest": metadata_context["approval_manifest"],
@@ -1637,6 +1859,12 @@ def render_generation_payload(
         renderer_family = "verbatim"
     else:
         renderer_family = renderer_family_for_document_type(document_type)
+    # 원본 payload는 손대지 않는다. 완전 생성 문서만 표시용 계층 정보를
+    # 만들어 템플릿에 넘긴다. mask_restoration은 원문 보존 경로라 제외한다.
+    display_normalization = bool(
+        presentation_normalization
+        and envelope.result.generation_route == "fully_synthetic"
+    )
     input_metadata = {
         "contract_version": envelope.result.contract_version,
         "document_type": document_type,
@@ -1662,8 +1890,12 @@ def render_generation_payload(
         ]
         presentation_normalized = False
     elif document_type == "research_report":
-        presentation_normalized = False
-        context = build_research_report_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_research_report_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_research_report_variations(
             context,
             output_dir,
@@ -1676,8 +1908,12 @@ def render_generation_payload(
             input_metadata=input_metadata,
         )
     elif document_type == "press_release":
-        presentation_normalized = False
-        context = build_press_release_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_press_release_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_press_release_variations(
             context,
             output_dir,
@@ -1690,8 +1926,12 @@ def render_generation_payload(
             input_metadata=input_metadata,
         )
     elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
-        presentation_normalized = False
-        context = build_administrative_rule_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_administrative_rule_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_administrative_rule_variations(
             context,
             output_dir,
@@ -1703,8 +1943,12 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type_enum == SemanticDocumentType.INTERPRETATION_COMPILATION:
-        presentation_normalized = False
-        context = build_interpretation_compilation_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_interpretation_compilation_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_interpretation_compilation_variations(
             context,
             output_dir,
@@ -1716,8 +1960,12 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type_enum == SemanticDocumentType.GUIDE:
-        presentation_normalized = False
-        context = build_guide_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_guide_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_guide_variations(
             context,
             output_dir,
@@ -1729,8 +1977,12 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
     elif document_type == "status_report":
-        presentation_normalized = False
-        context = build_status_report_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_status_report_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_status_report_variations(
             context,
             output_dir,
@@ -1743,8 +1995,12 @@ def render_generation_payload(
             input_metadata=input_metadata,
         )
     elif document_type == "meeting_minutes":
-        presentation_normalized = False
-        context = build_meeting_minutes_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_meeting_minutes_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_meeting_minutes_variations(
             context,
             output_dir,
@@ -1757,8 +2013,12 @@ def render_generation_payload(
             input_metadata=input_metadata,
         )
     elif document_type in _NOTICE_DOCUMENT_TYPES:
-        presentation_normalized = False
-        context = build_notice_context(envelope, seed=seed)
+        presentation_normalized = display_normalization
+        context = build_notice_context(
+            envelope,
+            seed=seed,
+            presentation_normalization=display_normalization,
+        )
         manifest = render_notice_variations(
             context,
             output_dir,
@@ -1771,11 +2031,11 @@ def render_generation_payload(
             input_metadata=input_metadata,
         )
     else:
-        presentation_normalized = presentation_normalization
+        presentation_normalized = display_normalization
         context = build_template_context(
             envelope,
             seed=seed,
-            presentation_normalization=presentation_normalization,
+            presentation_normalization=display_normalization,
         )
         manifest = render_official_document_variations(
             context,
@@ -1798,16 +2058,20 @@ def render_generation_payload(
         "research_report",
         "status_report",
     }
-    source_atoms = source_text_atoms(
-        document,
-        include_administrative_event_dates=include_administrative_event_dates,
-    )
     if presentation_normalized:
+        source_atoms = _presentation_source_text_atoms(
+            document,
+            include_administrative_event_dates=include_administrative_event_dates,
+        )
         required_source_texts = (
-            _presentation_text(document.title),
-            *(_presentation_text(value) for value in source_atoms),
+            _presentation_plain_text(document.title),
+            *source_atoms,
         )
     else:
+        source_atoms = source_text_atoms(
+            document,
+            include_administrative_event_dates=include_administrative_event_dates,
+        )
         required_source_texts = (document.title, *source_atoms)
     try:
         finalize_manifest_page_limits(

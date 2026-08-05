@@ -162,6 +162,76 @@ def test_meeting_context_preserves_blocks_without_inventing_metadata() -> None:
     assert context["administrative_events"] == []
 
 
+def test_meeting_context_normalizes_presentation_markers_only_for_display() -> None:
+    payload = _payload()
+    payload["result"]["generated_document"]["blocks"] = [
+        {
+            "kind": "paragraph",
+            "block_id": "heading",
+            "text": "□ 논의 사항",
+        },
+        {
+            "kind": "bullet_list",
+            "block_id": "items",
+            "items": ["○ 상위 항목", "- 하위 항목", "※ 유의 사항"],
+        },
+    ]
+    payload["result"]["generated_document"]["body_text"] = None
+
+    envelope = parse_generation_payload(payload)
+    context = build_meeting_minutes_context(envelope, seed=731)
+
+    assert envelope.result.generated_document.blocks[0].text == "□ 논의 사항"
+    assert envelope.result.generated_document.blocks[1].items == [
+        "○ 상위 항목",
+        "- 하위 항목",
+        "※ 유의 사항",
+    ]
+    assert context["blocks"][0]["text"] == "논의 사항"
+    assert context["blocks"][1]["items"] == [
+        {"text": "상위 항목", "level": 0, "role": "bullet"},
+        {"text": "하위 항목", "level": 1, "role": "bullet"},
+        {"text": "참고: 유의 사항", "level": 0, "role": "note"},
+    ]
+
+
+def test_meeting_renderer_applies_normalized_presentation_markers(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    payload["result"]["generated_document"]["blocks"] = [
+        {
+            "kind": "paragraph",
+            "block_id": "heading",
+            "text": "□ 논의 사항",
+        },
+        {
+            "kind": "bullet_list",
+            "block_id": "items",
+            "items": ["○ 상위 항목", "- 하위 항목", "※ 유의 사항"],
+        },
+    ]
+    payload["result"]["generated_document"]["body_text"] = None
+
+    manifest = render_generation_payload(
+        payload,
+        tmp_path,
+        template_slugs={"meeting_01_registry"},
+    )
+
+    pdf_path = Path(str(manifest[0]["pdf"]))
+    html = Path(str(manifest[0]["html"])).read_text(encoding="utf-8")
+    rendered_text = _pdf_text(pdf_path)
+
+    assert payload["result"]["generated_document"]["blocks"][0]["text"] == (
+        "□ 논의 사항"
+    )
+    assert "level-1" in html
+    assert all(marker not in html for marker in ("□", "○", "※"))
+    assert all(marker not in rendered_text for marker in ("□", "○", "※"))
+    assert "참고: 유의 사항" in rendered_text
+
+
 def test_meeting_context_preserves_optional_declared_metadata() -> None:
     payload = _payload()
     payload["result"]["generated_document"]["document_metadata"] = {
