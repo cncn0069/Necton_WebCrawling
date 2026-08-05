@@ -28,7 +28,7 @@
         <p>{{ section.text }}</p>
         {% if section["items"] %}
         <ol>
-          {% for item in section["items"] %}<li><span>{{ item.label }}.</span> {{ item.text }}</li>{% endfor %}
+          {% for item in section["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{% if item.label %}<span>{{ item.label }}.</span>{% endif %} {{ item.text }}</li>{% endfor %}
         </ol>
         {% endif %}
       </li>

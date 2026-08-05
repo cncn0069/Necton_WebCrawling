@@ -91,17 +91,70 @@
 .pagination-administrative-events p { margin: 0 0 2mm; }
 .pagination-administrative-events time { color: #666; margin-right: 4mm; }
 
-/* long_form의 고정 2페이지 본문 그리드는 장문을 분할하지 못한다. 장문 모드에서는
-   표지·요약만 미리보기로 남기고, 원문은 아래 연속 본문에서 한 번에 흘린다. */
-.pagination-preview.theme-long-form .long-body { display: none; }
-
-/* field_report의 고정 1페이지 그리드는 장문 block을 축약 카드·표로 다시
-   배치하면서 서로 겹칠 수 있다. 장문 모드에서는 첫 장을 표지로 남기고,
-   원문 block은 다음 페이지의 연속 본문에서만 한 번 흐르게 한다. */
+/* 장문 공문은 첫 장을 해당 서식의 표지로만 쓴다. 원문 blocks는 아래 연속
+   본문에서 단 한 번 출력한다. 고정 레이아웃의 미리보기와 연속본문을 함께
+   출력하면 제목, 표, 문단이 중복되고 페이지 경계도 깨진다. */
+.pagination-preview.theme-classic .classic-body,
+.pagination-preview.theme-classic .classic-issuer,
+.pagination-preview.theme-classic .classic-approval,
+.pagination-preview.theme-classic .classic-footer,
+.pagination-preview.theme-banner .banner-routing,
+.pagination-preview.theme-banner .banner-lead,
+.pagination-preview.theme-banner .banner-content,
+.pagination-preview.theme-banner .banner-table,
+.pagination-preview.theme-banner .banner-signoff,
+.pagination-preview.theme-banner .banner-footer,
+.pagination-preview.theme-approval .approval-body,
+.pagination-preview.theme-approval .approval-data,
+.pagination-preview.theme-approval .approval-attachments,
+.pagination-preview.theme-approval .approval-recipients,
+.pagination-preview.theme-approval .approval-footer,
+.pagination-preview.theme-proclamation .proclamation-routing,
+.pagination-preview.theme-proclamation .proclamation-intro,
+.pagination-preview.theme-proclamation .proclamation-body,
+.pagination-preview.theme-proclamation .proclamation-facts,
+.pagination-preview.theme-proclamation .proclamation-table,
+.pagination-preview.theme-proclamation .proclamation-ending,
+.pagination-preview.theme-proclamation .proclamation-signers,
+.pagination-preview.theme-proclamation .proclamation-footer,
 .pagination-preview.theme-sidebar .sidebar-main > header p,
 .pagination-preview.theme-sidebar .sidebar-sections,
 .pagination-preview.theme-sidebar .sidebar-facts,
 .pagination-preview.theme-sidebar .sidebar-table,
-.pagination-preview.theme-sidebar .sidebar-bottom {
+.pagination-preview.theme-sidebar .sidebar-bottom,
+.pagination-preview.theme-modular .modular-routing,
+.pagination-preview.theme-modular .modular-lead,
+.pagination-preview.theme-modular .modular-grid,
+.pagination-preview.theme-modular .modular-table-card,
+.pagination-preview.theme-modular .modular-ending,
+.pagination-preview.theme-modular .modular-signers,
+.pagination-preview.theme-modular .modular-footer,
+.pagination-preview.theme-monochrome .monochrome-body,
+.pagination-preview.theme-monochrome .monochrome-issuer,
+.pagination-preview.theme-monochrome .monochrome-approval,
+.pagination-preview.theme-monochrome .monochrome-footer,
+.pagination-preview.theme-table-report .table-report-intro,
+.pagination-preview.theme-table-report .table-report-primary,
+.pagination-preview.theme-table-report .table-report-summary,
+.pagination-preview.theme-table-report .table-report-notes,
+.pagination-preview.theme-table-report .table-report-ending,
+.pagination-preview.theme-table-report .table-report-signers,
+.pagination-preview.theme-table-report .table-report-footer,
+.pagination-preview.theme-long-form .long-body,
+.pagination-preview.theme-long-form .long-facts,
+.pagination-preview.theme-long-form .long-page-second,
+.pagination-preview.theme-checklist .checklist-meta,
+.pagination-preview.theme-checklist .checklist-guide,
+.pagination-preview.theme-checklist .checklist-table,
+.pagination-preview.theme-checklist .checklist-summary,
+.pagination-preview.theme-checklist .checklist-approval,
+.pagination-preview.theme-checklist .checklist-ending,
+.pagination-preview.theme-checklist .checklist-footer {
+  display: none;
+}
+
+.pagination-preview.theme-approval .approval-title > p,
+.pagination-preview.theme-long-form .long-title > p,
+.pagination-preview.theme-checklist .checklist-title > p {
   display: none;
 }

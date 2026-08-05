@@ -31,7 +31,7 @@
         </dl>
         {% elif block["kind"] == "bullet_list" %}
         <ol class="rule-block bullet-list" data-block-id="{{ block["block_id"] }}">
-          {% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}
+          {% for item in block["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>{% endfor %}
         </ol>
         {% elif block["kind"] == "table" %}
         <section class="rule-block table-block{% if block["is_wide"] %} is-wide{% endif %}" data-block-id="{{ block["block_id"] }}">

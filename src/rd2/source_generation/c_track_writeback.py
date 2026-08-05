@@ -178,6 +178,56 @@ def c_track_result_envelope(
     }
 
 
+def c_track_render_envelope(
+    frame: CaseFrame,
+    document: GeneratedDocumentIR,
+    *,
+    contract_version: str | None = None,
+) -> dict[str, Any]:
+    """PDF 렌더러가 읽는 ``result`` envelope.
+
+    렌더러는 문서 IR만으로는 서식을 못 고른다 — 어떤 문서유형인지
+    (``source_classification.document_type``)와 어떤 등급 표기를 붙일지
+    (``generation_target.military_secret_grade``)가 IR 밖에 있다. 그래서 IR을
+    맨몸으로 두지 않고 그 둘을 함께 싸서 한 칸에 담는다.
+
+    ``minimal_envelope.build_generation_envelope``와 같은 모양이다. 저쪽은 원문
+    ``doc_type``(수집 코퍼스의 ``SemanticDocumentType`` 26종)을 그대로 싣지만,
+    C트랙은 물려받을 원문이 없어 **``DocumentForm`` 값을 그 이름 그대로** 싣는다.
+
+    두 축은 값이 5개만 겹치고, C트랙이 쓰는 ``legal_review``·
+    ``inspection_report``·``response_plan``·``investigation_report`` 넷은 수집
+    코퍼스에 아예 없던 유형이다. 가까운 수집 타입으로 바꿔 싣는 길도 있었지만
+    그건 관측이 아니라 추측이고, 추측한 값으로 고른 서식은 산출물만 봐서는
+    틀린 줄 모른다. 여기서는 **만든 그대로의 이름**을 넘기고, 렌더러 쪽이 그
+    값을 알게 하는 것을 택했다(2026-08-05 사용자 결정).
+
+    ``generation_target``은 ``GenerationTarget``을 그대로 dump한다. 손으로 두세
+    칸만 골라 적으면 계약이 늘어날 때 이 자리가 조용히 뒤처진다.
+    """
+
+    target = c_track_generation_target(frame)
+    dumped = document.model_dump(mode="json", exclude_computed_fields=True)
+    if contract_version:
+        dumped["contract_version"] = contract_version
+
+    return {
+        "result": {
+            "contract_version": CONTRACT_SCHEMA_VERSION,
+            "generation_route": C_TRACK_GENERATION_ROUTE.value,
+            "source_classification": {
+                "document_type": frame.document_form.value,
+                # 같은 값이지만 두 이름으로 둔다 — 이 행의 문서유형이 수집
+                # 코퍼스 타입이 아니라 생성 축의 문서형식에서 왔다는 사실이
+                # envelope 안에 남아야 한다.
+                "document_form": frame.document_form.value,
+            },
+            "generation_target": target.model_dump(mode="json", exclude_none=True),
+            "generated_document": dumped,
+        }
+    }
+
+
 def build_c_track_row(
     *,
     template: CTrackTemplate,
