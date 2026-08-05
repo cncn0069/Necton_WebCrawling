@@ -63,8 +63,13 @@ from rd2.source_generation.c_track_templates import (  # noqa: E402
     render_cot_case_section,
     render_cot_fixed_prefix,
 )
+from rd2.source_generation.c_track_writeback import (  # noqa: E402
+    build_c_track_row,
+    c_track_source_document_id,
+)
 from rd2.source_generation.contracts import CTrackCoTResponse  # noqa: E402
 from rd2.source_generation.gateway import default_openai_gateway  # noqa: E402
+from rd2.storage.db import DocumentStore  # noqa: E402
 
 
 def main() -> int:
@@ -94,7 +99,28 @@ def main() -> int:
         action="store_true",
         help="실제 LLM을 호출한다. 문서당 1회 호출이며 그대로 과금된다.",
     )
+    # 생성 직후 저장. 사후 되쓰기(writeback_c_track_to_rds)와 **같은 조립
+    # 함수**를 부르므로 어느 쪽으로 넣어도 같은 행이 된다. 기본값이 꺼짐인
+    # 이유는 프롬프트를 바꿔 가며 눈으로 보는 실행이 대부분이고, 그 산출물까지
+    # 코퍼스에 들어가면 무엇을 학습셋으로 골랐는지가 흐려지기 때문이다.
+    parser.add_argument(
+        "--save-to-db",
+        action="store_true",
+        help="생성 결과를 곧바로 documents 행으로 넣는다 (--execute 필요)",
+    )
+    parser.add_argument(
+        "--database",
+        default=None,
+        help="기본값은 .env의 MARIADB_DATABASE. 검증용은 rd2_test를 쓴다",
+    )
+    parser.add_argument("--db-host", default=None)
+    parser.add_argument("--db-port", type=int, default=None)
+    parser.add_argument("--db-user", default=None)
+    parser.add_argument("--db-password", default=None)
     args = parser.parse_args()
+
+    if args.save_to_db and not args.execute:
+        raise SystemExit("--save-to-db는 --execute와 함께 써라. 넣을 문서가 없다")
 
     if args.template:
         subclause_value, _, agency = args.template.partition("/")
@@ -183,6 +209,36 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"\n저장      : {args.out}")
+
+    if args.save_to_db:
+        row = build_c_track_row(
+            template=template,
+            frame=frame,
+            document=document,
+            seed=args.seed,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            snippets=response.confidential_snippets,
+            storage_reasoning=response.reasoning_for_storage,
+            prompt_version=C_TRACK_COT_PROMPT_VERSION,
+        )
+        store = DocumentStore(
+            host=args.db_host,
+            port=args.db_port,
+            user=args.db_user,
+            password=args.db_password,
+            database=args.database,
+        )
+        try:
+            print(f"\nDB        : {store.user}@{store.host}:{store.port}/{store.database}")
+            inserted = store.upsert(row)
+        finally:
+            store.close()
+        document_id = c_track_source_document_id(frame, seed=args.seed)
+        print(
+            f"행        : {document_id}"
+            + ("" if inserted else " (이미 있는 행이다 — 스킵)")
+        )
 
     return 0
 

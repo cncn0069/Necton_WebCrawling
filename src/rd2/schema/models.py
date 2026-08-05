@@ -135,6 +135,17 @@ class Document(BaseModel):
             "원문에서 나왔는지를 가리킨다 — 수집 문서는 None."
         ),
     )
+    batch_json: str | None = Field(
+        default=None,
+        description=(
+            "PDF 렌더에 필요한 값들을 담은 JSON (생성 문서만). 본문은 넣지 "
+            "않는다 — 같은 행의 generated_text가 이미 문서 IR을 통째로 갖고 "
+            "있어 두 칸에 같은 본문을 두면 둘이 갈라질 자리가 생긴다. 여기 "
+            "들어가는 것은 본문 밖에서 서식을 정하는 값이다: 문서형식(템플릿 "
+            "선택), 비밀등급 표기, 표제부에 찍히는 기관·부서, 그리고 어느 "
+            "템플릿·사건 프레임에서 나왔는지의 좌표."
+        ),
+    )
 
     @computed_field(description="생성 문서면 '1', 수집 문서면 '0'")
     @property

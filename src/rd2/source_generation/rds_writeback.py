@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from typing import Mapping, Sequence
 
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.source_generation.classification_taxonomy import (
@@ -33,6 +34,7 @@ from rd2.source_generation.classification_taxonomy import (
     DocumentForm,
 )
 from rd2.source_generation.contracts import (
+    ConfidentialSnippet,
     GeneratedDocumentIR,
     GenerationPlan,
     GenerationRoute,
@@ -82,6 +84,29 @@ class SourceRow:
         return f"{self.source}-{self.id}"
 
 
+@dataclass(frozen=True)
+class RowMetadata:
+    """원문 행이 **없는** 생성 경로가 직접 들고 오는 메타데이터.
+
+    C트랙(제1~4호)에는 물려받을 원문이 없다 — rd2 DB에 해당 기관 문서가 0건이라
+    seed를 뽑을 원문 자체가 없고, 기관·부서는 템플릿이 잠근 축에서 온다
+    (``c_track_templates.CaseFrame``). 그런데 ``build_generated_document``가
+    이 값들을 ``SourceRow``에서만 읽어서, 아는 기관이 ``UNKNOWN_AGENCY``로
+    떨어지고 부서는 NULL로 남았다. 모르는 값이 아니라 **통로가 없던 값**이다.
+
+    필드 이름을 ``SourceRow``와 같게 둔다. 조립 쪽이 둘을 같은 이름으로 읽으면
+    "원문에서 왔든 템플릿에서 왔든 이 칸에 들어간다"가 한 줄로 끝나고, 한쪽에만
+    있는 칸이 생기면 그게 곧 타입 오류로 드러난다.
+    """
+
+    ordering_agency: str | None = None
+    department: str | None = None
+    unit_task: str | None = None
+    production_date: date | None = None
+    subject_category: str | None = None
+    doc_type: str | None = None
+
+
 def generated_source_name(source: str) -> str:
     return f"{GENERATED_SOURCE_PREFIX}{source}"
 
@@ -126,6 +151,8 @@ def non_disclosure_reason(
     target: GenerationTarget,
     generation_route: GenerationRoute,
     assessment: SensitiveConsistencyAssessment | None = None,
+    snippets: Sequence[ConfidentialSnippet] = (),
+    storage_reasoning: str | None = None,
 ) -> str:
     """비공개 사유 + 검증기가 그렇게 판정한 근거.
 
@@ -144,6 +171,16 @@ def non_disclosure_reason(
     route와 verdict는 **문장 앞의 고정 형식**으로 둔다. 사후에
     ``WHERE non_disclosure_reason LIKE '%검증: assessed_o%'``로 근거가 약한
     행을 골라낼 수 있어야 하기 때문이다(``should_commit`` 참고).
+
+    ``snippets``·``storage_reasoning``은 C트랙 3단계 경로가 낸 3단계 산출물이다
+    (``CTrackCoTResponse``). **어느 block 때문에 비공개인지**를 여기 적는다 —
+    호 번호만으로는 "이 문서가 왜 제1호인가"에 답할 수 없고, 답할 재료는 이미
+    모델이 block을 지목해 내놓았는데 지금까지 행에 남지 않았다.
+
+    S트랙의 ``assessment``와 자리가 겹치지 않는다. 저쪽은 **검증기**가 사후에
+    매긴 판정이고 이쪽은 **생성기**가 쓰면서 지목한 자리다. 그래서 접두사도
+    ``검증 근거:``와 ``근거 block:``으로 나눈다 — 사후에 둘을 LIKE로 갈라야
+    한다.
     """
 
     parts = [_target_reason(target)]
@@ -164,6 +201,20 @@ def non_disclosure_reason(
         ]
         if quotes:
             parts.append("근거 인용: " + " | ".join(quotes))
+
+    if snippets:
+        # block_id를 앞에 세운다. 사유만 읽고도 본문의 어느 자리를 펴 봐야
+        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``generated_text``의
+        # 같은 block_id로 그대로 찾아진다.
+        parts.append(
+            "근거 block: "
+            + " | ".join(
+                f"[{snippet.block_id}] {snippet.quote[:MAX_QUOTE_CHARS]}"
+                for snippet in snippets[:MAX_EVIDENCE_QUOTES]
+            )
+        )
+    if storage_reasoning:
+        parts.append(f"저장 사유: {storage_reasoning}")
     return "\n".join(parts)
 
 
@@ -285,12 +336,17 @@ def build_generated_document(
     target: GenerationTarget | None = None,
     generation_route: GenerationRoute | None = None,
     source_row: SourceRow | None = None,
+    metadata: RowMetadata | None = None,
     fallback_source: str | None = None,
     document_form: DocumentForm | None = None,
     assessment: SensitiveConsistencyAssessment | None = None,
+    snippets: Sequence[ConfidentialSnippet] = (),
+    storage_reasoning: str | None = None,
     input_prompt: str | None = None,
     content: str | None = None,
     body_file_path: str | None = None,
+    batch_json: Mapping[str, object] | None = None,
+    store_generated_body_text: bool = True,
     document_contract_version: str | None = None,
 ) -> Document:
     """승인된 생성 문서를 ``documents`` 행으로 조립한다.
@@ -308,9 +364,18 @@ def build_generated_document(
     쓰기 때문에 기관·부서·주제분류가 바뀌지 않는다. 원문 행이 없는 로컬 파일
     입력에서는 ``fallback_source``만으로 최소 필드를 채운다.
 
+    원문이 **아예 없는** 경로(C트랙)는 ``metadata``로 같은 칸을 직접 채운다 —
+    ``RowMetadata`` 참고. ``source_row``와 함께 주는 것은 거부한다. 둘 다 값이
+    있으면 어느 쪽이 이겼는지가 산출물만 봐서는 드러나지 않고, 그 착각은 기관이
+    한 칸 어긋난 행으로 남는다.
+
     ``input_prompt``·``content``는 생성 provenance다. 주지 않으면 NULL로 남는다 —
     호출자가 프롬프트를 손에 쥐고 있지 않을 수 있고(재조립 경로), 그때 빈 문자열을
     넣으면 "프롬프트 없이 만든 문서"와 구분되지 않는다.
+
+    ``batch_json``은 PDF 렌더 입력이다. 본문을 넣지 않는다 —
+    ``generated_text``가 이미 문서 IR을 통째로 담고 있어서, 같은 본문을 두 칸에
+    두면 한쪽만 고쳐지는 자리가 생긴다. 주지 않으면 NULL로 남는다.
 
     ``body_file_path``는 렌더된 PDF 경로다. upsert가 렌더 이후인 하네스는 그 시점에
     경로를 이미 쥐고 있으므로 여기서 함께 넣고, 행을 렌더보다 먼저 넣는 최소
@@ -324,18 +389,34 @@ def build_generated_document(
     ``ref_id``는 원문 행 id다. ``source_row``가 없으면 참조할 행 자체가 없으므로
     (로컬 파일 입력) None이 된다 — 그 경우 원문 연결은 ``source_url`` 문자열의
     ``source_document_id``에만 남는다.
+
+    ``store_generated_body_text``는 생성 평문을 ``body_text``에 함께 둘지다.
+    **컬럼 규약은 "생성분은 전부 ``generated_text``, ``body_text``는 원문"**이고,
+    그 규약대로면 이 값은 False여야 한다. 기본값이 True인 것은 5~8호 경로가
+    지금까지 생성 평문을 이 칸에 넣어 왔고(기존 행이 그 상태다) 기본값을 뒤집는
+    순간 같은 컬럼에 두 규약이 섞이기 때문이다 — 어느 쪽으로 통일할지는 기존
+    행을 함께 옮기는 결정이라 사람이 정한다. 원문이 아예 없는 C트랙은 넣을
+    원문이 없으므로 False로 부르고 ``body_text``는 NULL로 남는다.
     """
+
+    if source_row is not None and metadata is not None:
+        raise ValueError("source_row와 metadata는 함께 줄 수 없다")
 
     origin_source = source_row.source if source_row is not None else fallback_source
     if not origin_source:
         raise ValueError("source_row 또는 fallback_source 중 하나는 있어야 한다")
+
+    #: 물려받을 값의 출처. 둘은 필드 이름이 같아 이 아래로는 구분이 필요 없다.
+    inherited: SourceRow | RowMetadata = (
+        source_row if source_row is not None else (metadata or RowMetadata())
+    )
 
     target, route = resolve_target_and_route(
         plan=plan,
         target=target,
         generation_route=generation_route,
     )
-    doc_type = source_row.doc_type if source_row is not None else None
+    doc_type = inherited.doc_type
     if not doc_type and document_form is not None:
         # 수집 라벨이 없으면 문서 형식을 대신 쓴다. 둘 다 문자열 컬럼이고,
         # 비워두면 파일 저장 경로(files.py)가 미분류 버킷으로 떨어진다.
@@ -343,22 +424,21 @@ def build_generated_document(
 
     return Document(
         title=document.title,
-        ordering_agency=(
-            (source_row.ordering_agency if source_row is not None else None)
-            or UNKNOWN_AGENCY
-        ),
-        department=source_row.department if source_row is not None else None,
-        unit_task=source_row.unit_task if source_row is not None else None,
-        production_date=(
-            source_row.production_date if source_row is not None else None
-        ),
+        ordering_agency=inherited.ordering_agency or UNKNOWN_AGENCY,
+        department=inherited.department,
+        unit_task=inherited.unit_task,
+        production_date=inherited.production_date,
         disclosure_status=DisclosureStatus.CLOSED,
-        subject_category=(
-            source_row.subject_category if source_row is not None else None
-        ),
-        body_text=document.body_text,
+        subject_category=inherited.subject_category,
+        body_text=document.body_text if store_generated_body_text else None,
         body_file_path=body_file_path,
-        non_disclosure_reason=non_disclosure_reason(target, route, assessment),
+        non_disclosure_reason=non_disclosure_reason(
+            target,
+            route,
+            assessment,
+            snippets=snippets,
+            storage_reasoning=storage_reasoning,
+        ),
         cso_classification=CsoClassification(target.classification.value),
         cso_sub_clause=(
             target.clause_no.value if target.clause_no is not None else None
@@ -373,4 +453,9 @@ def build_generated_document(
             document, contract_version=document_contract_version
         ),
         ref_id=source_row.id if source_row is not None else None,
+        batch_json=(
+            None
+            if batch_json is None
+            else json.dumps(dict(batch_json), ensure_ascii=False, sort_keys=True)
+        ),
     )
