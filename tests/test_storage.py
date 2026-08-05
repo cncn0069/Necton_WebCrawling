@@ -44,6 +44,127 @@ def test_upsert_stores_document(store):
     assert store.count_documents() == 1
 
 
+def test_upsert_includes_ref_id_without_touching_a_database():
+    class FakeCursor:
+        def __init__(self):
+            self.executed = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            self.executed = (sql, params)
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("unexpected rollback")
+
+    connection = FakeConnection()
+    fake_store = DocumentStore.__new__(DocumentStore)
+    fake_store._conn = connection
+
+    assert fake_store.upsert(_doc(ref_id=42)) is True
+
+    sql, params = connection.cursor_instance.executed
+    columns = sql.partition("(")[2].partition(")")[0].split(", ")
+    assert params[columns.index("ref_id")] == 42
+    assert connection.committed is True
+
+
+def test_rendered_pdf_writeback_updates_only_compatible_existing_provenance():
+    class FakeCursor:
+        def __init__(self, existing):
+            self.existing = existing
+            self.executed = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            self.executed.append((sql, params))
+
+        def fetchone(self):
+            return self.existing
+
+    class FakeConnection:
+        def __init__(self, existing):
+            self.cursor_instance = FakeCursor(existing)
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+    connection = FakeConnection((SOURCE_OPEN_GO_KR, None))
+    fake_store = DocumentStore.__new__(DocumentStore)
+    fake_store._conn = connection
+    document = _doc(ref_id=42, body_file_path="output/final.pdf")
+
+    assert fake_store.writeback_rendered_pdf(document) is True
+    assert connection.committed is True
+    assert len(connection.cursor_instance.executed) == 2
+    update_sql, update_params = connection.cursor_instance.executed[1]
+    assert "body_file_path" in update_sql
+    assert update_params == ("output/final.pdf", 42, f"{SOURCE_OPEN_GO_KR}::{document.source_url}")
+
+
+def test_rendered_pdf_writeback_rejects_conflicting_provenance():
+    class FakeCursor:
+        def __init__(self):
+            self.executed = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            self.executed.append((sql, params))
+
+        def fetchone(self):
+            return (SOURCE_OPEN_GO_KR, 99)
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+    connection = FakeConnection()
+    fake_store = DocumentStore.__new__(DocumentStore)
+    fake_store._conn = connection
+
+    assert fake_store.writeback_rendered_pdf(
+        _doc(ref_id=42, body_file_path="output/final.pdf")
+    ) is False
+    assert connection.committed is False
+    assert len(connection.cursor_instance.executed) == 1
+
+
 def test_upsert_dedup_same_source_url_skipped(store):
     assert store.upsert(_doc()) is True
     assert store.upsert(_doc()) is False  # 동일 source+URL — 중복

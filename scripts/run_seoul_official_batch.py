@@ -26,10 +26,9 @@ PDF/HWP/HWPX 추출본을 직접 읽는다. 원본 파일을 다시 파싱하지
 ``--allow-partial-extraction``을 명시한 파일럿에서만 허용한다.
 
 ``--commit-to-rds``를 주면 승인된(``accepted_s``) 생성물이 같은 ``documents``
-테이블에 S 행으로 들어간다. 템플릿 작업이 끝나기 전이라 PDF가 없으므로
-``body_file_path``는 비워두고 생성 원문과 메타데이터만 넣는다 — 템플릿이
-나오면 ``DocumentStore.update_files()``로 같은 행을 백필한다
-(``source_generation/rds_writeback.py`` 참고).
+테이블에 S 행으로 들어간다. 최종 PDF 렌더링과 후처리가 성공한 문서만 저장하며,
+``body_file_path``에는 최종 PDF 경로, ``ref_id``에는 입력 원문의 ``documents.id``를
+기록한다(``source_generation/rds_writeback.py`` 참고).
 """
 
 from __future__ import annotations
@@ -96,9 +95,11 @@ from rd2.source_generation.rds_writeback import (  # noqa: E402
     should_commit,
 )
 from rd2.schema.models import Document  # noqa: E402
+from rd2.storage.body_file_paths import resolve_body_file_path  # noqa: E402
 from rd2.storage.db import DocumentStore  # noqa: E402
 
 BLOCKS_PER_PAGE = 12
+RDS_RENDER_SUCCESS_STATUSES = frozenset({"ok", "ok_truncated"})
 load_dotenv(ROOT / ".env")
 
 # cp949 콘솔(윈도우 기본)에서 em-dash가 섞인 --help/진행 로그가 UnicodeEncodeError로
@@ -412,8 +413,12 @@ def _iter_rds_items(
     for row in rows:
         path: Path | None = None
         if row.body_file_path:
-            candidate = files_root / row.body_file_path
-            if candidate.exists() and candidate.suffix.lower() in {".hwpx", ".pdf"}:
+            candidate = resolve_body_file_path(
+                row.body_file_path,
+                files_root=files_root,
+                repo_root=ROOT,
+            )
+            if candidate is not None and candidate.suffix.lower() in {".hwpx", ".pdf"}:
                 path = candidate
         built: tuple[SourceDocumentSnapshot, str] | None = None
         if path is not None:
@@ -627,6 +632,37 @@ def _attach_render_outputs(
         ]
 
 
+def _document_with_rendered_pdf(
+    record: dict,
+    document: Document,
+    *,
+    out_dir: Path,
+    repo_root: Path = ROOT,
+) -> Document:
+    """RDS에 넣을 문서에 검증된 최종 PDF 경로를 결합한다."""
+
+    render_status = record.get("render_status")
+    if render_status not in RDS_RENDER_SUCCESS_STATUSES:
+        raise ValueError(f"RDS 저장 전 PDF 렌더링이 성공하지 않았습니다: {render_status!r}")
+
+    rendered_pdfs = record.get("rendered_pdfs")
+    if not isinstance(rendered_pdfs, list) or len(rendered_pdfs) != 1:
+        raise ValueError("RDS 저장에는 최종 PDF가 정확히 한 개 필요합니다")
+
+    resolved_out_dir = out_dir.resolve()
+    pdf_path = (resolved_out_dir / str(rendered_pdfs[0])).resolve()
+    if resolved_out_dir != pdf_path.parent and resolved_out_dir not in pdf_path.parents:
+        raise ValueError("렌더링 PDF 경로가 배치 출력 디렉터리 밖을 가리킵니다")
+    if not pdf_path.is_file():
+        raise ValueError(f"RDS에 기록할 최종 PDF가 없습니다: {pdf_path}")
+
+    try:
+        body_file_path = pdf_path.relative_to(repo_root.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError("RDS에 저장할 PDF는 저장소 루트 안에 있어야 합니다") from exc
+    return document.model_copy(update={"body_file_path": body_file_path})
+
+
 def _report_section(record: dict, index: int) -> str:
     approval = str(record.get("approval_status") or "pipeline_failed")
     status, status_class = {
@@ -831,9 +867,7 @@ def main() -> int:
     parser.add_argument(
         "--require-render-ok",
         action="store_true",
-        help="PDF 렌더링에 성공한 문서만 RDS에 넣는다. 템플릿 교체 작업이 "
-             "끝나면 기본으로 올릴 것 — 지금 켜면 현재 템플릿이 담지 못하는 "
-             "긴 본문·표 문서가 통째로 빠진다",
+        help="하위호환용 옵션. RDS 저장은 이제 항상 최종 PDF 성공을 요구한다",
     )
     parser.add_argument(
         "--include-weak-mask-restoration",
@@ -1256,27 +1290,32 @@ def main() -> int:
             render_manifest,
             out_dir=args.out_dir,
         )
-    # 넣는 시점은 렌더링 **이후**다. PDF가 최종 산출물이 되면 렌더 결과가
-    # 코퍼스 포함 여부를 정해야 하기 때문이다(--require-render-ok).
-    #
-    # 다만 지금은 기본값이 꺼져 있다. 실측(2026-08-03 allsources_synthmask)에서
-    # 검증기를 통과한 35건 중 23건이 렌더 검증의 ``missing source text``로
-    # 떨어졌는데, 그건 생성 실패가 아니라 **현재 템플릿이 긴 본문·표를 담지
-    # 못한 결과**다. 템플릿 교체 작업이 끝나기 전까지 그걸로 코퍼스를 막으면
-    # 멀쩡한 생성물 3분의 2를 곧 사라질 이유로 버린다. 템플릿이 완성되면 이
-    # 플래그를 기본으로 올리고, 백필 패스가 렌더 성공분에만 body_file_path를
-    # 채운다 — 실패한 행은 경로가 NULL로 남아 그대로 식별된다.
+    # RDS 저장은 렌더링과 모든 PDF 후처리가 끝난 뒤에만 한다. 생성 텍스트가
+    # 승인됐어도 최종 PDF가 없으면 documents 행을 만들지 않는다.
     for record, document in pending_commits:
-        if args.require_render_ok and record.get("render_status") not in (None, "ok"):
+        try:
+            document = _document_with_rendered_pdf(
+                record,
+                document,
+                out_dir=args.out_dir,
+            )
+        except (OSError, ValueError) as exc:
+            rds_skipped += 1
             record["rds_skipped_reason"] = "render_not_ok"
+            record["rds_error"] = str(exc)
             continue
         try:
-            if store.upsert(document):
+            inserted = store.upsert(document)
+            if inserted:
                 rds_inserted += 1
+                record["rds_committed"] = True
+            elif store.writeback_rendered_pdf(document):
                 record["rds_committed"] = True
             else:
                 rds_skipped += 1
             record["rds_source_url"] = document.source_url
+            record["rds_body_file_path"] = document.body_file_path
+            record["rds_ref_id"] = document.ref_id
         except Exception as exc:  # noqa: BLE001
             rds_failed += 1
             record["rds_error"] = str(exc)

@@ -8,12 +8,10 @@
 DB에 접속하지 않는다 — ``Document``를 조립하기만 하고 저장은 ``DocumentStore``가
 한다.
 
-**PDF는 아직 없다.** 템플릿 작업이 끝나기 전까지는 검증기를 통과한 생성 원문과
-메타데이터만 보관한다. 그래서 ``body_file_path``는 None으로 들어가고, 템플릿이
-나오면 같은 행을 ``DocumentStore.update_files(dedup_key, ...)``로 백필한다 —
-그 백필이 성립하려면 ``dedup_key``가 재실행에도 동일해야 하므로
-``generated_source_url()``이 결정론적이어야 한다(``storage/db.py``의
-``_dedup_key``는 source_url이 비면 매번 새 UUID를 붙인다).
+이 모듈에서는 PDF 경로를 아직 정하지 않는다. 렌더링이 성공한 뒤 배치 스크립트가
+최종 PDF 경로를 ``body_file_path``에 넣고 저장한다. 원본이 RDS 행이면 그 행의
+``documents.id``를 ``ref_id``에도 보존한다. 재실행 중복 방지를 위해
+``generated_source_url()``은 계속 결정론적으로 만든다.
 """
 
 from __future__ import annotations
@@ -251,5 +249,6 @@ def build_generated_document(
         source=generated_source_name(origin_source),
         source_url=generated_source_url(source_document_id, plan),
         doc_type=doc_type,
+        ref_id=source_row.id if source_row is not None else None,
         is_synthetic=True,
     )

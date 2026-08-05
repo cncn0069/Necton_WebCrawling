@@ -56,6 +56,7 @@ _EXTRA_COLUMNS: list[tuple[str, str]] = [
     ("end_date", "DATE"),
     ("source", "VARCHAR(50)"),
     ("doc_type", "VARCHAR(50)"),
+    ("ref_id", "INT"),
     ("other_file_paths", "TEXT"),
     ("table_of_contents", "TEXT"),
 ]
@@ -323,6 +324,39 @@ class DocumentStore:
         except pymysql.err.IntegrityError:
             self._conn.rollback()
             return False
+
+    def writeback_rendered_pdf(self, doc: Document) -> bool:
+        """Attach a final PDF to its existing deterministic generated row.
+
+        This intentionally updates neither generated metadata nor a conflicting
+        provenance link.  It is only the recovery path for a row inserted by
+        the former pre-render writeback flow.
+        """
+
+        if not doc.source_url or not doc.body_file_path:
+            return False
+        key = _dedup_key(doc.source, doc.source_url)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT source, ref_id FROM documents WHERE dedup_key = %s",
+                (key,),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                return False
+            existing_source, existing_ref_id = existing
+            if existing_source != doc.source or (
+                existing_ref_id is not None
+                and existing_ref_id != doc.ref_id
+            ):
+                return False
+            cur.execute(
+                "UPDATE documents SET body_file_path = %s, "
+                "ref_id = COALESCE(ref_id, %s) WHERE dedup_key = %s",
+                (doc.body_file_path, doc.ref_id, key),
+            )
+        self._conn.commit()
+        return True
 
     def mark_pending_download(self, doc: Document) -> None:
         """파일 다운로드를 나중으로 미룬 문서를 큐에 등록한다(멱등 — 이미 있으면 무시).

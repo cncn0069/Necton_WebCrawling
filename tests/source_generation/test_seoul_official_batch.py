@@ -5,13 +5,18 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from rd2.extraction.pipeline import RUN_MANIFEST_NAME
 from rd2.extraction.storage import write_json_gz_atomic
 from rd2.source_generation.classification_taxonomy import ClauseNumber
 from rd2.source_generation.contracts import TargetClassification
 from rd2.source_generation.rds_writeback import SourceRow
+from rd2.schema.models import Document
+from rd2.storage.body_file_paths import resolve_body_file_path
 from scripts.run_seoul_official_batch import (
     _RDS_COLUMNS,
+    _document_with_rendered_pdf,
     _fetch_rds_rows,
     _iter_rds_items,
     _iter_extracted_items,
@@ -285,7 +290,7 @@ def test_partial_extraction_requires_explicit_opt_in(tmp_path):
 
 def test_rds_upsert_happens_after_rendering():
     """PDF가 최종 산출물이 되면 렌더 결과가 코퍼스 포함 여부를 정해야 한다.
-    순서가 뒤집히면 --require-render-ok가 아무것도 막지 못한다."""
+    순서가 뒤집히면 최종 PDF 경로를 documents에 기록할 수 없다."""
 
     source = getsource(main)
 
@@ -293,16 +298,115 @@ def test_rds_upsert_happens_after_rendering():
     upsert_at = source.index("store.upsert(")
 
     assert upsert_at > render_at
-    assert "require_render_ok" in source[render_at:upsert_at]
+    assert "_document_with_rendered_pdf(" in source[render_at:upsert_at]
 
 
-def test_render_gate_is_off_while_templates_are_being_rebuilt():
-    """실측(2026-08-03): 검증기를 통과한 35건 중 23건이 렌더 검증의
-    missing source text로 떨어졌는데, 원인이 생성이 아니라 곧 교체될
-    템플릿이라 기본으로 막으면 멀쩡한 생성물을 버린다."""
+def test_rds_writeback_always_requires_a_successful_render():
 
     source = getsource(main)
 
     assert '"--require-render-ok"' in source
-    # 기본이 꺼져 있어야 한다 — store_true는 기본값 False다.
-    assert "args.require_render_ok and record.get" in source
+    assert "_document_with_rendered_pdf(" in source
+    assert "args.require_render_ok and record.get" not in source
+
+
+def _generated_rds_document(*, ref_id: int = 7) -> Document:
+    return Document(
+        title="생성 문서",
+        ordering_agency="서울특별시",
+        disclosure_status="비공개",
+        non_disclosure_reason="제6호",
+        cso_classification="S",
+        source="gen_seoul_opengov",
+        source_url="synthetic://source-generation/seoul_opengov-7/6-pii",
+        is_synthetic=True,
+        ref_id=ref_id,
+    )
+
+
+def test_rds_document_gets_final_pdf_path_and_keeps_ref_id(tmp_path):
+    out_dir = tmp_path / "output" / "batch"
+    pdf_path = out_dir / "rendered" / "doc-1" / "final.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"%PDF-1.7")
+
+    prepared = _document_with_rendered_pdf(
+        {
+            "render_status": "ok_truncated",
+            "rendered_pdfs": ["rendered/doc-1/final.pdf"],
+        },
+        _generated_rds_document(),
+        out_dir=out_dir,
+        repo_root=tmp_path,
+    )
+
+    assert prepared.body_file_path == "output/batch/rendered/doc-1/final.pdf"
+    assert prepared.ref_id == 7
+
+
+def test_rds_document_rejects_missing_or_escaped_render_path(tmp_path):
+    document = _generated_rds_document()
+
+    with pytest.raises(ValueError, match="성공하지 않았습니다"):
+        _document_with_rendered_pdf(
+            {"render_status": "rejected", "rendered_pdfs": []},
+            document,
+            out_dir=tmp_path,
+        )
+
+    outside = tmp_path.parent / "outside.pdf"
+    outside.write_bytes(b"%PDF-1.7")
+    with pytest.raises(ValueError, match="밖을 가리킵니다"):
+        _document_with_rendered_pdf(
+            {"render_status": "ok", "rendered_pdfs": ["../outside.pdf"]},
+            document,
+            out_dir=tmp_path,
+        )
+
+
+def test_rds_document_rejects_pdf_outside_repository(tmp_path):
+    outside_repo = tmp_path / "outside-repo"
+    out_dir = outside_repo / "batch"
+    pdf_path = out_dir / "rendered" / "final.pdf"
+    pdf_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(b"%PDF-1.7")
+
+    with pytest.raises(ValueError, match="저장소 루트 안"):
+        _document_with_rendered_pdf(
+            {"render_status": "ok", "rendered_pdfs": ["rendered/final.pdf"]},
+            _generated_rds_document(),
+            out_dir=out_dir,
+            repo_root=tmp_path / "repo",
+        )
+
+
+def test_body_file_path_resolves_legacy_data_and_repo_relative_paths(tmp_path):
+    data_root = tmp_path / "data"
+    legacy = data_root / "legacy" / "source.pdf"
+    generated = tmp_path / "output" / "batch" / "final.pdf"
+    legacy.parent.mkdir(parents=True)
+    generated.parent.mkdir(parents=True)
+    legacy.write_bytes(b"%PDF-1.7")
+    generated.write_bytes(b"%PDF-1.7")
+
+    assert resolve_body_file_path(
+        "legacy/source.pdf", files_root=data_root, repo_root=tmp_path
+    ) == legacy.resolve()
+    assert resolve_body_file_path(
+        "output/batch/final.pdf", files_root=data_root, repo_root=tmp_path
+    ) == generated.resolve()
+    assert resolve_body_file_path(
+        "../outside.pdf", files_root=data_root, repo_root=tmp_path
+    ) is None
+
+
+def test_body_file_path_rejects_symlink_escaping_its_root(tmp_path):
+    outside = tmp_path.parent / "outside.pdf"
+    outside.write_bytes(b"%PDF-1.7")
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / "escaped.pdf").symlink_to(outside)
+
+    assert resolve_body_file_path(
+        "escaped.pdf", files_root=data_root, repo_root=tmp_path
+    ) is None

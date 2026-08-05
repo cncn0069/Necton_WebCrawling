@@ -142,6 +142,7 @@ def test_generated_row_inherits_source_metadata_and_marks_its_origin():
     # is_synthetic 컬럼이 없어졌으므로 source 접두사가 유일한 구분자다.
     assert doc.source == "gen_seoul_opengov"
     assert doc.is_synthetic is True
+    assert doc.ref_id == 18752
 
 
 def test_generated_row_leaves_the_body_file_path_for_the_template_backfill():
@@ -185,6 +186,7 @@ def test_row_without_source_metadata_falls_back_to_the_document_form():
 
     assert doc.doc_type == "official_letter"
     assert doc.ordering_agency == "미상"
+    assert doc.ref_id is None
 
 
 def test_missing_origin_source_is_rejected():
@@ -194,6 +196,16 @@ def test_missing_origin_source_is_rejected():
             plan=_plan(),
             source_document_id="x-1",
             source_row=None,
+        )
+
+
+def test_document_rejects_non_positive_ref_id():
+    with pytest.raises(ValueError, match="greater than 0"):
+        build_generated_document(
+            document=_document(),
+            plan=_plan(),
+            source_document_id="seoul_opengov-0",
+            source_row=_row(id=0),
         )
 
 

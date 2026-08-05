@@ -82,6 +82,11 @@ class Document(BaseModel):
     source: str = Field(description="출처 (예: 정보공개포털, PRISM, synthetic 등)")
     source_url: str | None = Field(default=None, description="원문 URL (합성 문서는 없음)")
     doc_type: str | None = Field(default=None, description="문서종류 (공문/계약/회의/보도자료 등)")
+    ref_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="합성 문서가 참조한 원본 documents.id",
+    )
 
     # 실제 수집(O) vs LLM 합성(C/S) 구분 플래그. cso_classification과 별개로 각
     # 수집기/생성기가 직접 설정한다 — 부분공개 문서처럼 cso_classification=C/S이면서
