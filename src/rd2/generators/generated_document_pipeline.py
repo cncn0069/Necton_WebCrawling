@@ -19,11 +19,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
 import json
 from pathlib import Path
 import re
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, Mapping
 import unicodedata
 
@@ -65,7 +67,6 @@ from rd2.generators.synthetic_approval_stamps import (
     build_stamp_placement,
     generate_synthetic_approval_stamp,
 )
-from rd2.source_generation.classification_taxonomy import SemanticDocumentType
 from rd2.generators.generated_blocks import (
     AttachmentReferenceBlock,
     BulletListBlock,
@@ -103,30 +104,114 @@ _CONTENT_CONTEXT_KEYS = frozenset(
         "signers",
         "approval_manifest",
         "administrative_events",
+        "document_type_label",
+        "document_kind_label",
     }
 )
 _LIST_LABELS = tuple("가나다라마바사아자차카타파하")
-_NOTICE_DOCUMENT_TYPE_LABELS = {
-    "bid_notice": "입찰공고",
-    "bid_renotice": "입찰재공고",
-    "pre_spec_notice": "사전규격공개",
-    "public_offering": "공모",
-    "notice": "공고",
-}
-_NOTICE_DOCUMENT_TYPES = frozenset(_NOTICE_DOCUMENT_TYPE_LABELS)
-_ADMINISTRATIVE_RULE_LABELS = {
-    SemanticDocumentType.DIRECTIVE: "훈령",
-    SemanticDocumentType.REGULATION: "예규",
-    SemanticDocumentType.NOTIFICATION: "고시",
-}
-_ADMINISTRATIVE_RULE_TYPES = frozenset(
-    document_type.value for document_type in _ADMINISTRATIVE_RULE_LABELS
-)
 _ARTICLE_RE = re.compile(
     r"^(제\s*\d+\s*조(?:\([^)]*\))?)\s*(.*)$",
     re.DOTALL,
 )
 _CHAPTER_RE = re.compile(r"^제\s*\d+\s*장(?:\s|$)")
+
+
+class GeneratedDocumentPipelineError(ValueError):
+    """생성 계약을 안전하게 렌더링할 수 없을 때 발생한다."""
+
+
+class UnsupportedRenderDocumentType(GeneratedDocumentPipelineError):
+    """렌더러가 알고 있는 문서 유형 목록에 없는 값이다."""
+
+
+@dataclass(frozen=True)
+class RenderDocumentTypeSpec:
+    """렌더 경계에서 필요한 문서 유형 해석 결과."""
+
+    renderer_family: str
+    display_label: str
+
+
+_UNCLASSIFIED_RENDER_SPEC = RenderDocumentTypeSpec(
+    "official_document",
+    "",
+)
+
+
+def _render_spec(
+    renderer_family: str,
+    display_label: str,
+) -> RenderDocumentTypeSpec:
+    return RenderDocumentTypeSpec(renderer_family, display_label)
+
+
+# DB가 사용하는 새 한글 분류와 기존 payload의 영문 분류를 모두 이 경계에서
+# 해석한다. source-generation taxonomy 자체는 영어 enum을 계속 유지한다.
+# 새 한글 값은 여러 영문 subtype을 하나의 서식 계열로 합친 결과이므로, 여기서
+# 원래 영문 subtype을 추측하지 않고 지정된 계열만 선택한다.
+_RENDER_DOCUMENT_TYPE_SPECS: Mapping[str, RenderDocumentTypeSpec] = MappingProxyType(
+    {
+        # 새 DB 값
+        "감사보고서": _render_spec("official_document", "감사보고서"),
+        "회의록": _render_spec("meeting_minutes", "회의록"),
+        "규정": _render_spec("administrative_rule", "규정"),
+        "매뉴얼": _render_spec("guide", "매뉴얼"),
+        "질의회시집": _render_spec(
+            "interpretation_compilation",
+            "질의회시집",
+        ),
+        "보도자료": _render_spec("press_release", "보도자료"),
+        "고시": _render_spec("administrative_rule", "고시"),
+        "예산결산문서": _render_spec("official_document", "예산결산문서"),
+        "사업공고": _render_spec("notice", "사업공고"),
+        "현황보고서": _render_spec("status_report", "현황보고서"),
+        "정책문서": _render_spec("official_document", "정책문서"),
+        "연구보고서": _render_spec("research_report", "연구보고서"),
+        "공문": _render_spec("official_document", "공문"),
+        # 기존 영어 payload 값 — 표시 라벨은 기존 렌더링 계약을 보존한다.
+        "research_report": _render_spec("research_report", "연구보고서"),
+        "press_release": _render_spec("press_release", "보도자료"),
+        "directive": _render_spec("administrative_rule", "훈령"),
+        "regulation": _render_spec("administrative_rule", "예규"),
+        "notification": _render_spec("administrative_rule", "고시"),
+        "interpretation_compilation": _render_spec(
+            "interpretation_compilation",
+            "질의회시집",
+        ),
+        "guide": _render_spec("guide", "GUIDE"),
+        "status_report": _render_spec("status_report", "현황·통계자료"),
+        "meeting_minutes": _render_spec("meeting_minutes", "회의록"),
+        "director_activity": _render_spec("meeting_minutes", "회의록"),
+        "bid_notice": _render_spec("notice", "입찰공고"),
+        "bid_renotice": _render_spec("notice", "입찰재공고"),
+        "pre_spec_notice": _render_spec("notice", "사전규격공개"),
+        "public_offering": _render_spec("notice", "공모"),
+        "notice": _render_spec("notice", "공고"),
+        "audit_result": _render_spec("official_document", "감사보고서"),
+        "budget_material": _render_spec("official_document", "예산결산문서"),
+        "policy_material": _render_spec("official_document", "정책문서"),
+        "official_document": _render_spec("official_document", "공문"),
+        # source taxonomy의 나머지 공통 문서 유형은 전용 계열이 없으므로 공문
+        # 렌더러를 사용한다. 명시적으로 나열해 미등록 값의 조용한 폴백을 막는다.
+        "report": _render_spec("official_document", "보고서"),
+        "personnel": _render_spec("official_document", "인사발령"),
+        "approval": _render_spec("official_document", "승인"),
+        "reply_notification": _render_spec("official_document", "회신·통보"),
+        "budget_execution": _render_spec("official_document", "예산집행"),
+        "plan": _render_spec("official_document", "계획"),
+        "business_trip": _render_spec("official_document", "출장"),
+        "other": _render_spec("official_document", ""),
+        # 과거 저장물에서 쓰던 한글 별칭
+        "훈령": _render_spec("administrative_rule", "훈령"),
+        "예규": _render_spec("administrative_rule", "예규"),
+        "입찰공고": _render_spec("notice", "입찰공고"),
+        "입찰재공고": _render_spec("notice", "입찰재공고"),
+        "사전규격공개": _render_spec("notice", "사전규격공개"),
+        "공모": _render_spec("notice", "공모"),
+        "공고": _render_spec("notice", "공고"),
+    }
+)
+_REMOVED_RENDER_DOCUMENT_TYPES = frozenset({"synthetic_document", "합성문서"})
 
 #: 이 route의 산출물만 템플릿 조립을 건너뛴다. 문자열로 두는 것은 이 모듈이
 #: ``rd2.source_generation.contracts``를 import하지 않기 때문이다 — 계약을
@@ -147,30 +232,29 @@ def _is_verbatim(envelope: "GenerationEnvelope") -> bool:
     return bool(getattr(envelope.result, VERBATIM_RENDER_KEY, False))
 
 
+def render_spec_for_document_type(
+    document_type: str | None,
+) -> RenderDocumentTypeSpec:
+    """분류값을 렌더러 계열과 표시 라벨로 해석한다."""
+
+    if document_type is None:
+        return _UNCLASSIFIED_RENDER_SPEC
+    if document_type in _REMOVED_RENDER_DOCUMENT_TYPES:
+        raise UnsupportedRenderDocumentType(
+            f"Document type {document_type!r} was removed from rendering"
+        )
+    spec = _RENDER_DOCUMENT_TYPE_SPECS.get(document_type)
+    if spec is None:
+        raise UnsupportedRenderDocumentType(
+            f"Unsupported render document_type: {document_type!r}"
+        )
+    return spec
+
+
 def renderer_family_for_document_type(document_type: str | None) -> str:
     """분류값을 실제 렌더러 계열로 변환한다."""
 
-    if document_type == "research_report":
-        return "research_report"
-    if document_type == "press_release":
-        return "press_release"
-    if document_type in _ADMINISTRATIVE_RULE_TYPES:
-        return "administrative_rule"
-    if document_type == SemanticDocumentType.INTERPRETATION_COMPILATION.value:
-        return "interpretation_compilation"
-    if document_type == SemanticDocumentType.GUIDE.value:
-        return "guide"
-    if document_type == "status_report":
-        return "status_report"
-    if document_type == "meeting_minutes":
-        return "meeting_minutes"
-    if document_type in _NOTICE_DOCUMENT_TYPES:
-        return "notice"
-    return "official_document"
-
-
-class GeneratedDocumentPipelineError(ValueError):
-    """생성 계약을 안전하게 렌더링할 수 없을 때 발생한다."""
+    return render_spec_for_document_type(document_type).renderer_family
 
 
 class FailedGenerationPayloadError(GeneratedDocumentPipelineError):
@@ -320,13 +404,17 @@ class GenerationFailure(BaseModel):
 class SourceClassificationContract(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    document_type: SemanticDocumentType
+    # DB 렌더 경계는 새 한글 분류를 받는다. taxonomy enum은 source-generation
+    # 계층에서 계속 사용하므로 이 계약에 다시 묶지 않는다.
+    document_type: str
 
     @field_validator("document_type", mode="before")
     @classmethod
     def _validate_document_type(cls, value: object) -> object:
         if isinstance(value, str):
-            return _non_empty(value, "document_type")
+            value = _non_empty(value, "document_type")
+            render_spec_for_document_type(value)
+            return value
         return value
 
 
@@ -1549,7 +1637,8 @@ def build_administrative_rule_context(
     if source_classification is None:
         raise ValueError("Administrative rule rendering requires document_type")
     document_type = source_classification.document_type
-    if document_type not in _ADMINISTRATIVE_RULE_LABELS:
+    render_spec = render_spec_for_document_type(document_type)
+    if render_spec.renderer_family != "administrative_rule":
         raise ValueError(f"Unsupported administrative rule type: {document_type}")
 
     blocks: list[dict[str, Any]] = []
@@ -1596,7 +1685,7 @@ def build_administrative_rule_context(
         presentation_normalization=presentation_normalization,
     )
     return {
-        "document_type_label": _ADMINISTRATIVE_RULE_LABELS[document_type],
+        "document_type_label": render_spec.display_label,
         "title": display_text(document.title),
         "agency_name": display_text(document.agency_name or ""),
         "blocks": blocks,
@@ -1659,6 +1748,15 @@ def build_guide_context(
     """공문과 같은 5종 block을 순서 그대로 guide context로 만든다."""
 
     document = envelope.result.generated_document
+    source_classification = envelope.result.source_classification
+    document_type = (
+        source_classification.document_type
+        if source_classification is not None
+        else None
+    )
+    render_spec = render_spec_for_document_type(document_type)
+    if render_spec.renderer_family != "guide":
+        raise ValueError(f"Unsupported guide document type: {document_type}")
     display_text = (
         _presentation_plain_text if presentation_normalization else str
     )
@@ -1685,7 +1783,7 @@ def build_guide_context(
         title_class = ""
 
     return {
-        "document_type_label": "GUIDE",
+        "document_type_label": render_spec.display_label,
         "title": display_text(document.title),
         "title_class": title_class,
         "agency_name": display_text(document.agency_name or ""),
@@ -1704,6 +1802,17 @@ def build_status_report_context(
     """공문과 같은 5종 block을 순서 그대로 현황보고 context로 만든다."""
 
     document = envelope.result.generated_document
+    source_classification = envelope.result.source_classification
+    document_type = (
+        source_classification.document_type
+        if source_classification is not None
+        else None
+    )
+    render_spec = render_spec_for_document_type(document_type)
+    if render_spec.renderer_family != "status_report":
+        raise ValueError(
+            f"Unsupported status report document type: {document_type}"
+        )
     display_text = (
         _presentation_plain_text if presentation_normalization else str
     )
@@ -1732,7 +1841,7 @@ def build_status_report_context(
         title_class = ""
 
     return {
-        "document_type_label": "현황·통계자료",
+        "document_type_label": render_spec.display_label,
         "title": display_text(document.title),
         "title_class": title_class,
         "agency_name": display_text(document.agency_name or ""),
@@ -1804,18 +1913,16 @@ def build_notice_context(
     """입력 block 순서와 값만 보존한 공고 계열 전용 context를 만든다."""
 
     document_type = (
-        envelope.result.source_classification.document_type.value
+        envelope.result.source_classification.document_type
         if envelope.result.source_classification
         else None
     )
     display_text = (
         _presentation_plain_text if presentation_normalization else str
     )
-    if document_type not in _NOTICE_DOCUMENT_TYPES:
-        raise ValueError(
-            "notice context requires one of: "
-            + ", ".join(sorted(_NOTICE_DOCUMENT_TYPES))
-        )
+    render_spec = render_spec_for_document_type(document_type)
+    if render_spec.renderer_family != "notice":
+        raise ValueError(f"Unsupported notice document type: {document_type}")
 
     ordered_blocks = _presentation_blocks(
         envelope.result.generated_document.blocks,
@@ -1844,7 +1951,7 @@ def build_notice_context(
         title_class = ""
 
     return {
-        "document_type_label": _NOTICE_DOCUMENT_TYPE_LABELS[document_type],
+        "document_type_label": render_spec.display_label,
         "title": display_text(document.title),
         "title_class": title_class,
         "agency_name": display_text(document.agency_name or ""),
@@ -1872,15 +1979,11 @@ def render_generation_payload(
     seed = base_seed if base_seed is not None else _deterministic_seed(envelope)
     document = envelope.result.generated_document
     document_type = (
-        envelope.result.source_classification.document_type.value
-        if envelope.result.source_classification
-        else None
-    )
-    document_type_enum = (
         envelope.result.source_classification.document_type
         if envelope.result.source_classification
         else None
     )
+    render_spec = render_spec_for_document_type(document_type)
     content_sha256 = sha256(
         blocks_to_body_text(document.blocks).encode("utf-8")
     ).hexdigest()
@@ -1897,7 +2000,7 @@ def render_generation_payload(
         # 자세한 이유는 ``verbatim_rendering`` 모듈 docstring에 있다.
         renderer_family = "verbatim"
     else:
-        renderer_family = renderer_family_for_document_type(document_type)
+        renderer_family = render_spec.renderer_family
     # 원본 payload는 손대지 않는다. 완전 생성 문서만 표시용 계층 정보를
     # 만들어 템플릿에 넘긴다. mask_restoration은 원문 보존 경로라 제외한다.
     display_normalization = bool(
@@ -1907,6 +2010,7 @@ def render_generation_payload(
     input_metadata = {
         "contract_version": envelope.result.contract_version,
         "document_type": document_type,
+        "document_type_label": render_spec.display_label or None,
         "renderer_family": renderer_family,
         "generation_route": envelope.result.generation_route,
         "generation_target": generation_target,
@@ -1928,7 +2032,7 @@ def render_generation_payload(
             )
         ]
         presentation_normalized = False
-    elif document_type == "research_report":
+    elif renderer_family == "research_report":
         presentation_normalized = display_normalization
         context = build_research_report_context(
             envelope,
@@ -1946,7 +2050,7 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
-    elif document_type == "press_release":
+    elif renderer_family == "press_release":
         presentation_normalized = display_normalization
         context = build_press_release_context(
             envelope,
@@ -1964,7 +2068,7 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
-    elif document_type_enum in _ADMINISTRATIVE_RULE_LABELS:
+    elif renderer_family == "administrative_rule":
         presentation_normalized = display_normalization
         context = build_administrative_rule_context(
             envelope,
@@ -1981,7 +2085,7 @@ def render_generation_payload(
             required_source_texts=(),
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
-    elif document_type_enum == SemanticDocumentType.INTERPRETATION_COMPILATION:
+    elif renderer_family == "interpretation_compilation":
         presentation_normalized = display_normalization
         context = build_interpretation_compilation_context(
             envelope,
@@ -1998,7 +2102,7 @@ def render_generation_payload(
             required_source_texts=(),
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
-    elif document_type_enum == SemanticDocumentType.GUIDE:
+    elif renderer_family == "guide":
         presentation_normalized = display_normalization
         context = build_guide_context(
             envelope,
@@ -2015,7 +2119,7 @@ def render_generation_payload(
             required_source_texts=(),
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
         )
-    elif document_type == "status_report":
+    elif renderer_family == "status_report":
         presentation_normalized = display_normalization
         context = build_status_report_context(
             envelope,
@@ -2033,7 +2137,7 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
-    elif document_type == "meeting_minutes":
+    elif renderer_family == "meeting_minutes":
         presentation_normalized = display_normalization
         context = build_meeting_minutes_context(
             envelope,
@@ -2051,7 +2155,7 @@ def render_generation_payload(
             max_pages=_UNTRUNCATED_RENDER_PAGE_BUDGET,
             input_metadata=input_metadata,
         )
-    elif document_type in _NOTICE_DOCUMENT_TYPES:
+    elif renderer_family == "notice":
         presentation_normalized = display_normalization
         context = build_notice_context(
             envelope,
@@ -2076,6 +2180,8 @@ def render_generation_payload(
             seed=seed,
             presentation_normalization=display_normalization,
         )
+        context["document_type_label"] = render_spec.display_label
+        context["document_kind_label"] = render_spec.display_label
         manifest = render_official_document_variations(
             context,
             output_dir,

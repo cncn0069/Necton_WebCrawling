@@ -14,10 +14,13 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentContentMismatch,
     GeneratedBlock,
     ParagraphBlock,
+    UnsupportedRenderDocumentType,
     blocks_to_body_text,
     build_template_context,
     parse_generation_payload,
     render_generation_payload,
+    render_spec_for_document_type,
+    renderer_family_for_document_type,
     source_text_atoms,
 )
 from rd2.generators.administrative_rule_rendering import (
@@ -649,6 +652,52 @@ def test_failed_generation_is_rejected_unless_explicitly_allowed() -> None:
 
     envelope = parse_generation_payload(payload, allow_failed=True)
     assert envelope.failure is not None
+
+
+@pytest.mark.parametrize(
+    ("document_type", "renderer_family", "display_label"),
+    (
+        ("감사보고서", "official_document", "감사보고서"),
+        ("회의록", "meeting_minutes", "회의록"),
+        ("규정", "administrative_rule", "규정"),
+        ("매뉴얼", "guide", "매뉴얼"),
+        ("질의회시집", "interpretation_compilation", "질의회시집"),
+        ("보도자료", "press_release", "보도자료"),
+        ("고시", "administrative_rule", "고시"),
+        ("예산결산문서", "official_document", "예산결산문서"),
+        ("사업공고", "notice", "사업공고"),
+        ("현황보고서", "status_report", "현황보고서"),
+        ("정책문서", "official_document", "정책문서"),
+        ("연구보고서", "research_report", "연구보고서"),
+        ("공문", "official_document", "공문"),
+    ),
+)
+def test_korean_document_types_select_render_family_and_label(
+    document_type: str,
+    renderer_family: str,
+    display_label: str,
+) -> None:
+    spec = render_spec_for_document_type(document_type)
+
+    assert spec.renderer_family == renderer_family
+    assert spec.display_label == display_label
+    assert renderer_family_for_document_type(document_type) == renderer_family
+
+
+@pytest.mark.parametrize(
+    "document_type",
+    ("synthetic_document", "합성문서", "unknown"),
+)
+def test_removed_or_unknown_document_types_are_rejected(
+    document_type: str,
+) -> None:
+    payload = _payload()
+    payload["result"]["source_classification"]["document_type"] = document_type
+
+    with pytest.raises(ValidationError):
+        parse_generation_payload(payload)
+    with pytest.raises(UnsupportedRenderDocumentType):
+        renderer_family_for_document_type(document_type)
 
 
 def test_body_text_only_input_falls_back_to_unmodified_paragraph_blocks() -> None:
