@@ -223,13 +223,16 @@ def generated_document_json(
     *,
     contract_version: str | None = None,
 ) -> str:
-    """``generated_text`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
+    """``batch_json`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
 
     **평문이 아니라 JSON이다.** PDF 앞에서 생성기가 실제로 내놓는 산출물이 이
     JSON이고(블록·표·key-value 구조), 평문 본문은 거기서 파생된다. 파생된 쪽은
-    ``body_text`` 컬럼에 이미 있으므로 두 컬럼에 같은 평문을 두 번 넣기보다
+    ``generated_text`` 컬럼에 있으므로 두 컬럼에 같은 평문을 두 번 넣기보다
     한쪽에 원본 구조를 남긴다 — 렌더가 깨졌을 때 무엇을 만들었는지 되짚거나
     다른 서식으로 다시 렌더할 근거가 DB 안에 남는다.
+
+    이 값이 ``generated_text``에 있던 시절이 있었다(2026-08-05 이전). 그 칸을
+    열었을 때 사람이 문서를 그냥 읽을 수 없다는 것이 바뀐 이유다.
 
     ``exclude_computed_fields=True``로 계산 필드(``body_text``)를 뺀다. 배치
     기록(``documents/*.json``의 ``generation.document``)이 같은 방식으로 직렬화
@@ -345,7 +348,7 @@ def build_generated_document(
     input_prompt: str | None = None,
     content: str | None = None,
     body_file_path: str | None = None,
-    batch_json: Mapping[str, object] | None = None,
+    pdf_renderd_json: Mapping[str, object] | None = None,
     store_generated_body_text: bool = True,
     document_contract_version: str | None = None,
 ) -> Document:
@@ -373,9 +376,14 @@ def build_generated_document(
     호출자가 프롬프트를 손에 쥐고 있지 않을 수 있고(재조립 경로), 그때 빈 문자열을
     넣으면 "프롬프트 없이 만든 문서"와 구분되지 않는다.
 
-    ``batch_json``은 PDF 렌더 입력이다. 본문을 넣지 않는다 —
-    ``generated_text``가 이미 문서 IR을 통째로 담고 있어서, 같은 본문을 두 칸에
-    두면 한쪽만 고쳐지는 자리가 생긴다. 주지 않으면 NULL로 남는다.
+    생성물은 세 칸으로 나뉜다. **같은 값을 두 칸에 두지 않는다** — 두면 한쪽만
+    고쳐지는 자리가 생긴다.
+
+        ``generated_text``     사람이 그냥 읽는 평문 본문
+        ``batch_json``         그 평문을 만든 문서 IR(블록·표 구조) JSON
+        ``pdf_renderd_json``   본문 밖에서 서식을 정하는 값 (인자로 받는다)
+
+    ``pdf_renderd_json``을 주지 않으면 NULL로 남는다.
 
     ``body_file_path``는 렌더된 PDF 경로다. upsert가 렌더 이후인 하네스는 그 시점에
     경로를 이미 쥐고 있으므로 여기서 함께 넣고, 행을 렌더보다 먼저 넣는 최소
@@ -383,15 +391,15 @@ def build_generated_document(
     어느 쪽이든 렌더가 안 된 문서는 경로가 NULL인 것으로 그 행이 식별된다.
 
     ``document_contract_version``은 옛 배치 기록을 현재 계약으로 맞춰 읽었을 때
-    원래 버전을 ``generated_text`` JSON에 되살리는 자리다 —
+    원래 버전을 ``batch_json``의 IR에 되살리는 자리다 —
     ``generated_document_json`` 참고. 새로 생성한 문서에는 줄 필요가 없다.
 
     ``ref_id``는 원문 행 id다. ``source_row``가 없으면 참조할 행 자체가 없으므로
     (로컬 파일 입력) None이 된다 — 그 경우 원문 연결은 ``source_url`` 문자열의
     ``source_document_id``에만 남는다.
 
-    ``store_generated_body_text``는 생성 평문을 ``body_text``에 함께 둘지다.
-    **컬럼 규약은 "생성분은 전부 ``generated_text``, ``body_text``는 원문"**이고,
+    ``store_generated_body_text``는 생성 평문을 ``body_text``에도 둘지다.
+    **컬럼 규약은 "생성분은 ``generated_text``, ``body_text``는 원문"**이고,
     그 규약대로면 이 값은 False여야 한다. 기본값이 True인 것은 5~8호 경로가
     지금까지 생성 평문을 이 칸에 넣어 왔고(기존 행이 그 상태다) 기본값을 뒤집는
     순간 같은 컬럼에 두 규약이 섞이기 때문이다 — 어느 쪽으로 통일할지는 기존
@@ -449,13 +457,14 @@ def build_generated_document(
         is_synthetic=True,
         input_prompt=input_prompt,
         content=content,
-        generated_text=generated_document_json(
+        generated_text=document.body_text,
+        batch_json=generated_document_json(
             document, contract_version=document_contract_version
         ),
         ref_id=source_row.id if source_row is not None else None,
-        batch_json=(
+        pdf_renderd_json=(
             None
-            if batch_json is None
-            else json.dumps(dict(batch_json), ensure_ascii=False, sort_keys=True)
+            if pdf_renderd_json is None
+            else json.dumps(dict(pdf_renderd_json), ensure_ascii=False, sort_keys=True)
         ),
     )

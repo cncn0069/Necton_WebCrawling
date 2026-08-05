@@ -370,12 +370,13 @@ def test_plan_free_route_fills_the_generation_provenance_columns():
 
     # 사용자가 지목한 네 컬럼.
     assert doc.input_prompt is not None and "조항 사례" in doc.input_prompt
-    # generated_text는 평문이 아니라 생성 문서 IR JSON이다 — 평문은 body_text에
-    # 있고, 두 컬럼에 같은 값을 두 번 넣는 대신 원본 구조를 남긴다.
-    assert json.loads(doc.generated_text) == _document().model_dump(
+    # generated_text는 사람이 그냥 읽는 평문이고, 그 평문을 만든 IR 구조는
+    # batch_json이 갖는다(2026-08-05 이전에는 둘이 한 칸에 있었다).
+    assert doc.generated_text == _document().body_text
+    assert json.loads(doc.batch_json) == _document().model_dump(
         mode="json", exclude_computed_fields=True
     )
-    assert "body_text" not in json.loads(doc.generated_text)
+    assert "body_text" not in json.loads(doc.batch_json)
     # 컬럼이 BINARY(1)이라 int가 아니라 ASCII '1'이다(models.py 참고).
     assert doc.generated_yn == "1"
     assert doc.ref_id == 18752

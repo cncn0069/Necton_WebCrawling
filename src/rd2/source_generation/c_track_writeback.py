@@ -61,7 +61,7 @@ def c_track_generation_target(frame: CaseFrame) -> GenerationTarget:
 
     ``security_grade``는 군사기밀 등급(1~3급)일 때만 ``military_secret_grade``에
     싣는다. 비군사기관 축의 값은 '대외비'인데 그건 군사기밀 등급이 아니라 문서
-    표기라 계약이 받지 않는다 — 그 값은 ``batch_json``의 렌더 입력으로만 간다.
+    표기라 계약이 받지 않는다 — 그 값은 ``pdf_renderd_json``으로만 간다.
     """
 
     clause_no = clause_of_subclause(frame.subclause_key)
@@ -110,7 +110,7 @@ def c_track_row_metadata(frame: CaseFrame) -> RowMetadata:
     )
 
 
-def c_track_batch_json(
+def c_track_pdf_renderd_json(
     template: CTrackTemplate,
     frame: CaseFrame,
     *,
@@ -119,8 +119,9 @@ def c_track_batch_json(
 ) -> dict[str, Any]:
     """PDF 렌더가 본문 **밖에서** 필요로 하는 값들.
 
-    본문은 넣지 않는다 — 같은 행의 ``generated_text``가 문서 IR을 통째로 갖고
-    있다. 여기 있는 것은 그 IR을 어떤 서식으로 앉힐지를 정하는 값이다:
+    본문도 구조도 넣지 않는다 — 같은 행의 ``generated_text``가 평문을,
+    ``batch_json``이 문서 IR을 갖고 있다. 여기 있는 것은 그 IR을 어떤 서식으로
+    앉힐지를 정하는 값이다:
     문서형식(템플릿 선택), 등급 표기(대외비/Ⅰ~Ⅲ급 마크), 표제부의 기관·부서,
     그리고 어느 전개에서 나온 건인지의 좌표.
 
@@ -187,11 +188,11 @@ def build_c_track_row(
         storage_reasoning=storage_reasoning,
         input_prompt=f"{system_prompt}\n\n{user_prompt}",
         # 참조한 원문이 없다. content/ref_id는 NULL로 남는다.
-        batch_json=c_track_batch_json(
+        pdf_renderd_json=c_track_pdf_renderd_json(
             template, frame, seed=seed, prompt_version=prompt_version
         ),
-        # 생성 평문은 generated_text가 갖는다. body_text는 원문 자리이고,
-        # C트랙에는 그 원문이 없다.
+        # 생성 평문은 generated_text가, 구조는 batch_json이 갖는다. body_text는
+        # 원문 자리이고, C트랙에는 그 원문이 없다.
         store_generated_body_text=False,
         document_contract_version=document_contract_version,
     )
