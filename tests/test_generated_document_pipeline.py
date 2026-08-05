@@ -833,8 +833,8 @@ def test_c_payload_without_military_grade_gets_confidential_security_skin(
 
     marking = manifest[0]["security_marking"]
     assert marking["kind"] == "confidential"
-    assert marking["asset"] == "logo/synthetic_confidential.png"
-    assert marking["asset_kind"] == "synthetic_security_stamp"
+    assert marking["asset"] == "logo/보안등급_3급_비밀.png"
+    assert marking["asset_kind"] == "security_classification_stamp"
     assert marking["security_template"]["slug"] == "04_restricted_memo"
     assert marking["palette"]["ink_hex"] == "#22272C"
     assert "agency_marking" not in manifest[0]
