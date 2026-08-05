@@ -406,7 +406,7 @@ def _save_marked_pdf(
         "asset_kind": (
             "military_grade_mark"
             if military
-            else "synthetic_security_stamp"
+            else "security_classification_stamp"
         ),
         "security_template": security_template.to_dict(),
         "palette": {

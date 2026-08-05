@@ -17,7 +17,6 @@ import fitz
 _INK = (34 / 255, 39 / 255, 44 / 255)
 _MID = (96 / 255, 104 / 255, 112 / 255)
 _LIGHT = (232 / 255, 235 / 255, 237 / 255)
-_WHITE = (1.0, 1.0, 1.0)
 
 BODY_SAFE_TOP_BOTTOM_PT = 30.0
 BODY_SAFE_LEFT_RIGHT_PT = 12.0
@@ -42,7 +41,6 @@ ConfidentialLayout = Literal[
 class ConfidentialSecurityTemplate:
     slug: str
     name: str
-    english_label: str
     layout: ConfidentialLayout
     stamp_asset: str
 
@@ -54,72 +52,62 @@ CONFIDENTIAL_SECURITY_TEMPLATES: tuple[ConfidentialSecurityTemplate, ...] = (
     ConfidentialSecurityTemplate(
         "01_classic_register",
         "공문 원본형",
-        "CONFIDENTIAL",
         "classic_register",
         "대외비.png",
     ),
     ConfidentialSecurityTemplate(
         "02_report_band",
         "리포트 밴드형",
-        "CONFIDENTIAL REPORT",
         "report_band",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "03_minimal_mark",
         "미니멀 마크형",
-        "CONFIDENTIAL",
         "minimal_mark",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "04_restricted_memo",
         "통제 메모형",
-        "CONFIDENTIAL / INTERNAL",
         "restricted_memo",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "05_strategy_report",
         "전략보고서형",
-        "CONFIDENTIAL / STRATEGY",
         "strategy_report",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "06_controlled_sheet",
         "통제 커버시트형",
-        "CONFIDENTIAL / CONTROLLED",
         "controlled_sheet",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "07_official_sensitive",
         "오피셜 센서티브형",
-        "CONFIDENTIAL / OFFICIAL",
         "official_sensitive",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "08_registry_control",
         "레지스트리 통제형",
-        "CONFIDENTIAL / REGISTRY",
         "registry_control",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "09_protected_technology",
         "산업기술 보호형",
-        "CONFIDENTIAL / PROTECTED TECHNOLOGY",
         "protected_technology",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
     ConfidentialSecurityTemplate(
         "10_need_to_know",
         "디지털 니드투노우형",
-        "CONFIDENTIAL / NEED TO KNOW",
         "need_to_know",
-        "synthetic_confidential.png",
+        "보안등급_3급_비밀.png",
     ),
 )
 
@@ -128,7 +116,6 @@ CONFIDENTIAL_SECURITY_TEMPLATES: tuple[ConfidentialSecurityTemplate, ...] = (
 MILITARY_NEUTRAL_SECURITY_FRAME = ConfidentialSecurityTemplate(
     "military_neutral_frame",
     "군사기밀 중립 프레임",
-    "",
     "classic_register",
     "",
 )
@@ -157,27 +144,6 @@ def body_safe_rect(page: fitz.Page) -> fitz.Rect:
         BODY_SAFE_TOP_BOTTOM_PT,
         page.rect.width - BODY_SAFE_LEFT_RIGHT_PT,
         page.rect.height - BODY_SAFE_TOP_BOTTOM_PT,
-    )
-
-
-def _text(
-    page: fitz.Page,
-    x: float,
-    y: float,
-    value: str,
-    *,
-    color: tuple[float, float, float] = _INK,
-    size: float = 6.4,
-    rotate: int = 0,
-) -> None:
-    page.insert_text(
-        fitz.Point(x, y),
-        value,
-        fontsize=size * SECURITY_LABEL_SCALE,
-        fontname="helv",
-        color=color,
-        rotate=rotate,
-        overlay=True,
     )
 
 
@@ -260,7 +226,8 @@ def draw_confidential_security_template(
     """한 본문 페이지의 예약 여백에 선택한 단색 스킨을 그린다.
 
     군사기밀은 별도의 등급 이미지가 같은 단계에서 들어가므로 ``mark_bytes``를
-    넘기지 않고 프레임만 재사용한다.
+    넘기지 않고 프레임만 재사용한다. 스킨은 선·면·괄호와 보안 마크만 그리며,
+    헤더·푸터·측면에 분류 영문 문구를 별도로 삽입하지 않는다.
     """
 
     width = page.rect.width
@@ -281,7 +248,6 @@ def draw_confidential_security_template(
             width=0.35,
             overlay=True,
         )
-        _text(page, 10, height - 9, "ORIGINAL / CONTROLLED COPY", size=5.6)
         mark_anchor = "top_center"
     elif layout == "report_band":
         page.draw_rect(
@@ -290,7 +256,6 @@ def draw_confidential_security_template(
             fill=_INK,
             overlay=True,
         )
-        _text(page, 12, 15.5, template.english_label, color=_WHITE, size=7.0)
         page.draw_line(
             fitz.Point(0, height - 23),
             fitz.Point(width, height - 23),
@@ -307,7 +272,6 @@ def draw_confidential_security_template(
             width=0.45,
             overlay=True,
         )
-        _text(page, width - 94, height - 13, "DO NOT FORWARD", size=5.8)
         mark_anchor = "top_left"
     elif layout == "restricted_memo":
         page.draw_line(
@@ -324,7 +288,6 @@ def draw_confidential_security_template(
             width=0.45,
             overlay=True,
         )
-        _text(page, width - 122, 16, template.english_label, size=6.4)
         mark_anchor = "bottom_left"
     elif layout == "strategy_report":
         page.draw_line(
@@ -341,11 +304,9 @@ def draw_confidential_security_template(
             width=1.0,
             overlay=True,
         )
-        _text(page, 10, height - 10, "NEED TO KNOW", size=5.8)
         mark_anchor = "top_center"
     elif layout == "controlled_sheet":
         _corner_brackets(page)
-        _text(page, width - 82, height - 10, "CONTROLLED", size=6.0)
         mark_anchor = "top_center"
     elif layout == "official_sensitive":
         page.draw_rect(
@@ -360,7 +321,6 @@ def draw_confidential_security_template(
             fill=_LIGHT,
             overlay=True,
         )
-        _text(page, 10, 13.5, template.english_label, size=6.5)
         mark_anchor = "bottom_right"
     elif layout == "registry_control":
         page.draw_line(
@@ -377,8 +337,6 @@ def draw_confidential_security_template(
             width=0.3,
             overlay=True,
         )
-        _text(page, 10, 17, "COPY 01 / CONTROLLED", size=5.8)
-        _text(page, width - 78, 17, "REGISTRY CONTROL", size=5.4)
         page.draw_line(
             fitz.Point(7, height - 8),
             fitz.Point(width - 7, height - 8),
@@ -401,14 +359,6 @@ def draw_confidential_security_template(
             width=0.7,
             overlay=True,
         )
-        _text(
-            page,
-            width - 8,
-            height - 100,
-            template.english_label,
-            size=5.4,
-            rotate=90,
-        )
         mark_anchor = "bottom_center"
     elif layout == "need_to_know":
         page.draw_rect(
@@ -417,8 +367,6 @@ def draw_confidential_security_template(
             fill=_INK,
             overlay=True,
         )
-        _text(page, 12, height - 8, template.english_label, color=_WHITE, size=6.5)
-        _text(page, width - 102, 15, "ACCESS LOGGED", size=5.7)
         mark_anchor = "top_right"
     else:
         raise ValueError(f"알 수 없는 보안 스킨 layout입니다: {layout!r}")
