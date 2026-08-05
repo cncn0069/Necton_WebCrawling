@@ -430,28 +430,11 @@ def draw_confidential_security_template(
             image_ratio=mark_ratio,
             anchor=mark_anchor,
         )
-        # 래스터 스탬프 안의 작은 표시는 후속 스캔/JPEG 처리에서 흐려질 수 있다.
-        # 합성 provenance는 PDF 벡터 텍스트로도 최소 5.5pt 크기로 남긴다.
-        provenance_rect = fitz.Rect(width - 91, 5, width - 7, 18)
-        page.draw_rect(
-            provenance_rect,
-            color=_INK,
-            fill=_WHITE,
-            width=0.5,
-            overlay=True,
-        )
-        _text(page, width - 84, 14, "VIRTUAL SAMPLE", size=5.5)
-
     return {
         "layout": layout,
         "mark_anchor": mark_anchor if mark_rect is not None else None,
         "mark_rect": (
             [mark_rect.x0, mark_rect.y0, mark_rect.x1, mark_rect.y1]
-            if mark_rect is not None
-            else None
-        ),
-        "synthetic_provenance": (
-            {"label": "VIRTUAL SAMPLE", "font_size_pt": 5.5}
             if mark_rect is not None
             else None
         ),

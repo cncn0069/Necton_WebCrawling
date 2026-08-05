@@ -352,7 +352,7 @@ def _balanced_symbol_shape(
 
 def apply_identity_context(
     base_context: Mapping[str, Any],
-    identity: IdentitySpec,
+    identity: IdentitySpec | None,
     *,
     protected_keys: Collection[str] = (),
 ) -> dict[str, Any]:
@@ -362,6 +362,21 @@ def apply_identity_context(
     정책명에 실제로 "한빛"이라는 단어가 들어 있어도 레이아웃 아이덴티티
     변주 때문에 본문이 바뀌면 안 된다.
     """
+
+    if identity is None:
+        context = {
+            key: deepcopy(value) if key in protected_keys else value
+            for key, value in dict(base_context).items()
+        }
+        context.update(
+            {
+                "emblem": "",
+                "agency_name": str(
+                    base_context.get("source_agency_name") or ""
+                ).strip(),
+            }
+        )
+        return context
 
     replacements = (
         ("한빛시설관리공단", f"{identity.agency_stem}시설관리공단"),
@@ -474,14 +489,14 @@ body * {{
 
 
 def render_identity_css(
-    spec: IdentitySpec,
+    spec: IdentitySpec | None,
     *,
     accent: str,
     light_accent: str,
 ) -> str:
     """가상 아이덴티티를 모든 템플릿의 기관 표시 지점에 적용한다."""
 
-    if spec.profile == "none":
+    if spec is None or spec.profile == "none":
         return _identity_none_css()
     if spec.profile == "wordmark":
         return _identity_wordmark_css(spec, accent)

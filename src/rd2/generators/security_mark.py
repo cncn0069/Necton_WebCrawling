@@ -191,7 +191,6 @@ def generate_synthetic_security_stamp(output_path: Path, label: str) -> Path:
     )
 
     header_font = _load_font(_KOREAN_FONT_BOLD_PATH, 24)
-    footer_font = _load_font(_KOREAN_FONT_PATH, 21)
     label_size = 72
     while label_size > 34:
         label_font = _load_font(_KOREAN_FONT_BOLD_PATH, label_size)
@@ -218,13 +217,6 @@ def generate_synthetic_security_stamp(output_path: Path, label: str) -> Path:
         font=label_font,
         fill=_SYNTHETIC_STAMP_INK,
     )
-    draw.text(
-        (centered_x("VIRTUAL SAMPLE", footer_font), height - 55),
-        "VIRTUAL SAMPLE",
-        font=footer_font,
-        fill=_SYNTHETIC_STAMP_INK,
-    )
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG", optimize=True)
     return output_path

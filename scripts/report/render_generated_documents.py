@@ -20,6 +20,10 @@ from rd2.generators.generated_document_pipeline import (
     GeneratedDocumentPipelineError,
     render_generation_payload,
 )
+from rd2.generators.confidential_security_templates import (
+    BODY_SAFE_LEFT_RIGHT_PT,
+    BODY_SAFE_TOP_BOTTOM_PT,
+)
 from rd2.generators.output_naming import (
     rename_rendered_files,
     requested_output_filename,
@@ -406,10 +410,16 @@ def _finalize_rendered_document(
             original_validation_scope = entry.get(
                 "source_text_validation_scope"
             )
+            security_marking = entry.get("security_marking")
             handwriting_result = render_synthetic_handwriting_pdf(
                 Path(str(entry["pdf"])),
                 Path(str(entry["pdf"])),
                 seed=assignment.synthetic_handwriting_seed,
+                protected_margin_pt=(
+                    (BODY_SAFE_TOP_BOTTOM_PT, BODY_SAFE_LEFT_RIGHT_PT)
+                    if isinstance(security_marking, dict)
+                    else None
+                ),
             )
             handwriting_result[
                 "pre_handwriting_source_text_validation_scope"
@@ -418,6 +428,9 @@ def _finalize_rendered_document(
             entry["source_text_validation_scope"] = (
                 "pre_handwriting_pdf"
             )
+            if isinstance(security_marking, dict):
+                security_marking["stage"] = "pre_handwriting"
+                security_marking["baked_into_handwriting"] = True
         if not assignment.synthetic_scan:
             entry["synthetic_scan"] = {
                 "applied": False,
@@ -438,7 +451,7 @@ def _finalize_rendered_document(
         )
         security_marking = entry.get("security_marking")
         if isinstance(security_marking, dict):
-            security_marking["stage"] = "pre_scan"
+            security_marking.setdefault("stage", "pre_scan")
             security_marking["baked_into_scan"] = True
         entry["synthetic_scan"] = scan_result
         entry["source_text_validation_scope"] = "pre_scan_pdf"

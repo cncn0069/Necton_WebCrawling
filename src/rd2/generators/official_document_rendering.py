@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Collection, Mapping, Sequence
@@ -19,7 +18,6 @@ from rd2.generators.weasyprint_runtime import HTML
 from rd2.generators.official_document_variations import (
     EXPECTED_PAGE_COUNTS,
     apply_identity_context,
-    build_identity_spec,
     build_variation_specs,
     render_identity_css,
     render_variation_css,
@@ -120,8 +118,9 @@ def render_official_document_variations(
 ) -> list[dict[str, object]]:
     """공문 템플릿 변주를 렌더링하고 텍스트 누락을 검증한다.
 
-    ``protected_context_keys``에 들어간 값은 가상 기관명 치환에서 제외된다.
-    생성 모델이 만든 제목과 본문은 반드시 이 목록으로 보호해야 한다.
+    ``protected_context_keys``에 들어간 값은 렌더러 identity 처리에서
+    변경하지 않는다. 생성 모델이 만든 제목과 본문은 반드시 이 목록으로
+    보호해야 한다.
     """
 
     if per_template < 1:
@@ -152,9 +151,6 @@ def render_official_document_variations(
     source_agency_name = str(
         base_context.get("source_agency_name") or ""
     ).strip()
-    source_agency_category = str(
-        base_context.get("source_agency_category") or ""
-    ).strip()
 
     for variant in variants:
         template_slug = variant["slug"]
@@ -168,16 +164,9 @@ def render_official_document_variations(
             base_seed=base_seed,
             start_offset=variation_offset,
         ):
-            identity = build_identity_spec(
-                template_slug,
-                variation_index=spec.index,
-                base_seed=base_seed,
-                identity_seed=identity_seed,
-                organization_category=source_agency_category or None,
-            )
-            if source_agency_name:
-                # 입력 기관명은 그대로 보존하고 실제 기관 로고를 추측하지 않는다.
-                identity = replace(identity, profile="none")
+            # 기관 identity는 payload가 제공한 기관명만 사용한다. 입력값이
+            # 없으면 None으로 두어 가상 기관·주소·발신자 등을 생성하지 않는다.
+            identity = None
             identity_context = apply_identity_context(
                 base_context,
                 identity,
@@ -251,7 +240,11 @@ def render_official_document_variations(
             context = {
                 **identity_context,
                 "variation_class": " ".join(
-                    (spec.css_class, identity.css_class, *state_classes)
+                    (
+                        spec.css_class,
+                        identity.css_class if identity else "identity-none",
+                        *state_classes,
+                    )
                 ),
                 "variation_css": (
                     render_variation_css(spec)
@@ -279,7 +272,7 @@ def render_official_document_variations(
             required_template_texts = (
                 str(base_context.get("title") or ""),
                 str(base_context.get("document_number") or ""),
-                source_agency_name or identity.agency_name,
+                source_agency_name or (identity.agency_name if identity else ""),
             )
             missing_template_texts = [
                 value
@@ -332,35 +325,33 @@ def render_official_document_variations(
                     + "; ".join(failure_reasons)
                 )
 
-            identity_manifest = identity.to_dict()
-            if source_agency_name:
-                identity_manifest.update(
-                    {
-                        "identity_source": "input",
-                        "agency_seed": None,
-                        "agency_pool_index": None,
-                        "agency_stem": None,
-                        "organization_category": None,
-                        "organization_type": None,
-                        "issuer_role": None,
-                        "romanized_name": None,
-                        "slogan": None,
-                        "brand_note": None,
-                        "copy_recipients": None,
-                        "road_name": None,
-                        "district_name": None,
-                        "agency_name": source_agency_name,
-                        "display_agency_name": source_agency_name,
-                        "issuer_title": None,
-                        "administration_type": None,
-                        "mark_text": "",
-                    }
-                )
-            else:
-                identity_manifest["identity_source"] = "synthetic"
-                identity_manifest["selection_category"] = (
-                    source_agency_category or None
-                )
+            identity_manifest = {
+                    "template_slug": template_slug,
+                    "variation_index": spec.index,
+                    "profile": "none",
+                    "seed": None,
+                    "agency_seed": None,
+                    "agency_pool_index": None,
+                    "agency_stem": None,
+                    "organization_category": None,
+                    "organization_type": None,
+                    "issuer_role": None,
+                    "romanized_name": None,
+                    "slogan": None,
+                    "brand_note": None,
+                    "copy_recipients": None,
+                    "road_name": None,
+                    "district_name": None,
+                    "agency_name": source_agency_name,
+                    "display_agency_name": source_agency_name,
+                    "issuer_title": None,
+                    "administration_type": None,
+                    "mark_text": "",
+                    "css_class": "identity-none",
+                    "agency_pool_size": 0,
+                    "identity_source": "input" if source_agency_name else "none",
+                    "selection_category": None,
+                }
 
             manifest.append(
                 {
