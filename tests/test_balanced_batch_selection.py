@@ -314,6 +314,54 @@ def test_directory_batch_renders_one_balanced_assignment_per_payload(
     assert saved["synthetic_handwriting_count"] in {1, 2}
 
 
+def test_directory_batch_rejects_removed_type_and_continues(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    for index, document_type in enumerate(("synthetic_document", "unknown")):
+        payload = {
+            "output_filename": f"문서-{index}.pdf",
+            "source_assessment": {
+                "source_classification": {"document_type": document_type},
+            },
+            "generation_plan": {
+                "generation_route": "fully_synthetic",
+                "final_target": {},
+            },
+            "generation_artifact": {
+                "contract_version": "2.2.0",
+                "generated_document": {
+                    "contract_version": "2.2.0",
+                    "title": f"문서 {index}",
+                    "blocks": [],
+                },
+            },
+        }
+        (input_dir / f"{index}.json").write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    manifest = render_cli.render_input_directory(
+        input_dir,
+        output_dir,
+        selection_seed=2026,
+        variation_count=1,
+    )
+
+    assert manifest["document_count"] == 2
+    assert manifest["success_count"] == 0
+    assert manifest["rejected_count"] == 2
+    assert all(
+        entry["status"] == "rejected" for entry in manifest["documents"]
+    )
+    assert all(
+        entry["stage"] == "render" for entry in manifest["documents"]
+    )
+
+
 def test_directory_batch_rejects_output_inside_input(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()

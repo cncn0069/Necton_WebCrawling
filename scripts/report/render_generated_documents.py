@@ -635,21 +635,24 @@ def render_input_directory(
                 used_document_ids,
             )
             document_type = _document_type(payload)
-            assignment = selector.select(
-                document_type,
-                item_key=f"{source_file}:{payload_index}",
-                renderer_family=(
-                    "verbatim" if _uses_verbatim_renderer(payload) else None
-                ),
-            )
             document_output_dir = output_dir / document_id
-            selection = assignment.to_dict()
-            selection["source_file"] = source_file
-            selection["payload_index"] = payload_index
-
+            assignment: BalancedTemplateAssignment | None = None
+            selection: dict[str, object] = {}
             render_attempts: list[dict[str, object]] = []
             rendered: list[dict[str, object]] = []
             try:
+                # 타입 해석도 렌더 단계에 포함시켜, synthetic_document/미등록
+                # 값 하나가 디렉터리 전체 배치를 중단시키지 않게 한다.
+                assignment = selector.select(
+                    document_type,
+                    item_key=f"{source_file}:{payload_index}",
+                    renderer_family=(
+                        "verbatim" if _uses_verbatim_renderer(payload) else None
+                    ),
+                )
+                selection = assignment.to_dict()
+                selection["source_file"] = source_file
+                selection["payload_index"] = payload_index
                 rendered, accepted_selection = _render_with_source_text_retries(
                     payload,
                     document_output_dir,
