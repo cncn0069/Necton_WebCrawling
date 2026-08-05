@@ -35,6 +35,13 @@ MILITARY_SECRET_MARK_FILENAMES: dict[str, str] = {
     "3급": "3급_비밀.png",
 }
 
+# 본문 맨 앞에 한 장 붙는 등급별 표지 도안. 마크와 달리 면마다 반복되지 않는다.
+MILITARY_SECRET_COVER_FILENAMES: dict[str, str] = {
+    "1급": "1급_비밀_표지.png",
+    "2급": "2급_비밀_표지.png",
+    "3급": "3급_비밀_표지.png",
+}
+
 
 def is_military_secret_agency(agency: str) -> bool:
     """국방부/국가정보원 문서만 [별표 2] 스타일 등급 마크 대상으로 본다.

@@ -77,6 +77,12 @@ _EXTRA_COLUMNS: list[tuple[str, str]] = [
     ("generated_yn", "BINARY(1)"),
     # 참조한 원문의 documents.id. RDS에 FK도 인덱스도 없어 여기서도 걸지 않는다.
     ("ref_id", "INT"),
+    # PDF 렌더 입력. **위 다섯과 달리 RDS에 아직 없다**(2026-08-05 실측:
+    # ingest_data.documents 28컬럼) — 이 정의가 먼저고 마이그레이션이 ADD한다.
+    # LONGTEXT가 아니라 TEXT인 것은 본문을 넣지 않기로 했기 때문이다. 본문은
+    # generated_text가 갖고 있고, 여기는 서식을 정하는 값만 온다(models.py의
+    # batch_json 설명 참고) — 실측으로 1KB 남짓이라 64KB 상한에 닿지 않는다.
+    ("batch_json", "TEXT"),
 ]
 
 #: 타입 뒤에 붙는 제약·기본값. ``_EXTRA_COLUMNS``의 타입 문자열에 섞으면
@@ -94,6 +100,7 @@ _COLUMN_COMMENTS: dict[str, str] = {
     "generated_text": "생성된 텍스트",
     "generated_yn": "생성된 문서인지 여부 (0 /1 )",
     "ref_id": "민감으로 생성된 문서일때 본문을 참조한 문서 ",
+    "batch_json": "PDF 렌더 입력 JSON (문서형식/등급/표제부/템플릿 좌표)",
 }
 
 def _encode_for_storage(value: object) -> object:

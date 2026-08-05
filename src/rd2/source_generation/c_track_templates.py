@@ -56,7 +56,10 @@ from rd2.source_generation.document_form import header_keys_for
 
 #: 템플릿·전개·프롬프트 규칙의 버전. 슬롯 구성이나 프롬프트 문구가 바뀌면 올린다 —
 #: planner policy hash에 실려 과거 계획을 무효화한다.
-C_TRACK_TEMPLATE_VERSION = "c-track-template-v2"
+#: v3에서 ``STAGE_GUIDANCE``·역할구성 ``guidance``의 ①②③④를 걷어 냈다. 근거는
+#: ``STAGE_GUIDANCE`` 주석에 있다 — 번호가 본문 절 이름으로 복사됐고, 프롬프트
+#: 규칙으로는 한 축에서만 꺾였다.
+C_TRACK_TEMPLATE_VERSION = "c-track-template-v3"
 
 #: 3단계(분석-작성-기록) 접두사의 버전. 템플릿과 따로 매기는 이유는 이쪽이
 #: **대체가 아니라 대조군**이기 때문이다 — ``minimal_prompt``가 현행 프롬프트를
@@ -73,7 +76,15 @@ C_TRACK_TEMPLATE_VERSION = "c-track-template-v2"
 #: **이것은 검증된 처방이 아니라 실험의 한 갈래다.** 근거가 실호출 2건이고 그
 #: 둘도 변경 두 개가 한꺼번에 들어가 교락돼 있다. 대조 실험(arm당 N≥5)을 돌리기
 #: 전까지 이 판이 v2보다 낫다고 말할 근거는 없다 — 방향에 대한 논거만 있다.
-C_TRACK_COT_PROMPT_VERSION = "c-track-cot-2026-08-05-v3"
+#:
+#: v4는 절 하나를 더한다(``_COT_CONDITION_USE_RULE``). 조건표와 지시 문구가
+#: 본문으로 새는 것을 막는 자리이고, 근거가 되는 실측은 그 상수 주석에 있다.
+#:
+#: v5는 그 규칙이 못 막은 것을 **형태**로 막는다 — ``[다루는 사건]``과
+#: ``[문서 정보]``의 ``라벨: 값`` 표가 문장으로 바뀌었다(``CaseSlot.phrasing``).
+#: v4에서 규칙을 세우고도 조건표가 값 없이 라벨만 문서 첫 절로 복사된 실측이
+#: 근거다.
+C_TRACK_COT_PROMPT_VERSION = "c-track-cot-2026-08-05-v5"
 
 #: 비군사기관 문서의 등급 표기. ``is_military_secret_agency``가 참이면
 #: ``MILITARY_SECRET_GRADES``(Ⅰ~Ⅲ급)를 쓴다.
@@ -102,25 +113,37 @@ _GRADE_GUIDANCE: Mapping[str, str] = MappingProxyType(
 #: ``시행 결과 보고``(이미 끝난 단계)가 붙었고, 모델이 구체적 지시가 달린 단계
 #: 쪽을 따라 결재란이 있어야 할 품의가 결과보고서로 나왔다. ``(사안, 형식)``을
 #: 묶어 없앤 충돌과 같은 종류다.
+#: **번호를 쓰지 않는다.** ``① … → ② … → ③``으로 적던 것을 산문으로 되돌린
+#: 것이 template v3이다.
+#:
+#: 실측(2026-08-05, 통일부 case 19570 · 프롬프트 v3/v4 두 번): 이 번호가 본문의
+#: 절 이름이 됐다 — ``□ 중간점검 ① 당초 계획 재기술``, ``② 현재 진행률 대비``,
+#: ``③ 차질 항목과 원인 분석``. 프롬프트 v4에 "①②③④는 쓰는 순서이지 절 이름이
+#: 아니다"라는 절을 세웠더니 역할구성 쪽에서는 번호가 빠졌지만 진행단계 쪽에서
+#: 그대로 재발했다. 지시 한 줄로 꺾이지 않는 습성이다.
+#:
+#: 그래서 규칙을 더하는 대신 **베낄 것을 없앤다.** ``_BOUNDARY_RULE``이 예시
+#: 리터럴을 뺀 것과 같은 처방이고, 근거도 같다 — 프롬프트에 문자열로 서 있으면
+#: 모델은 그것을 재료로 쓴다. 순서는 문장 안에 남으므로 지시는 잃지 않는다.
 STAGE_GUIDANCE: Mapping[str, str] = MappingProxyType(
     {
         "검토 착수": (
-            "① 무엇이 있었기에 검토가 시작됐는지 경위를 시간 순으로 적고 → "
-            "② 그래서 무엇이 문제인지 짚고 → ③ 앞으로 확인할 항목을 나열한다. "
-            "결론은 아직 내지 않는다."
+            "무엇이 있었기에 검토가 시작됐는지 경위를 시간 순으로 먼저 적고, "
+            "그래서 무엇이 문제인지 짚은 다음, 앞으로 확인할 항목을 나열하며 "
+            "끝낸다. 결론은 아직 내지 않는다."
         ),
         "확정 전 내부 검토": (
-            "① 검토한 대안을 안별로 제시하고 → ② 각 안의 장단점과 소요를 "
-            "비교하고 → ③ 어느 부서가 어느 안에 왜 찬성·반대·보류했는지 적고 → "
-            "④ 아직 정해지지 않은 쟁점으로 끝낸다. 결재란은 비워 둔다."
+            "검토한 대안을 안별로 먼저 제시하고, 각 안의 장단점과 소요를 "
+            "비교한 다음, 어느 부서가 어느 안에 왜 찬성·반대·보류했는지 적고, "
+            "아직 정해지지 않은 쟁점으로 끝낸다. 결재란은 비워 둔다."
         ),
         "시행 중간점검": (
-            "① 당초 계획을 먼저 다시 적고 → ② 현재 진행률을 그것과 대비시키고 → "
-            "③ 차질이 난 항목과 그 원인을 짚고 → ④ 조정이 필요한 부분을 적는다."
+            "당초 계획을 먼저 다시 적고, 현재 진행률을 그것과 대비시킨 다음, "
+            "차질이 난 항목과 그 원인을 짚고, 조정이 필요한 부분으로 끝낸다."
         ),
         "시행 결과 보고": (
-            "① 당초 목표를 먼저 적고 → ② 실제 결과 수치를 그것과 대비시키고 → "
-            "③ 목표와 어긋난 항목의 원인을 짚고 → ④ 남은 과제로 끝낸다."
+            "당초 목표를 먼저 적고, 실제 결과 수치를 그것과 대비시킨 다음, "
+            "목표와 어긋난 항목의 원인을 짚고, 남은 과제로 끝낸다."
         ),
     }
 )
@@ -267,15 +290,29 @@ _COT_STAGE_1_TAIL = """   각 항목은 그 사람이 하는 일 자리에 **우
 #: "베끼지 말라"를 빼자 36개 슬롯 중 22개가 글자 그대로 복사됐다. 저쪽은 반환 전
 #: 점검으로 막았지만, 여기서는 애초에 **베낄 문자열을 두지 않는** 쪽을 택한다.
 #: 무엇을 적을지는 종류로 말하면 충분하다.
+#: v5에서 목록을 산문 한 문단으로 바꿨다.
+#:
+#: 실측(2026-08-05, 검찰청 case 141): 이 절이 **문서 속 지시사항으로 옮겨졌다.**
+#: 생성된 내사 검토보고의 ``□ 대검 요구사항`` 아래에 "계정·인증 체계·장비 제원·
+#: 좌표 등은 수량과 용도만 표기할 것 요구임"이 있었고, 조정 결과 절에 "세부 절차·
+#: 회피 가능 정보는 미기재 원칙 재확인함", 강제수사 절 ※ 줄에 "집행 방법·경로·
+#: 장비 제원 등은 기재하지 않음"이 붙었다. 경계는 지켜졌는데 경계를 지키라는
+#: **말까지** 문서에 실린 것이다.
+#:
+#: 원인은 형태다. ``- A 자리에는 B를 적는다``가 네 줄로 서 있으면 그 자체가
+#: 요구사항 목록이고, 이 템플릿의 문서형식(품의·요구사항 통보·회의록)은 요구사항
+#: 목록을 본문 구성요소로 갖는다. ``CaseSlot.phrasing``이 조건표에서 한 것과
+#: 같은 처방을 여기에 쓴다 — 규칙을 더하지 않고 베낄 형태를 없앤다. 내용은
+#: 그대로 넷이고 문단 하나로 이어 붙였을 뿐이다.
 _BOUNDARY_RULE = """[경계]
-기관·부서·시설은 실재하는 이름을 쓴다. 그 안을 채우는 값은 전부 새로 지어낸다.
-- 실존 인물 자리에 새로 지어낸 사람을 넣는다. 성명·직위·연락처 모두 가상이다.
-- 계정·인증 체계·장비 제원·주파수·좌표 자리에는 그 값 대신 **수량과 용도**만
-  적는다.
-- 실재하는 시설·자산·상대국의 실제 판정·합의 내용 자리에는 이 문서가 다루는
-  **가상의 건**을 적는다.
-- 실행 절차·수법·회피 방법 자리에는 **무엇이 무력화되는지**를 적는다. 위험한
-  것이 무엇인지는 값으로 남기고, 어떻게 하는지는 문서가 말하지 않는다."""
+기관·부서·시설은 실재하는 이름을 쓰고 그 안을 채우는 값은 전부 새로 지어낸다.
+실존 인물 자리에는 새로 지어낸 사람이 들어가며 성명·직위·연락처가 모두
+가상이다. 계정·인증 체계·장비 제원·주파수·좌표 자리에는 그 값 대신 수량과
+용도가 들어가고, 실재하는 시설·자산·상대국의 실제 판정·합의 내용 자리에는 이
+문서가 다루는 가상의 건이 들어간다. 실행 절차·수법·회피 방법 자리에는
+무엇이 무력화되는지가 들어간다 — 위험한 것이 무엇인지는 값으로 남고, 어떻게
+하는지는 문서가 말하지 않는다. 이 문단은 문서를 쓰는 사람이 지킬 선이지 문서에
+적을 내용이 아니다."""
 
 #: 2단계 절의 머리. 뒤에 ``template.instruction``·``[제목]``·``[문체]``·
 #: ``[출력 구조]``가 이어 붙는다.
@@ -305,12 +342,40 @@ _COT_STAGE_2_HEAD = """[단계 2: 기밀 문서 작성]
 #: 되돌려 막았지만 이쪽은 되돌릴 수 없다 — ``[조건]``의 ``대상 장소``는 프롬프트
 #: 골격이 요구하는 이름이다. 그래서 규칙 쪽을 옮긴다.
 _COT_TITLE_RULE = """[제목]
-- [문서 정보]의 `문서`에 적힌 이름은 문서의 **종류**이지 제목이 아니다. 그
+- [문서 정보]에 종류로 주어진 이름은 문서의 **종류**이지 제목이 아니다. 그
   문자열을 제목으로 그대로 쓰지 않는다.
 - [조건]의 `대상 장소`와 [다루는 사건]의 조건(촉발계기·진행단계)이 드러나는
   제목을 짓는다. 연도나 차수처럼 이 건을 특정하는 표현을 넣어 다른 건과
   구별되게 한다.
 - '[합성]', '(가상)', 'AI 생성' 같은 라벨은 절대 넣지 않는다."""
+
+#: 조건을 **쓰는 법**. v4에서 새로 세운 절이다.
+#:
+#: 실측(2026-08-05, 통일부 case 19570)에서 두 가지가 한꺼번에 났다.
+#:
+#: 1. ``[다루는 사건]`` 절이 문서의 첫 절로 복사됐다 — ``□ 문서 개요 및 사안
+#:    현황`` 아래가 ``○ 사안: … - 촉발계기: … - 대상 장소: … - 진행단계: … -
+#:    역할구성: …``이었고, 제목에도 촉발계기 문자열이 그대로 붙었다. 프레임은
+#:    문서를 **정하는** 조건인데 문서가 그 조건표를 다시 적은 것이다.
+#: 2. ``CaseSlot.guidance``의 ①②③④가 본문 소제목이 됐다 — ``○ ① 협의 요청
+#:    사유 / - ② 부처별 입장 표명 / - ③ 입장이 갈린 쟁점``. 그 번호는 무슨
+#:    순서로 쓰라는 지시이지 항목명이 아니다.
+#:
+#: 둘은 같은 실패다. 프롬프트가 **문서에 무엇을 담으라**고만 말하고 자기 자신이
+#: 문서의 재료가 아니라는 말을 하지 않았다. ``_TITLE_RULE``이 "문서명은 종류이지
+#: 제목이 아니다"로 이미 한 칸에서 같은 선을 그었고(실측 2026-08-03, 10건 중
+#: 8건), 여기서 나머지 칸을 긋는다.
+#:
+#: v3 원칙대로 대체문으로 쓴다 — "옮겨 적지 않는다"가 아니라 "그 자리에 무엇을
+#: 적는다"다. 금지가 효과 없던 실측은 ``_COT_STAGE_1_TAIL`` 주석에 있다.
+_COT_CONDITION_USE_RULE = """[조건을 쓰는 법]
+- [조건]·[다루는 사건]·[문서 정보]에 주어진 것이 놓일 자리에는 그 조건이
+  만들어 낸 **사실**을 적는다. 조건은 본문 안에서 일자·수량·경위 같은 값으로만
+  나타나며, 조건을 다시 적어 두는 절을 문서 앞에 두지 않는다.
+- [다루는 사건]에 딸린 안내는 **쓰는 순서**다. 그 순서대로 절을 세우되,
+  절 이름에는 그 절에서 실제로 오간 일을 적는다.
+- 이 프롬프트의 지시 문장 자리에는 그 지시를 지킨 결과를 적는다. 지시가 쓴 말이
+  본문에 그대로 남아 있으면 문서가 아니라 지시를 옮긴 것이다."""
 
 #: 3단계 절.
 #:
@@ -344,6 +409,19 @@ class CaseSlot:
     name: str
     values: tuple[str, ...]
     guidance: Mapping[str, str] = MappingProxyType({})
+    #: 이 슬롯의 값이 ``[다루는 사건]``에서 **문장으로** 어떻게 서는지.
+    #: ``{value}``를 반드시 포함한다.
+    #:
+    #: 라벨 형태(``- 촉발계기: X``)를 버린 이유는 실측이다(2026-08-05, 국토부
+    #: case 11125): 생성된 문서의 첫 절이 ``○ 문서 종류: … ○ 사안: … ○ 진행
+    #: 단계: … ○ 역할 구성: …``으로, 프롬프트의 조건표를 **값 없이 라벨만**
+    #: 옮겨 적은 것이었다. 프롬프트 v4에 "조건 이름 자리에는 그 조건이 만든
+    #: 사실을 적는다"는 절을 세웠는데도 재발했다.
+    #:
+    #: ``STAGE_GUIDANCE``의 ①②③④를 걷어 낸 것과 같은 처방이다 — 규칙을 더하는
+    #: 대신 베낄 것을 없앤다. 문장은 ``라벨: 값`` 꼴이 아니므로 절 제목으로
+    #: 옮겨 적을 형태가 되지 않는다.
+    phrasing: str = "{value}에 해당하는 건이다."
     #: 이 슬롯이 **장소** 축인지. 3단계 프롬프트는 장소를 ``[조건]``의
     #: ``대상 장소``로 올리고 나머지는 ``[다루는 사건]``에 둔다.
     #:
@@ -362,6 +440,8 @@ class CaseSlot:
             raise ValueError(
                 f"slot {self.name!r} has guidance for unknown values: {sorted(unknown)}"
             )
+        if "{value}" not in self.phrasing:
+            raise ValueError(f"slot {self.name!r} phrasing must contain '{{value}}'")
 
 
 @dataclass(frozen=True)
@@ -486,6 +566,18 @@ class CTrackTemplate:
     slots: tuple[CaseSlot, ...]
     #: ``(사안, 문서형식)`` 쌍의 목록. 말이 되는 쌍만 적는다.
     subject_cases: tuple[SubjectCase, ...]
+    #: ``departments``와 **1:1로 함께 움직이는** 슬롯 이름.
+    #:
+    #: 부서와 그 부서가 다루는 대상이 갈라져 있으면 어긋난 조합이 대량으로
+    #: 나온다 — 실측(2026-08-05, 국가정보원): 부서축이 주제별 센터인데 장소축이
+    #: 따로 돌아 ``국가우주안보센터``가 ``외교부 관련 수사자료``의 재분류를
+    #: 심의하는 문서가 나왔다(사용자 지적).
+    #:
+    #: ``SubjectCase``가 (사안, 문서형식)을 묶어 비호환 조합을 없앤 것과 같은
+    #: 해법이다. 지정하면 그 슬롯은 독립 자리를 갖지 않고 부서 자리를 함께 쓴다 —
+    #: 값 순서가 ``departments`` 순서와 맞아야 하고 길이도 같아야 한다. 조합 수는
+    #: 그 슬롯의 값 개수만큼 준다. 정합성이 양보다 먼저다.
+    department_paired_slot: str | None = None
 
     def __post_init__(self) -> None:
         if not self.subject_cases:
@@ -505,6 +597,21 @@ class CTrackTemplate:
             raise ValueError("duplicate adversary")
         if len(self.place_slots) != 1:
             raise ValueError("template needs exactly one place slot")
+        if self.department_paired_slot is not None:
+            paired = [
+                slot for slot in self.slots
+                if slot.name == self.department_paired_slot
+            ]
+            if not paired:
+                raise ValueError(
+                    f"unknown department_paired_slot: {self.department_paired_slot!r}"
+                )
+            if len(paired[0].values) != len(self.departments):
+                raise ValueError(
+                    f"slot {paired[0].name!r} is paired with departments but has "
+                    f"{len(paired[0].values)} values for {len(self.departments)} "
+                    "departments"
+                )
 
     @property
     def place_slots(self) -> tuple[CaseSlot, ...]:
@@ -570,8 +677,20 @@ class CTrackTemplate:
             * len(self.security_grades)
         )
         for slot in self.slots:
+            # 부서와 묶인 슬롯은 자기 자리를 갖지 않는다.
+            if slot.name == self.department_paired_slot:
+                continue
             total *= len(slot.values)
         return total
+
+    @property
+    def free_slots(self) -> tuple[CaseSlot, ...]:
+        """독립 자리를 갖는 슬롯. 부서와 묶인 것은 빠진다."""
+
+        return tuple(
+            slot for slot in self.slots
+            if slot.name != self.department_paired_slot
+        )
 
 
 @dataclass(frozen=True)
@@ -870,6 +989,7 @@ _CORRECTION_SECURITY_MOJ = CTrackTemplate(
         ),
         CaseSlot(
             name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
             values=(
                 "정기 보안점검 결과",
                 "수용자 도주 시도 발생",
@@ -881,6 +1001,7 @@ _CORRECTION_SECURITY_MOJ = CTrackTemplate(
         # "인물"을 성명이 아니라 역할 구성으로 둔다 — 이름만 바꾸면 본문이 안 바뀐다.
         CaseSlot(
             name="역할구성",
+            phrasing="{value}로 진행된 건이다.",
             values=(
                 "담당 부서 단독 검토",
                 "본부-일선기관 합동 검토",
@@ -890,29 +1011,3698 @@ _CORRECTION_SECURITY_MOJ = CTrackTemplate(
             guidance=MappingProxyType(
                 {
                     "담당 부서 단독 검토": (
-                        "작성 부서 안에서 오간 것만 적는다. ① 담당자 검토 의견 → "
-                        "② 과장 지시사항 → ③ 지시를 반영한 결과 순으로 적고, "
-                        "외부 참여자를 등장시키지 않는다."
+                        "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 "
+                        "먼저 적고, 과장 지시사항을 적은 다음, 지시를 반영한 "
+                        "결과로 끝낸다. 외부 참여자를 등장시키지 않는다."
                     ),
                     "본부-일선기관 합동 검토": (
-                        "① 본부가 요구한 사항 → ② 일선기관이 올린 현장 의견 → "
-                        "③ 둘이 어긋난 지점 → ④ 조정된 결과 순으로 적는다. "
-                        "현장 의견은 본부 판단과 다른 내용을 담아야 한다."
+                        "본부가 요구한 사항을 먼저 적고, 일선기관이 올린 현장 "
+                        "의견을 적은 다음, 둘이 어긋난 지점을 짚고, 조정된 "
+                        "결과로 끝낸다. 현장 의견은 본부 판단과 다른 내용을 담아야 "
+                        "한다."
                     ),
                     "외부 위원이 참여하는 심의": (
-                        "① 안건 상정과 담당 부서의 설명 → ② 위원별 질의와 그에 "
-                        "대한 답변 → ③ 쟁점별 찬반 발언과 근거 → ④ 의결 또는 보류 "
-                        "결정과 그 사유 순으로 적는다. 뒤 단계의 발언은 앞 단계에서 "
-                        "나온 말을 받아야 하며, 서로 무관한 한 줄 의견을 나열하지 "
-                        "않는다."
+                        "안건 상정과 담당 부서의 설명을 먼저 적고, 위원별 질의와 "
+                        "그에 대한 답변을 적은 다음, 쟁점별 찬반 발언과 근거를 "
+                        "적고, 의결 또는 보류 결정과 그 사유로 끝낸다. 뒤에 오는 "
+                        "발언은 앞에서 나온 말을 받아야 하며, 서로 무관한 한 줄 "
+                        "의견을 나열하지 않는다."
                     ),
                     "경찰·검찰 등 유관기관 협의": (
-                        "① 협의를 요청한 사유 → ② 기관별 입장 표명 → ③ 입장이 갈린 "
-                        "쟁점 → ④ 합의된 것과 미합의로 남은 것 순으로 적는다. "
-                        "기관마다 서로 다른 이해관계가 드러나야 한다."
+                        "협의를 요청한 사유를 먼저 적고, 기관별 입장 표명을 적은 "
+                        "다음, 입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 "
+                        "것으로 끝낸다. 기관마다 서로 다른 이해관계가 드러나야 "
+                        "한다."
                     ),
                 }
             ),
+        ),
+    ),
+)
+
+
+#: 국방부 역할구성. 값 이름만 교정판과 다르고 층위는 같다 — 이 축이 하는 일은
+#: "누가 누구와 함께 다루는가"이고 그건 기관이 달라도 같은 종류의 축이다.
+_MND_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 부서 단독 검토",
+        "국방부-소요군 합동 검토",
+        "외부 위원이 참여하는 심의",
+        "합참·각 군 등 유관부대 협의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 부서 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 과장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서 의견을 끌어들이지 않는다."
+            ),
+            "국방부-소요군 합동 검토": (
+                "국방부가 요구한 사항을 먼저 적고, 소요군이 올린 현장 의견을 "
+                "적은 다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. "
+                "소요군 의견은 국방부 판단과 다른 내용을 담아야 한다."
+            ),
+            "외부 위원이 참여하는 심의": (
+                "안건 상정과 담당 부서의 설명을 먼저 적고, 위원별 질의와 그에 "
+                "대한 답변을 적은 다음, 쟁점별 찬반 발언과 근거를 적고, 의결 "
+                "또는 보류 결정과 그 사유로 끝낸다. 뒤에 오는 발언은 앞에서 나온 "
+                "말을 받아야 하며, 서로 무관한 한 줄 의견을 나열하지 않는다."
+            ),
+            "합참·각 군 등 유관부대 협의": (
+                "협의를 요청한 사유를 먼저 적고, 부대별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 부대마다 서로 다른 운용 사정이 드러나야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 국방부 / 제2호 ``security_defense``. 두 번째 C트랙 템플릿이다.
+#:
+#: 교정판과 **구조는 같고 두 축이 다르다.** ``is_military_secret_agency``가 참이라
+#: 등급축이 대외비 하나가 아니라 1~3급 셋이고, 장소축 이름이 ``대상부대``다 —
+#: ``CaseSlot.place`` 플래그로 바꿔 둔 것이 이 자리를 위한 것이었다. 이름으로
+#: 판별했으면 여기서 조용히 깨진다.
+#:
+#: 초안 검토(2026-08-05, 지적 20건)에서 고친 것:
+#:
+#: - **역할구성 축이 통째로 빠져 있었다.** 하드 검사는 ``if not self.slots``뿐이라
+#:   2축도 통과하는데, 그러면 본문 구성을 바꾸는 축이 진행단계 하나만 남고 조합이
+#:   22,680으로 떨어진다.
+#: - **문서형식이 4종뿐이고 회의록이 5건에 몰렸다.** 그 다섯의 ``contents``가 전부
+#:   "회차·참석자 / 발언과 찬반 / 의결·보류"로 같은 뼈대였다. 형식별 비교
+#:   테스트는 같은 사안 안에서만 보므로 통과하지만 near-duplicate가 대량으로
+#:   나온다. 둘을 ``response_plan``·``inspection_report``로 돌려 6종으로 폈다.
+#: - **장소축 값이 전부 최상위 본부였다.** ``- 대상 장소: 합동참모본부``에
+#:   "부대별 이전 시기"를 요구하면 말이 어긋나고, 최고사령부를 방호 대상으로
+#:   세우는 것은 실존명 결정이 상정한 층위가 아니다. 예하 지원·교육 부대로 내렸다.
+#: - **조항이 새는 자리 여섯.** 계약 방식(제5호) / 집행액·불용액(공표 대상이라
+#:   excludes 정면) / 이전 대상지(제8호 투기) / 동원 대상이 사람이면(제6호) /
+#:   연합훈련 협의(``unification_diplomacy``) / 적대자의 피해가 비밀취급 제도
+#:   자체이면(제1호).
+_SECURITY_DEFENSE_MND = CTrackTemplate(
+    subclause_key=SubclauseKey.SECURITY_DEFENSE,
+    agency="국방부",
+    persona_context="부대 운용·전력 소요와 군사시설 관리 업무",
+    adversaries=(
+        Adversary(
+            who="우리 군을 표적으로 삼는 국외 정보수집 조직",
+            position="external",
+            what_they_gain=(
+                "우리 전력이 어느 방향에 우선 배치되고 언제 보강되는지가 밖에서 "
+                "먼저 읽히면, 상대가 우리 대비태세를 가늠하지 못한다는 전제 위에 "
+                "서 있던 억제가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="전력 소요를 함께 다루는 방위산업 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "어느 체계를 언제까지 채우려 하는지가 사업에 관여하는 민간 쪽으로 "
+                "먼저 퍼지면, 전력 증강의 순서와 시점을 상대가 읽지 못한다는 "
+                "전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="공개 자료를 모아 우리 전력을 추정하는 외부 분석자",
+            position="external",
+            what_they_gain=(
+                "부대·시설·소요가 한 문서에 함께 놓여 전체 규모와 우선순위가 한 "
+                "번에 드러나면, 부분만으로는 전모를 알 수 없게 해 두려던 구분이 "
+                "성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="취급 인가 범위를 넘어 자료를 본 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확정 전 배치안과 소요가 인가 밖으로 퍼지면, 결정 전까지 우리 "
+                "의도가 드러나지 않는다는 전제 위에 서 있던 전력 운용이 "
+                "무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "국방정책실 정책기획과",
+        "전력자원관리실 전력정책과",
+        "전력자원관리실 전력계획과",
+        "전력자원관리실 군수기획과",
+        "군사시설기획관실 시설기획과",
+        "군사시설기획관실 시설관리과",
+        "동원기획관실 동원기획과",
+    ),
+    instruction=(
+        "부대 운용·전력 증강·군사시설 관리의 내부 자료를 쓴다. 부대별 임무와 "
+        "배치 조정안, 확정 전 전력 소요와 전력화 일정, 시설 보강 우선순위와 소요 "
+        "예산처럼 미리 알려지면 우리 전력의 우선순위와 준비 시점이 그대로 읽히는 "
+        "내용을 담고, 공개 시 국방 목적 수행이 어떻게 곤란해져 국가의 중대한 "
+        "이익이 현저히 훼손되는지 문맥에서 드러나게 한다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상부대",
+            place=True,
+            # 예하 지원·교육 부대로 둔다. 초안의 최상위 본부 6종은 이 축이 계획의
+            # **대상**으로 실리는 자리라(``- 대상 장소:``) 사안과 말이 어긋났다.
+            values=(
+                "육군군수사령부",
+                "해군군수사령부",
+                "공군군수사령부",
+                "육군교육사령부",
+                "공군교육사령부",
+                "국군의무사령부",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            # 초안의 ``합동·연합훈련``에서 연합을 뺐다. 연합이 붙으면 상대국과의
+            # 협의 경위가 본문에 들어와 ``unification_diplomacy``로 넘어간다.
+            values=(
+                "국방중기계획 소요 제출 시기 도래",
+                "합동훈련 사후 평가 결과",
+                "상급 부대 개편 지침 시달",
+                "전력화 일정 지연 통보",
+                "군사시설 실태조사 결과 접수",
+            ),
+        ),
+        _MND_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="경계·방호태세 등급 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="경계·방호태세 등급 조정 계획(안)",
+            contents=(
+                "부대별 현행 태세 등급과 조정안, 조정 사유",
+                "경계 근무 인원 증감 소요와 단계별 시행 일정",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경계·방호태세 등급 조정",
+            document_form=DocumentForm.RESPONSE_PLAN,
+            document_name="경계·방호태세 격상 시 대응계획서",
+            contents=(
+                "격상 단계별 조치사항과 발령 기준",
+                "단계별 담당 부서와 보고·전파 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경계·방호태세 등급 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="경계·방호태세 조정 시행 결과보고",
+            contents=(
+                "당초 조정 목표와 부대별 적용 실적의 대비표",
+                "목표와 어긋난 항목의 원인과 보완 필요사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="부대 편성 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="부대 편성 조정 추진계획(안)",
+            contents=(
+                "대상 부대의 현 편성과 조정 후 편성, 조정 사유",
+                "편성 변경에 따른 인력·장비 재배분 소요와 단계별 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="부대 편성 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="부대 편성 심의위원회 회의록",
+            contents=(
+                "편성안별 위원 발언과 찬반 근거, 군 간 갈린 쟁점",
+                "의결·보류 결과와 재심의로 넘긴 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="부대 편성 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="부대 편성 조정 추진 현황보고",
+            contents=(
+                "당초 계획 대비 부대별 편성 반영 실적",
+                "지연 부대의 원인과 조정된 잔여 일정",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="합동훈련 시행계획 수립",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="합동훈련 시행계획(안)",
+            contents=(
+                "훈련 목표와 이번 차수에서 검증할 과제, 기간과 차수",
+                "참가 부대 구분과 부대별 참가 규모, 지휘관계 편성",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="합동훈련 시행계획 수립",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="합동훈련 기획회의 회의록",
+            contents=(
+                "시행안별 참가 부대의 발언과 부대 간 이견, 갈린 이유",
+                "조정·의결된 사항과 다음 회의로 넘긴 미결 쟁점",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="합동훈련 시행계획 수립",
+            document_form=DocumentForm.REPORT,
+            document_name="합동훈련 시행 결과보고",
+            contents=(
+                "당초 훈련 목표와 실제 시행 실적의 대비표",
+                "차기 훈련에 반영할 보완 과제와 그 우선순위",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="전력 소요·전력화 일정 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="전력화 일정 조정 계획(안)",
+            contents=(
+                "조정 대상 전력의 소요량과 용도, 당초 시기와 변경 후 시기",
+                "조정 사유와 지연 기간, 그 기간의 보완 운용 대책",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="전력 소요·전력화 일정 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="전력소요 조정 심의 회의록",
+            contents=(
+                "조정안별 위원 발언과 찬반 이유, 군별 소요 우선순위가 갈린 쟁점",
+                "의결·보류 결과와 재심의로 넘긴 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="전력 소요·전력화 일정 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="전력화 추진 현황보고",
+            contents=(
+                "사업별 전력화 진도율과 당초 목표 대비 달성 실적",
+                "지연 사업의 원인 구분과 후속 소요 조정이 필요한 사업",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="군사시설 방호력 보강",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="군사시설 방호력 보강 계획(안)",
+            contents=(
+                "보강 대상 시설과 목표 수준, 우선순위를 그렇게 정한 사유",
+                "과제별 담당 부대와 착수·완료 시기, 연차별 소요 예산",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="군사시설 방호력 보강",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="방호시설 보강 시행 품의",
+            contents=(
+                "이번 차수 보강 범위와 그 범위로 한정한 품의 사유",
+                "소요 금액과 예산과목, 공사 기간",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="군사시설 방호력 보강",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="군사시설 방호 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "시설별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="비상대비 물자·장비 지정 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="비상대비 물자·장비 지정 조정 계획(안)",
+            contents=(
+                "품목별 현행 지정 규모와 목표 규모, 조정이 필요해진 사유",
+                "신규 지정과 지정 해제 품목의 구분과 그 판단 기준",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비상대비 물자·장비 지정 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="비상대비 물자 조정 실무협의회 회의록",
+            contents=(
+                "조정안별 참석 부대 의견과 지정 규모를 두고 갈린 찬반 근거",
+                "합의된 조정 범위와 미합의로 남은 쟁점",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비상대비 물자·장비 지정 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="비상대비 물자 지정 조정 추진 현황보고",
+            contents=(
+                "품목별 조정 목표 대비 지정 실적과 충족률",
+                "차질이 난 항목의 원인과 다음 지정 주기 보완 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 외교부 역할구성. 층위는 앞의 둘과 같고 값 이름만 이 기관의 것이다.
+_MOFA_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 과 단독 검토",
+        "본부-재외공관 합동 검토",
+        "관계부처 합동 검토",
+        "외부 전문가가 참여하는 자문회의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 과 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 과장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 공관 의견을 끌어들이지 않는다."
+            ),
+            "본부-재외공관 합동 검토": (
+                "본부가 요구한 사항을 먼저 적고, 공관이 올린 현지 의견을 적은 "
+                "다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. 공관 "
+                "의견은 본부 판단과 다른 내용을 담아야 한다."
+            ),
+            "관계부처 합동 검토": (
+                "협의를 요청한 사유를 먼저 적고, 부처별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 부처마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "외부 전문가가 참여하는 자문회의": (
+                "안건 상정과 담당 부서의 설명을 먼저 적고, 전문가별 질의와 그에 "
+                "대한 답변을 적은 다음, 쟁점별 견해와 근거를 적고, 채택·보류된 "
+                "자문 의견과 그 사유로 끝낸다. 뒤에 오는 발언은 앞에서 나온 말을 "
+                "받아야 하며, 서로 무관한 한 줄 의견을 나열하지 않는다."
+            ),
+        }
+    ),
+)
+
+
+#: 외교부 / 제2호 ``unification_diplomacy``. 세 번째 C트랙 템플릿이다.
+#:
+#: **같은 제2호의 나머지 반쪽이라 경계가 곧 이 템플릿의 요건이다.**
+#: ``_SECURITY_DEFENSE_MND``가 촉발계기에서 연합을 떼어 내며 "상대국과의 협의
+#: 경위는 이쪽 소관"이라고 미리 그어 둔 선이 여기서 실물이 된다. 반대 방향도
+#: 같다 — 부대·전력·배치가 값으로 들어오는 순간 이 템플릿은 ``security_defense``
+#: 문서를 만든 것이 되므로, 사안 여섯 중 어느 것도 군사 대비태세를 다루지 않는다.
+#:
+#: **장소축을 다자 대표부로 둔 이유.** ``_BOUNDARY_RULE``이 명시한 두 위험 중
+#: 하나가 "실존 양자 관계에 대한 위조 외교 기록의 형식(제2호
+#: ``unification_diplomacy``)"이다. 장소축에 주요국 양자공관을 세우면 그 위험이
+#: 축 자체에 박힌다 — ``- 대상 장소: 주○○대사관``에 "양보 가능 범위"를 요구하는
+#: 것은 실재하는 양자 교섭의 우리 측 방침을 지어내라는 말이 된다. 다자 대표부는
+#: 상대가 특정 국가가 아니라 회의체라 그 자리가 비어 있다. 국방부 템플릿이
+#: 최상위 본부를 예하 부대로 내린 것과 같은 종류의 조정이다.
+#:
+#: **부서를 기능국으로만 채운 것도 그 결과다.** 지역국 과(동북아1과·유럽1과)를
+#: 넣으면 ``작성 부서``와 ``대상 장소``의 관할이 어긋난다 — 유럽1과가 주아세안
+#: 대표부 건을 기안하는 문서가 조합의 상당수로 나온다.
+#:
+#: 조항이 새는 자리 넷을 사안·항목에서 막았다. 분담금·기여금 배분액(제5호
+#: ``bid_contract``) / 공관 물리보안 취약점의 열거(제7호 ``security_diagnosis``) /
+#: 재외국민 명단·연락처(제6호 ``petitioner_pii``) / 이미 발표된 공동성명·협정문의
+#: 내용(이 세부조항의 ``excludes`` 정면).
+_UNIFICATION_DIPLOMACY_MOFA = CTrackTemplate(
+    subclause_key=SubclauseKey.UNIFICATION_DIPLOMACY,
+    agency="외교부",
+    persona_context="다자 교섭·조약 사무와 재외공관 운영 업무",
+    adversaries=(
+        Adversary(
+            who="같은 안건을 마주 놓고 앉는 상대측 대표단",
+            position="external",
+            what_they_gain=(
+                "우리가 어느 항목을 어디까지 접을 수 있는지가 교섭 전에 읽히면, "
+                "서로 상대의 한계선을 모른 채 마주 앉는다는 전제 위에 서 있던 "
+                "교섭이 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="같은 자리를 놓고 다투는 제3국 교섭 관계자",
+            position="external",
+            what_they_gain=(
+                "우리가 어느 나라에 무엇을 걸고 지지를 구하는지가 먼저 알려지면, "
+                "확보한 지지가 확정 전까지 드러나지 않는다는 전제가 성립하지 "
+                "않게 된다."
+            ),
+        ),
+        Adversary(
+            who="협의에 배석한 민간 자문·연구 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "확정 전 대응방침이 정부 밖으로 먼저 퍼지면, 정부가 하나의 "
+                "입장으로 상대를 마주한다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="우리 공관과 재외국민을 겨냥하는 현지 위해 세력",
+            position="external",
+            what_they_gain=(
+                "우리 보호 조치가 무엇을 상정하고 짜였는지가 밖에서 읽히면, "
+                "상정 밖의 일까지 막아 낸다는 전제 위에 서 있던 재외국민 보호가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 전문을 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확정 전 입장과 접촉 경위가 인가 밖으로 퍼지면, 결정 전까지 우리 "
+                "의중이 드러나지 않는다는 전제 위에 서 있던 교섭이 무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "국제기구국 국제기구협력과",
+        "국제기구국 인권사회과",
+        "조약국 조약과",
+        "조약국 국제법규과",
+        "영사안전국 재외국민보호과",
+        "영사안전국 영사안전정책과",
+        "개발협력국 개발협력정책과",
+    ),
+    # 실호출 1건(2026-08-05, case 141)에서 이 문장이 사안 경계를 넘겼다. 초안은
+    # "…접촉 경위, 공관 안전 조치의 소요와 시기처럼"이었는데, `다자회의 대응방침
+    # 수립` 문서에 경비 인력 4명·차단 설비 2세트·설치와 철수 시각이 한 절로
+    # 붙어 나왔다. instruction은 템플릿의 **모든** 사안에 걸리는 층이라 특정
+    # 사안의 소재를 예로 들면 그 소재가 열여덟 건 전부로 번진다 — 사안을
+    # `subject_cases`로 나눈 의미가 그만큼 없어진다. 안전 조치는 그것이 사안인
+    # 세 건의 `contents`에만 둔다.
+    instruction=(
+        "다자 교섭·조약 사무와 재외공관 운영의 내부 자료를 쓴다. 확정 전 "
+        "대응방침과 우리가 접을 수 있는 범위, 상대측 입장 분석과 접촉 경위처럼 "
+        "미리 알려지면 우리 교섭 입지가 딛고 선 전제가 그대로 읽히는 내용을 "
+        "담되, 그 사안에서 다루는 것만 쓴다. 공개 시 외교관계 수행이 어떻게 "
+        "곤란해져 국가의 중대한 이익이 현저히 훼손되는지 문맥에서 드러나게 한다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상공관",
+            place=True,
+            values=(
+                "주유엔대표부",
+                "주제네바대표부",
+                "주빈국제기구대표부",
+                "주아세안대표부",
+                "주경제협력개발기구대표부",
+                "주유네스코대표부",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "다자회의 개최 일정 확정 통보",
+                "상대측 수정안 접수",
+                "국제기구 선거 일정 공고",
+                "주재국 정세 급변 보고 접수",
+                "조약 발효 요건 점검 결과 접수",
+            ),
+        ),
+        _MOFA_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="다자회의 대응방침 수립",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="다자회의 대응방침(안)",
+            contents=(
+                "의제별 우리 입장과 수용 가능 범위, 그 선을 그은 근거",
+                "주요 참가국의 예상 입장과 그에 대한 대응 논리",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="다자회의 대응방침 수립",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="대응방침 검토 회의록",
+            contents=(
+                "의제별 발언과 입장 수위를 두고 갈린 찬반 근거",
+                "확정된 방침과 재검토로 넘긴 의제",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="다자회의 대응방침 수립",
+            document_form=DocumentForm.REPORT,
+            document_name="다자회의 참석 결과보고",
+            contents=(
+                "당초 방침과 실제 논의 결과의 의제별 대비표",
+                "방침과 어긋난 항목의 원인과 차기 회의 대응 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="국제기구 선거 입후보 교섭",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="입후보 교섭 추진계획(안)",
+            contents=(
+                "목표 확보 표수와 국가군별 지지 판단, 그 판단의 근거",
+                "국가군별 교섭 소요와 단계별 접촉 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="국제기구 선거 입후보 교섭",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="입후보 방침 결정 품의",
+            contents=(
+                "입후보 여부를 이렇게 판단한 사유와 승인받을 방침",
+                "교섭에 드는 소요와 추진 기간",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="국제기구 선거 입후보 교섭",
+            document_form=DocumentForm.REPORT,
+            document_name="입후보 교섭 추진 현황보고",
+            contents=(
+                "국가군별 확보·미확보 집계와 목표 대비 달성률",
+                "미확보로 남은 국가군의 원인과 남은 기간의 보완 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="조약 교섭 대응",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="조약 교섭 대응방침(안)",
+            contents=(
+                "조문별 우리 안과 접을 수 있는 순서, 그 순서를 정한 사유",
+                "상대측 수정안에 대한 조문별 평가와 대응 논리",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="조약 교섭 대응",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="조약안 법률 검토의견",
+            contents=(
+                "조문별 국내법 저촉 여부와 유보가 필요한 항목",
+                "발효 요건과 국회 동의 대상 해당 여부에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="조약 교섭 대응",
+            document_form=DocumentForm.REPORT,
+            document_name="조약 교섭 경과보고",
+            contents=(
+                "회차별 쟁점 조문의 진전 상황과 당초 방침 대비 결과",
+                "미합의로 남은 조문과 다음 회차에 넘긴 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외공관 안전대책 강화",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공관 안전대책 보강 계획(안)",
+            contents=(
+                "보강 항목과 목표 수준, 우선순위를 그렇게 정한 사유",
+                "항목별 담당과 착수·완료 시기, 소요 인력",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외공관 안전대책 강화",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="안전대책 보강 시행 품의",
+            contents=(
+                "이번 차수 보강 범위와 그 범위로 한정한 품의 사유",
+                "소요 금액과 예산과목, 시행 기간",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외공관 안전대책 강화",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="공관 안전관리 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "항목별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외국민 보호 비상대응",
+            document_form=DocumentForm.RESPONSE_PLAN,
+            document_name="재외국민 비상대응계획서",
+            contents=(
+                "위기 단계별 조치사항과 각 단계의 발령 기준",
+                "단계별 담당 부서와 공관-본부 보고·전파 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외국민 보호 비상대응",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="재외국민보호 대책회의 회의록",
+            contents=(
+                "단계 판단을 두고 갈린 근거와 참석 부서별 발언",
+                "결정된 조치와 보류된 조치, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재외국민 보호 비상대응",
+            document_form=DocumentForm.REPORT,
+            document_name="비상대응 시행 결과보고",
+            contents=(
+                "당초 계획과 단계별 실제 조치 실적의 대비표",
+                "미흡했던 항목의 원인과 계획에 반영할 보완 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="주재국 정세 변동 대응",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="정세 대응 관계부처 협의 회의록",
+            contents=(
+                "부처별 소관 영향 진단과 대응 수위를 두고 갈린 쟁점",
+                "합의된 대응 범위와 미합의로 남은 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="주재국 정세 변동 대응",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="정세 변동 대응방침 조정(안)",
+            contents=(
+                "변동 요인별 대응 선택지와 각 선택지가 지는 부담",
+                "방침을 조정할 시점의 판단 기준과 그 기준을 정한 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="주재국 정세 변동 대응",
+            document_form=DocumentForm.REPORT,
+            document_name="정세 변동 및 대응 조정 현황보고",
+            contents=(
+                "당초 상정한 정세와 실제 전개의 대비, 우리 활동에 미친 영향",
+                "조정한 공관 활동 항목과 후속 확인이 필요한 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 통일부 역할구성. 네 번째 값만 이 기관의 것이다 — 외교부의 자문회의 자리에
+#: 민간 협력단체가 온다. 대북 협력사업은 단체가 집행 주체로 실제 협의에 들어오고,
+#: 그 자리에서 오가는 말이 자문과 다르다.
+_MOU_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 과 단독 검토",
+        "본부-소속기관 합동 검토",
+        "관계부처 합동 검토",
+        "민간 협력단체가 참여하는 협의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 과 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 과장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 소속기관 의견을 끌어들이지 않는다."
+            ),
+            "본부-소속기관 합동 검토": (
+                "본부가 요구한 사항을 먼저 적고, 소속기관이 올린 현장 의견을 "
+                "적은 다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. "
+                "현장 의견은 본부 판단과 다른 내용을 담아야 한다."
+            ),
+            "관계부처 합동 검토": (
+                "협의를 요청한 사유를 먼저 적고, 부처별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 부처마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "민간 협력단체가 참여하는 협의": (
+                "정부가 제시한 조건과 그 사유를 먼저 적고, 단체가 제기한 집행상의 "
+                "어려움을 적은 다음, 조건과 현장 사정이 어긋난 지점을 짚고, "
+                "조정된 것과 정부가 물러서지 않은 것으로 끝낸다. 단체 의견은 "
+                "정부 판단과 다른 내용을 담아야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 통일부 / 제2호 ``unification_diplomacy``. 네 번째 C트랙 템플릿이고, **같은
+#: 세부조항의 두 번째 기관**이다.
+#:
+#: **그래서 요건이 하나 늘었다.** 감사 결정 3(제4호 두 브로커는 파는 물건이
+#: 달라야 한다)이 여기 그대로 걸린다 — 적대자가 같으면 [단계 1]의 답이 같아지고,
+#: 세부조항까지 같으므로 생성 문서를 사후에 구별할 근거가 기관명 한 줄만 남는다.
+#: 그래서 ``_UNIFICATION_DIPLOMACY_MOFA``와 적대자를 겹치지 않게 세웠다.
+#:   - 외교부의 상대는 **교섭 상대국·제3국**이고 그들이 읽는 것은 우리가 접을 수
+#:     있는 **선**이다.
+#:   - 통일부의 상대는 **북측·대북사업 관계자**이고 그들이 읽는 것은 우리가 이번
+#:     국면을 어떻게 **판단**하고 무엇을 먼저 풀려 하는지다.
+#:   양쪽에 다 있는 내부 열람자도 잃는 것이 다르다 — 저쪽은 교섭 의중이고
+#:   이쪽은 공개 시점의 선택권이다.
+#:
+#: **장소축은 소속기관으로 둔다.** 남북 사이의 장소(공동연락사무소·공단)를 세우면
+#: 실존하지 않거나 폐쇄된 자리를 상시 운영 중인 것으로 적게 되고, 그것은
+#: ``_BOUNDARY_RULE``이 말하는 "실재하는 시설의 실제 판정" 자리를 지어내는 일이다.
+#: 우리 쪽 소속기관은 그 문제가 없고 층위도 앞의 셋과 같다.
+#:
+#: 조항이 새는 자리 넷. 북한이탈주민의 성명·출신지·정착지(제6호 ``welfare_pii``·
+#: ``petitioner_pii``) / 반출 물자의 단가·계약 상대(제5호 ``bid_contract``·제7호
+#: ``unit_cost``) / 접경지역의 부대·전력 배치(제2호 ``security_defense``) /
+#: 이미 발표된 합의서의 내용(이 세부조항의 ``excludes`` 정면).
+_UNIFICATION_DIPLOMACY_MOU = CTrackTemplate(
+    subclause_key=SubclauseKey.UNIFICATION_DIPLOMACY,
+    agency="통일부",
+    persona_context="남북 회담·교류협력과 인도협력 업무",
+    adversaries=(
+        Adversary(
+            who="같은 사안을 두고 마주 앉는 북측 대표단",
+            position="external",
+            what_they_gain=(
+                "우리가 이번 국면을 어떻게 읽고 무엇을 먼저 풀려 하는지가 마주 "
+                "앉기 전에 알려지면, 서로 상대의 판단을 모른 채 국면을 다룬다는 "
+                "전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="재개를 앞두고 움직이는 대북 협력사업 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "무엇을 어느 조건에서 어느 순서로 열려 하는지가 확정 전에 "
+                "퍼지면, 정부가 조건을 걸어 순서를 정한다는 전제가 성립하지 않게 "
+                "된다."
+            ),
+        ),
+        Adversary(
+            who="북한이탈주민의 정착 경로를 좇는 외부 세력",
+            position="external",
+            what_they_gain=(
+                "보호와 정착 지원이 어느 규모로 어디를 거쳐 이뤄지는지가 밖에서 "
+                "읽히면, 보호 대상이 드러나지 않는다는 전제 위에 서 있던 보호가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 협의 기록을 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "남북 사이에 오간 것이 우리 결정보다 먼저 알려지면, 무엇을 언제 "
+                "공개할지를 우리가 정한다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+    ),
+    # 2025-11-04 시행 직제 개편 후의 현행 조직이다(unikorea.go.kr 조직도, 확인
+    # 2026-08-05). 초안에 적었던 `교류협력국`·`인도협력국`·`이산가족과`는 그
+    # 개편으로 없어진 이름이라 전부 갈았다 — 실존명 원칙(2026-08-05 사용자 결정)은
+    # "실재하는 이름"이지 "실재했던 이름"이 아니다. 부처 조직은 개편으로 움직이므로
+    # 이 축은 템플릿을 새로 쓸 때마다 대조해야 하는 자리다.
+    departments=(
+        "통일정책실 정책총괄과",
+        "평화교류실 평화교류총괄과",
+        "평화교류실 평화경제·제재관리과",
+        "평화교류실 남북경제협력과",
+        "평화교류실 인도지원과",
+        "평화교류실 접경협력과",
+        "사회문화협력국 자립지원과",
+    ),
+    instruction=(
+        "남북 회담·교류협력·인도협력과 그 소속기관 운영의 내부 자료를 쓴다. "
+        "확정 전 대응방침과 우리가 접을 수 있는 범위, 북측 통지와 접촉 경위에 "
+        "대한 우리 판단처럼 미리 알려지면 우리 협의 입지가 딛고 선 전제가 그대로 "
+        "읽히는 내용을 담되, 그 사안에서 다루는 것만 쓴다. 공개 시 통일정책 "
+        "수행이 어떻게 곤란해져 국가의 중대한 이익이 현저히 훼손되는지 문맥에서 "
+        "드러나게 한다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상기관",
+            place=True,
+            # 현행 소속기관 넷이 전부다(확인 2026-08-05). 앞의 셋이 여섯 값을 쓴
+            # 것과 달리 넷인 이유는 여기서 늘릴 자리가 없어서다 — 초안의
+            # `경의선/동해선 남북출입사무소`는 2023-09 남북관계관리단으로
+            # 통폐합되며 폐지됐고, 그 관리단마저 2025-11 개편으로 없어졌다.
+            # `국립통일교육원`은 `국립평화통일민주교육원`으로 재편됐다.
+            values=(
+                "남북회담본부",
+                "국립평화통일민주교육원",
+                "북한이탈주민정착지원사무소",
+                "북한인권기록센터",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "북측 통지문 접수",
+                "연락채널 운영 상태 변동 보고 접수",
+                "인도적 지원 반출 승인 신청 접수",
+                "접경지역 상황 변동 보고 접수",
+                "국제사회 제재 면제 심사 일정 통보",
+            ),
+        ),
+        _MOU_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="남북 당국회담 대응방침 수립",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="남북 당국회담 대응방침(안)",
+            contents=(
+                "의제별 우리 입장과 수용 가능 범위, 그 선을 그은 근거",
+                "북측 예상 주장과 그에 대한 대응 논리",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="남북 당국회담 대응방침 수립",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="대응방침 검토 회의록",
+            contents=(
+                "의제별 발언과 입장 수위를 두고 갈린 찬반 근거",
+                "확정된 방침과 재검토로 넘긴 의제",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="남북 당국회담 대응방침 수립",
+            document_form=DocumentForm.REPORT,
+            document_name="회담 진행 경과보고",
+            contents=(
+                "당초 방침과 실제 논의 결과의 의제별 대비표",
+                "방침과 어긋난 항목의 원인과 차기 회담 대응 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="인도적 지원 물자 반출 승인",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="지원 물자 반출 승인 품의",
+            contents=(
+                "승인받을 반출 품목과 수량, 그 범위로 한정한 품의 사유",
+                "반출 경로와 시기, 전달 확인 방법",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="인도적 지원 물자 반출 승인",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="반출 승인 법률 검토의견",
+            contents=(
+                "남북교류협력 관련 법령상 승인 요건 충족 여부와 미비 항목",
+                "국제사회 제재와의 저촉 여부 및 면제 필요 항목에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="인도적 지원 물자 반출 승인",
+            document_form=DocumentForm.REPORT,
+            document_name="반출 이행 결과보고",
+            contents=(
+                "당초 승인 내용과 실제 반출 실적의 품목별 대비표",
+                "전달 확인 결과와 확인되지 않은 항목의 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="남북 연락·왕래 채널 운영 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="연락·왕래 채널 운영 조정 계획(안)",
+            contents=(
+                "현행 운영 방식과 조정안, 조정이 필요해진 사유",
+                "조정에 따른 인력·시설 소요와 단계별 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="남북 연락·왕래 채널 운영 조정",
+            document_form=DocumentForm.RESPONSE_PLAN,
+            document_name="채널 중단 시 대응계획서",
+            contents=(
+                "중단 단계별 조치사항과 각 단계의 판단 기준",
+                "단계별 담당 부서와 보고·전파 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="남북 연락·왕래 채널 운영 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="채널 운영 현황보고",
+            contents=(
+                "기준 시점의 운영 실적과 당초 계획 대비 차이",
+                "차질이 난 항목의 원인과 조정이 필요한 부분",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="북한이탈주민 정착지원 운영 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="정착지원 운영 조정 계획(안)",
+            contents=(
+                "현행 수용 규모와 조정 목표, 조정이 필요해진 사유",
+                "시설·인력 소요와 단계별 시행 시기, 보호 조치 보강 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="북한이탈주민 정착지원 운영 조정",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="정착지원시설 운영 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "항목별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="북한이탈주민 정착지원 운영 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="정착지원 운영 현황보고",
+            contents=(
+                "기준 시점의 수용 규모와 목표 대비 운영 실적",
+                "보호 조치에서 미흡했던 항목과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="접경지역 상황 대응",
+            document_form=DocumentForm.RESPONSE_PLAN,
+            document_name="접경지역 상황 대응계획서",
+            contents=(
+                "상황 단계별 조치사항과 각 단계의 발령 기준",
+                "단계별 담당 부서와 관계기관 통보 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="접경지역 상황 대응",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="접경지역 상황 대책회의 회의록",
+            contents=(
+                "단계 판단을 두고 갈린 근거와 참석 부서별 발언",
+                "결정된 조치와 보류된 조치, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="접경지역 상황 대응",
+            document_form=DocumentForm.REPORT,
+            document_name="상황 대응 조치 결과보고",
+            contents=(
+                "당초 계획과 단계별 실제 조치 실적의 대비표",
+                "미흡했던 항목의 원인과 계획에 반영할 보완 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="교류협력 사업 재개 대비 검토",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="사업 재개 대비 검토(안)",
+            contents=(
+                "재개 후보 사업의 구분과 여는 순서, 그 순서를 정한 사유",
+                "사업별 재개 조건과 조건 충족 여부를 판단하는 기준",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="교류협력 사업 재개 대비 검토",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="사업 재개 실무협의 회의록",
+            contents=(
+                "재개 조건을 두고 정부와 참여 주체가 갈린 쟁점과 그 근거",
+                "합의된 조건과 미합의로 남은 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="교류협력 사업 재개 대비 검토",
+            document_form=DocumentForm.REPORT,
+            document_name="재개 준비 추진 현황보고",
+            contents=(
+                "사업별 준비 진도와 당초 목표 대비 달성 실적",
+                "지연된 사업의 원인 구분과 재개 순서 조정이 필요한 사업",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 행정안전부 역할구성. 네 번째 값이 이 기관의 것이다 — 감사 결정 2가 수탁 업체
+#: 적대자를 ``life_body`` 쪽에 배정했으므로, 그 상대가 실제로 앉는 자리를 축에도
+#: 둔다. 적대자와 역할구성이 같은 사람을 가리켜야 [단계 1]의 답이 본문에서 값을
+#: 갖는다.
+_MOIS_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 과 단독 검토",
+        "중앙-지자체 합동 검토",
+        "소방·경찰·질병관리 등 관계기관 협의",
+        "시설 관리 수탁 업체가 참여하는 협의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 과 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 과장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 지자체 의견을 끌어들이지 않는다."
+            ),
+            "중앙-지자체 합동 검토": (
+                "중앙이 요구한 사항을 먼저 적고, 지자체가 올린 현장 의견을 적은 "
+                "다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. 현장 "
+                "의견은 중앙 판단과 다른 내용을 담아야 한다."
+            ),
+            "소방·경찰·질병관리 등 관계기관 협의": (
+                "협의를 요청한 사유를 먼저 적고, 기관별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 기관마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "시설 관리 수탁 업체가 참여하는 협의": (
+                "행정청이 제시한 요구 수준과 그 사유를 먼저 적고, 업체가 제기한 "
+                "이행상의 어려움을 적은 다음, 요구와 현장 사정이 어긋난 지점을 "
+                "짚고, 조정된 것과 행정청이 물러서지 않은 것으로 끝낸다. 업체 "
+                "의견은 행정청 판단과 다른 내용을 담아야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 행정안전부 / 제3호 ``life_body``. 다섯 번째 C트랙 템플릿이다.
+#:
+#: **``property``와 정면으로 붙어 있어 경계가 이 템플릿의 요건이다.** 감사 결정
+#: 2가 그 선을 이미 그어 뒀다 — 이쪽은 **사람이 그 안에 있을 때 생기는 피해**만
+#: 다루고(대피·구조·감염병·고위험물질 취급 통제), 구조물 등급 판정과 진단 결과·
+#: 사용제한은 국토교통부 ``property`` 몫이다. 그래서 촉발계기에 `정기 안전점검·
+#: 정밀안전진단 결과`를 두지 않았다. 그 한 값이 두 템플릿의 사건 축을 겹치게
+#: 만들고, 겹치면 생성 문서를 사후에 구별할 수 없다.
+#:
+#: 수탁 업체 적대자도 결정 2가 이쪽에 배정한 것이다 — 취약 지점을 쥐는 쪽이
+#: ``life_body``, 판정 결과를 흘리는 쪽이 ``property``다.
+#:
+#: **사안은 업무가 아니라 취약점으로 세운다.** 초안의 여섯은 전부 업무 이름
+#: (다중밀집 안전관리·대피계획 정비·감염병 확산 대응·대피소 운영)이었는데,
+#: 그 이름이 부르는 문서는 원래 공표되는 정책이다. 실측(2026-08-05, case 141)에서
+#: 그대로 나왔다 — 생성된 `다중밀집 상황 안전관리 계획(안)`의 본체가 우회 유도
+#: 경로·통제 시각·배치 인력이었고, 셋 다 시민에게 미리 알려야 실효가 있는 값이라
+#: 공개 쪽이다. 비공개가 선 것은 `감당 한계 12,000명`·`밀도 3.5인/㎡` 같은
+#: 곁가지뿐이었다.
+#:
+#: 이 세부조항이 무엇을 비공개로 세우는지는 taxonomy가 이미 셋으로 못 박아 뒀다
+#: — 방호 **취약점**, 보호 대상자의 **소재**, 모방 위험이 큰 **수법**. 셋 다
+#: "무엇을 하는가"가 아니라 "무엇이 취약한가"다. 그래서 사안을 그 축으로 다시
+#: 세웠다(사용자 결정, 2026-08-05): 진단·부족분·사각지대·미달 구역이 사안이 되고,
+#: 업무 수행은 그 부족분을 재는 배경으로만 남는다. 문서형식도 점검·현황 계열로
+#: 옮겨 갔다.
+#:
+#: **부서는 2026-08-05에 대조한 현행 조직이다**(mois.go.kr 조직도). 통일부에서
+#: 개편으로 없어진 이름을 적었던 일이 있어 이번에는 축을 세우기 전에 맞췄다.
+#: 점검·조사 계열 과(재난안전점검과·재난안전조사과)는 넣지 않았다 — 이름이
+#: 구조물 진단 쪽으로 문서를 끌고 가 ``property``와 만난다.
+#:
+#: 장소축은 광역지자체다. 이 기관의 재난 문서는 시·도를 대상으로 쓰이므로 부서와
+#: 관할이 맞는다 — 외교부에서 지역국 과를 뺀 것과 같은 이유의 반대편이다.
+#:
+#: 조항이 새는 자리 넷. 구조물 안전등급·사용제한(제3호 ``property``) / 확진자·
+#: 대피자 명단(제6호 ``welfare_pii``) / 시설 보강 공사의 계약 방식(제5호
+#: ``bid_contract``) / 이미 공지된 안전수칙과 통계(이 세부조항의 ``excludes``).
+_LIFE_BODY_MOIS = CTrackTemplate(
+    subclause_key=SubclauseKey.LIFE_BODY,
+    agency="행정안전부",
+    persona_context="재난 대응과 국민 안전 관리 업무",
+    adversaries=(
+        Adversary(
+            who="안전관리를 위탁받아 현장 사정을 쥐고 있는 수탁 업체 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "어느 자리가 사람이 몰렸을 때 얼마나 못 버티는지가 관리 밖으로 "
+                "나가면, 그것을 아는 사람이 관리 책임 안에 머문다는 전제가 "
+                "성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="사람이 몰리는 자리를 노려 해를 끼치려는 자",
+            position="external",
+            what_they_gain=(
+                "사람이 언제 어디에 얼마나 모이고 대피가 어느 규모를 상정했는지가 "
+                "밖에서 읽히면, 상정 밖의 일까지 막아 낸다는 전제 위에 서 있던 "
+                "보호가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="고위험물질을 손에 넣으려는 외부인",
+            position="external",
+            what_they_gain=(
+                "무엇이 어디에 얼마나 있는지가 밖에서 읽히면, 그 물질에 닿을 수 "
+                "있는 사람이 통제 안에 있다는 전제가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="발령 전 판단을 미리 알고 움직인 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "대응 수위가 정해지기 전에 그 판단이 인가 밖으로 퍼지면, 경보와 "
+                "함께 사람들이 움직인다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+    ),
+    departments=(
+        "사회재난실 사회재난정책과",
+        "사회재난실 보건사회재난대응과",
+        "사회재난실 국토산업재난대응과",
+        "자연재난실 재난관리정책과",
+        "자연재난실 재난대응훈련과",
+        "재난복구지원국 재난구호과",
+        "자연재난실 재난영향분석과",
+    ),
+    instruction=(
+        "재난·안전 관리 가운데 사람이 그 자리에 있을 때 무엇이 모자라고 어디가 "
+        "취약한지를 확인한 내부 자료를 쓴다. 상정한 규모와 실제로 감당되는 규모의 "
+        "차이, 보호가 닿지 않는 구역, 통제가 못 미치는 항목처럼 미리 알려지면 "
+        "그 자리에 있는 사람이 그대로 노출되는 내용을 담되, 그 사안에서 다루는 "
+        "것만 쓴다. 시민에게 미리 알려야 실효가 있는 안내 사항(대피 요령·통제 "
+        "구간 고지·행사 안내)은 문서의 본체가 아니다. 공개 시 국민의 생명·신체 "
+        "보호에 어떤 지장이 생기는지 문맥에서 드러나게 한다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상지역",
+            place=True,
+            values=(
+                "서울특별시",
+                "부산광역시",
+                "인천광역시",
+                "강원특별자치도",
+                "전라남도",
+                "경상북도",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            # `정기 안전점검·정밀안전진단 결과`는 여기 없다 — 감사 결정 2가
+            # `property` 전용으로 못 박은 값이다.
+            values=(
+                "호우·태풍 특보 발효",
+                "감염병 위기경보 단계 상향",
+                "유해화학물질 누출 신고 접수",
+                "대규모 인파 밀집 행사 개최 계획 접수",
+                "대피 훈련 결과 미흡 사항 접수",
+            ),
+        ),
+        _MOIS_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="밀집 취약구간 진단",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="밀집 취약구간 진단 결과",
+            contents=(
+                "진단 일시·대상 구간·진단자",
+                "구간별 감당 한계와 그에 못 미치는 항목, 시정 요구 사항과 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="밀집 취약구간 진단",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="취약구간 보완 계획(안)",
+            contents=(
+                "구간별 부족한 인력·장비와 보완 목표, 우선순위를 그렇게 정한 사유",
+                "보완이 끝나기까지 남는 위험과 그 기간에 두는 임시 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="밀집 취약구간 진단",
+            document_form=DocumentForm.REPORT,
+            document_name="취약구간 보완 추진 현황보고",
+            contents=(
+                "구간별 보완 목표와 실제 확보 실적의 대비표",
+                "여전히 감당 한계에 못 미치는 구간과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피 사각지대 확인",
+            document_form=DocumentForm.REPORT,
+            document_name="대피 소요시간 실측 결과보고",
+            contents=(
+                "구역별 상정 대피 시간과 실측 시간의 대비표",
+                "상정한 시간 안에 빠져나오지 못하는 구역과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피 사각지대 확인",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="대피 사각지대 해소 계획(안)",
+            contents=(
+                "사각지대로 판단한 구역과 그렇게 판단한 기준",
+                "해소에 드는 소요와 시기, 해소 전까지 그 구역에 두는 임시 보호 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피 사각지대 확인",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="사각지대 판정 검토 회의록",
+            contents=(
+                "판정 기준을 두고 갈린 근거와 참석 기관별 발언",
+                "확정된 사각지대와 재검토로 넘긴 구역",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="감염병 대응 자원 부족분 점검",
+            document_form=DocumentForm.REPORT,
+            document_name="대응 자원 부족분 점검 결과보고",
+            contents=(
+                "지역별 필요 규모와 확보 규모의 대비표(병상·이송 수단·인력)",
+                "부족이 큰 지역과 그 원인, 그 지역에서 감당하지 못하는 상황 규모",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="감염병 대응 자원 부족분 점검",
+            document_form=DocumentForm.RESPONSE_PLAN,
+            document_name="자원 부족 상황 대응계획서",
+            contents=(
+                "부족 정도별 조치사항과 각 단계의 판단 기준",
+                "단계별 담당 기관과 전원·이송 연계 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="감염병 대응 자원 부족분 점검",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="자원 배분 조정 관계기관 회의록",
+            contents=(
+                "배분 우선순위를 두고 갈린 근거와 기관별 발언",
+                "합의된 배분안과 미합의로 남은 지역",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="고위험물질 취급시설 방호 취약점 확인",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="취급 통제 보완 계획(안)",
+            contents=(
+                "취급 물질의 수량과 용도, 통제가 못 미치는 항목과 그렇게 판단한 사유",
+                "출입·취급 인가 범위와 확인 주기, 보완 전까지 두는 주민 보호 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="고위험물질 취급시설 방호 취약점 확인",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="취급 통제 이행 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "통제 항목별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="고위험물질 취급시설 방호 취약점 확인",
+            document_form=DocumentForm.REPORT,
+            document_name="취급 통제 현황보고",
+            contents=(
+                "기준 시점의 시설 수와 통제 항목별 이행률",
+                "이행이 늦은 항목의 원인과 그 시설에서 감당하지 못하는 사고 규모",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피소 수용 부족 구역 점검",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="대피소 운영 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "대피소별 실제 수용 가능 인원과 지정 규모에 못 미치는 항목, "
+                "시정 요구 사항과 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피소 수용 부족 구역 점검",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="수용 부족 구역 보완 계획(안)",
+            contents=(
+                "부족 구역과 부족 규모, 추가 확보 대상과 그 순서를 정한 사유",
+                "확보가 끝나기까지 그 구역에 적용할 분산 수용 방안",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="대피소 수용 부족 구역 점검",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="대피소 추가 지정 승인 품의",
+            contents=(
+                "추가 지정이 필요한 사유와 지정 규모, 그 규모로 한정한 근거",
+                "소요 예산과 확보 기간",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        # 초안의 `비상대비 민방위 대피 훈련`을 물리고 앉힌 사안이다(사용자 지적,
+        # 2026-08-05). 민방위 훈련은 일시와 방식이 사전에 공지되고 주민 참여를
+        # 전제로 시행되므로 계획과 결과가 이 세부조항의 ``excludes``("이미 공지된
+        # 일반 안전수칙과 통계")에 정면으로 걸린다. 게다가 비상대비는
+        # ``clause_data`` 제2호 시나리오("을지연습·충무계획 등 국가 비상사태
+        # 대비계획", 기관 풀 국방부·국가정보원)와 만나 제3호 라벨을 단 제2호
+        # 문서를 만든다. 부서축의 `비상대비정책국 비상대비훈련과`도 같이 물렸다.
+        #
+        # 이쪽은 반대다. 알려지면 그 사람들이 그대로 노출되는 자리라 제3호
+        # 한가운데이고, 명단이 아니라 **규모와 파악 수준**을 값으로 두어 제6호
+        # ``welfare_pii``와도 갈린다.
+        SubjectCase(
+            subject="보호 대상자 소재 파악 미달 구역 확인",
+            document_form=DocumentForm.REPORT,
+            document_name="보호 대상자 소재 파악 현황보고",
+            contents=(
+                "구역별 대상 규모와 파악률, 목표에 못 미치는 구역",
+                "미달 구역의 원인과 그 구역에서 대피가 닿지 않는 범위",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="보호 대상자 소재 파악 미달 구역 확인",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="소재 파악 보완 계획(안)",
+            contents=(
+                "미달 구역과 보완 목표, 우선순위를 그렇게 정한 사유",
+                "확인 방법과 소요, 파악될 때까지 그 구역에 두는 대체 보호 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="보호 대상자 소재 파악 미달 구역 확인",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="소재 파악 실무협의 회의록",
+            contents=(
+                "파악 책임 분담과 방법을 두고 갈린 근거와 기관별 발언",
+                "합의된 방식과 미합의로 남은 구역",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+    ),
+)
+
+
+#: 국토교통부 역할구성. 뒤 두 값이 이 기관의 것이고, 둘 다 **적대자와 같은
+#: 사람을 가리킨다** — 판정 결과를 먼저 쥐는 점검·진단기관과 그 판정을 맞는
+#: 관리주체다. 행정안전부에서 수탁 업체를 축에 앉힌 것과 같은 배치다.
+_MOLIT_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 과 단독 검토",
+        "본부-지방국토관리청 합동 검토",
+        "점검·진단기관이 참여하는 확인 회의",
+        "시설물 관리주체와의 협의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 과 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 과장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 기관 의견을 끌어들이지 않는다."
+            ),
+            "본부-지방국토관리청 합동 검토": (
+                "본부가 요구한 사항을 먼저 적고, 관리청이 올린 현장 의견을 적은 "
+                "다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. 현장 "
+                "의견은 본부 판단과 다른 내용을 담아야 한다."
+            ),
+            "점검·진단기관이 참여하는 확인 회의": (
+                "행정청이 확인하려는 항목과 그 사유를 먼저 적고, 기관이 제시한 "
+                "판정 근거와 산출 과정을 적은 다음, 행정청 확인과 어긋난 지점을 "
+                "짚고, 재확인이 필요한 것과 그대로 받아들인 것으로 끝낸다. "
+                "기관 설명은 행정청 판단과 다른 내용을 담아야 한다."
+            ),
+            "시설물 관리주체와의 협의": (
+                "행정청이 통보하려는 판정과 그 근거를 먼저 적고, 관리주체가 "
+                "제기한 이견과 이행상의 어려움을 적은 다음, 어긋난 지점을 짚고, "
+                "조정된 것과 행정청이 물러서지 않은 것으로 끝낸다. 관리주체 "
+                "의견은 행정청 판단과 다른 내용을 담아야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 국토교통부 / 제3호 ``property``. 여섯 번째 C트랙 템플릿이고, ``life_body``의
+#: 정면이다.
+#:
+#: **결정 2가 그은 선을 반대편에서 지킨다.** 이쪽은 구조물 등급 판정·진단 결과·
+#: 사용제한 조치만 다루고 사람이 그 안에 있을 때 생기는 피해는 행정안전부 몫이다.
+#: 촉발계기 `정기 안전점검·정밀안전진단 결과`가 여기 있는 것도 그 결정이다 —
+#: 저쪽에서 뺀 값이 이쪽 전용으로 온다. 적대자도 갈렸다: 취약 지점을 쥐는 쪽이
+#: 저쪽, **판정 결과를 흘리는 쪽**이 이쪽이다.
+#:
+#: **사안은 행정안전부에서 배운 축을 그대로 쓴다** — 업무가 아니라 taxonomy의
+#: ``includes``다. 여기서는 그것이 "판정 확정 전 재해위험 구조물 정보"와 "공개 시
+#: 재산 피해를 유발할 미공개 행정조치" 둘이라, 사안 여섯이 전부 **확정 전 판정과
+#: 통보 전 조치**에 선다. 이미 고시된 안전등급과 공시 정보는 이 세부조항의
+#: ``excludes``이므로 확정 뒤는 사안이 되지 않는다.
+#:
+#: 조항이 새는 자리 넷. 판정이 값·거래에 미칠 영향(제8호 ``real_estate_``
+#: ``speculation`` 정면) / 그 안에 있는 사람의 대피·구조(제3호 ``life_body``) /
+#: 보수·보강 공사의 계약 방식과 낙찰(제5호 ``bid_contract``) / 점검기관이 낸
+#: 산출 방법 자체(제7호 ``technology_patent``).
+_PROPERTY_MOLIT = CTrackTemplate(
+    subclause_key=SubclauseKey.PROPERTY,
+    agency="국토교통부",
+    persona_context="시설물 안전 판정과 유지관리 감독 업무",
+    adversaries=(
+        Adversary(
+            who="판정 결과를 먼저 쥐는 점검·진단 수탁기관 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "확정 전 판정이 행정청 밖으로 먼저 나가면, 판정이 행정 절차를 "
+                "거쳐 알려진다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="판정 대상 시설의 소유자·관리주체",
+            position="external",
+            what_they_gain=(
+                "확정 전 등급과 예정된 조치를 미리 알면, 조치가 서기 전에 그 "
+                "시설에 걸린 부담이 다른 사람에게 넘어가지 않는다는 전제가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="책임 소재를 다투게 될 시공·유지관리 관계자",
+            position="external",
+            what_they_gain=(
+                "확인이 끝나기 전의 결과가 먼저 알려지면, 책임이 확인을 거쳐 "
+                "가려진다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 판정 자료를 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확정 전 판정과 조치 시점이 인가 밖으로 퍼지면, 조치와 통보가 "
+                "정해진 순서로 이뤄진다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    # 2026-08-05에 대조한 현행 부서다(molit.go.kr 부서 안내). 기술안전정책관은
+    # 건설정책국 소속이라 국 이름으로 적었다.
+    departments=(
+        "건설정책국 시설안전과",
+        "건설정책국 건설안전과",
+        "건설정책국 기술정책과",
+        "건설정책국 지하안전팀",
+        "도로국 도로시설안전과",
+        "도로국 도로관리과",
+        "철도안전정책관 철도안전정책과",
+    ),
+    instruction=(
+        "시설물 안전 판정과 그에 따른 행정조치의 내부 자료를 쓴다. 확정 전 등급 "
+        "판정과 그 산출 근거, 통보 전에 정해 둔 조치와 시점, 관리주체가 아직 "
+        "모르는 확인 결과처럼 미리 알려지면 조치가 서기 전에 재산상의 부담이 "
+        "옮겨 갈 수 있는 내용을 담되, 그 사안에서 다루는 것만 쓴다. 이미 고시된 "
+        "안전등급과 공시 정보는 문서의 본체가 아니다. 공개 시 국민의 재산 보호에 "
+        "어떤 지장이 생기는지 문맥에서 드러나게 한다."
+    ),
+    slots=(
+        CaseSlot(
+            name="관할관리청",
+            place=True,
+            values=(
+                "서울지방국토관리청",
+                "원주지방국토관리청",
+                "대전지방국토관리청",
+                "익산지방국토관리청",
+                "부산지방국토관리청",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            # 첫 값이 결정 2가 이 템플릿 전용으로 못 박은 것이다.
+            values=(
+                "정기 안전점검·정밀안전진단 결과 접수",
+                "집중호우·지진 이후 긴급점검 결과 접수",
+                "관리주체의 보수·보강 계획 제출",
+                "지반침하 신고 접수",
+                "점검·진단기관 판정에 대한 이의 제기 접수",
+            ),
+        ),
+        _MOLIT_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="시설물 안전등급 하향 판정",
+            document_form=DocumentForm.REPORT,
+            document_name="정밀안전진단 결과 검토보고",
+            contents=(
+                "시설별 현행 등급과 진단이 제시한 등급, 그 차이를 만든 항목",
+                "행정청이 다시 확인한 결과와 확인이 끝나지 않은 항목",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="시설물 안전등급 하향 판정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="안전등급 조정(안)",
+            contents=(
+                "조정할 등급과 그렇게 판단한 근거, 조정에 따라 뒤따르는 조치",
+                "관리주체 통보 시점과 그 시점까지 취급을 제한하는 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="시설물 안전등급 하향 판정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="등급 판정 심의 회의록",
+            contents=(
+                "판정 근거를 두고 갈린 견해와 참석자별 발언",
+                "확정된 등급과 재확인으로 넘긴 시설",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="사용제한·통행제한 조치 결정",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="사용제한 조치 품의",
+            contents=(
+                "제한이 필요한 사유와 제한 범위, 그 범위로 한정한 근거",
+                "시행 시점과 해제 요건, 제한에 따른 대체 통행·이용 방안",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="사용제한·통행제한 조치 결정",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="제한 조치 법률 검토의견",
+            contents=(
+                "관계 법령상 제한 요건 충족 여부와 미비 항목",
+                "관리주체의 이의 제기가 예상되는 항목과 그에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="사용제한·통행제한 조치 결정",
+            document_form=DocumentForm.REPORT,
+            document_name="제한 조치 시행 결과보고",
+            contents=(
+                "당초 정한 제한 범위와 실제 시행 실적의 대비표",
+                "제한이 지켜지지 않은 구간과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="재해위험 구조물 보수·보강 우선순위",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="보수·보강 우선순위 계획(안)",
+            contents=(
+                "대상 구조물과 위험도 판단 결과, 순위를 그렇게 정한 사유",
+                "순위가 뒤로 밀린 구조물에 남는 위험과 그 기간의 임시 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재해위험 구조물 보수·보강 우선순위",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="우선순위 심의 회의록",
+            contents=(
+                "순위 산정 기준을 두고 갈린 근거와 참석자별 발언",
+                "확정된 순위와 보류된 구조물, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="재해위험 구조물 보수·보강 우선순위",
+            document_form=DocumentForm.REPORT,
+            document_name="보수·보강 추진 현황보고",
+            contents=(
+                "구조물별 착수 목표와 실제 진도의 대비표",
+                "지연된 구조물의 원인과 그 사이 위험도가 더 나빠진 항목",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="부실시공 확인 및 시정 조치",
+            document_form=DocumentForm.INVESTIGATION_REPORT,
+            document_name="시공 상태 확인 조사 결과",
+            contents=(
+                "조사 대상과 기간, 확인된 시공 상태와 설계 대비 차이",
+                "그 차이가 구조물 안전에 미치는 정도와 아직 확인되지 않은 항목",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="부실시공 확인 및 시정 조치",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="시정명령 발령 품의",
+            contents=(
+                "명령할 시정 사항과 그 범위로 한정한 근거",
+                "이행 기한과 미이행 시 뒤따르는 조치",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="부실시공 확인 및 시정 조치",
+            document_form=DocumentForm.REPORT,
+            document_name="시정 이행 현황보고",
+            contents=(
+                "시정 항목별 요구 사항과 실제 이행 실적의 대비표",
+                "이행이 늦은 항목의 원인과 그 구조물에 남는 위험",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="지반침하 위험 구간 확인",
+            document_form=DocumentForm.REPORT,
+            document_name="지반침하 위험도 평가 결과보고",
+            contents=(
+                "구간별 조사 결과와 위험도 판단, 판단이 갈린 구간",
+                "확인이 더 필요한 구간과 그 구간에 남는 위험",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="지반침하 위험 구간 확인",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="위험 구간 관리계획(안)",
+            contents=(
+                "관리 대상 구간과 관리 수준, 그 수준으로 정한 사유",
+                "보완이 끝나기까지 그 구간에 두는 계측·통제 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="지반침하 위험 구간 확인",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="위험 구간 현장 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "구간별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="점검·진단기관 판정 신뢰성 확인",
+            document_form=DocumentForm.INVESTIGATION_REPORT,
+            document_name="판정 재확인 조사 결과",
+            contents=(
+                "재확인 대상과 기간, 기관이 낸 판정과 행정청 확인 결과의 차이",
+                "차이가 난 항목의 원인과 그로 인해 다시 봐야 하는 시설의 범위",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="점검·진단기관 판정 신뢰성 확인",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="처분 여부 심의 회의록",
+            contents=(
+                "처분 수위를 두고 갈린 근거와 참석자별 발언",
+                "결정된 처분과 보류된 처분, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="점검·진단기관 판정 신뢰성 확인",
+            document_form=DocumentForm.REPORT,
+            document_name="재확인 후속조치 현황보고",
+            contents=(
+                "재확인이 필요한 시설 수와 처리 실적의 대비표",
+                "아직 확인되지 않은 시설과 그 시설에 남는 위험",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 검찰청 역할구성.
+_SPO_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 부서 단독 검토",
+        "대검-일선청 합동 검토",
+        "경찰·국세청 등 유관기관 협의",
+        "과학수사 부서가 참여하는 검토",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 부서 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 부장 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 기관 의견을 끌어들이지 않는다."
+            ),
+            "대검-일선청 합동 검토": (
+                "대검이 요구한 사항을 먼저 적고, 일선청이 올린 현장 의견을 적은 "
+                "다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. 현장 "
+                "의견은 대검 판단과 다른 내용을 담아야 한다."
+            ),
+            "경찰·국세청 등 유관기관 협의": (
+                "협의를 요청한 사유를 먼저 적고, 기관별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 기관마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "과학수사 부서가 참여하는 검토": (
+                "의뢰한 확인 항목과 그 사유를 먼저 적고, 분석 부서가 낸 회신 "
+                "결과와 그 한계를 적은 다음, 회신으로 가려지지 않은 항목을 짚고, "
+                "추가로 의뢰할 것과 그대로 두는 것으로 끝낸다. 분석 부서 설명은 "
+                "수사 부서 판단과 다른 내용을 담아야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 검찰청 / 제4호 ``trial_investigation``. 일곱 번째 C트랙 템플릿이다.
+#:
+#: **기관은 검찰청으로 골랐다.** 초안에서 경찰청을 세우려다 접었는데, 그때 든
+#: 근거("화이트리스트 밖이고 로고가 없어 렌더링이 깨진다")는 틀렸다 —
+#: ``FALLBACK_AGENCY_WHITELIST``는 rd2 DB에 안보·수사 계열 기관이 0건이라 **레거시
+#: 폴백 생성**이 쓰는 목록이고(그 상수 주석), C트랙은 템플릿이 ``agency``를 직접
+#: 들어 ``c_track_writeback``의 ``ordering_agency``로 넘긴다. 로고도 이름으로
+#: 추측하지 않는다(``official_document_rendering``: "입력 기관명은 그대로 보존하고
+#: 실제 기관 로고를 추측하지 않는다"). 즉 기관 선택에 기술적 제약은 없고, 남는
+#: 근거는 아래의 세부조항 경계뿐이다.
+#:
+#: **``prosecution``과의 경계가 이 템플릿의 요건이다.** 감사 결정 3이 두 브로커를
+#: 갈라 뒀다 — 이쪽 브로커는 "수사선상에 있다는 사실 자체"를 팔고, 저쪽 브로커는
+#: "처분 결론이 어느 쪽으로 기울었는지"를 판다. 그래서 여기서는 공소 제기 여부와
+#: 공판 대응이 사안으로 서지 않고, 부서축에서도 공판송무부를 뺐다. 남은
+#: ``prosecution`` 템플릿은 고위공직자범죄수사처로 두어 장소축까지 갈린다 —
+#: 같은 기관에 인접 세부조항 둘을 얹으면 결정 2가 경계한 자리가 된다.
+#:
+#: **수사 방법을 적는 자리를 처음부터 막았다.** ``_BOUNDARY_RULE``이 "실행 절차·
+#: 수법·회피 방법 자리에는 무엇이 무력화되는지를 적는다"고 했고, 감사가
+#: ``correction_security``에서 12건이 그 선을 넘은 방식을 셋으로 기록해 뒀다
+#: (통제의 공백을 이득으로 지목 / 회피 방법을 이득에 적기 / 수단 열거).
+#: 적대자 넷은 전부 "상대가 확인 전에 알게 된다"는 결과에 서 있고, 사안의
+#: ``contents``는 방법이 아니라 **무엇을 확인하려 했고 무엇이 아직 확인되지
+#: 않았는지**를 묻는다.
+#:
+#: 조항이 새는 자리 넷. 기소 의견·공판 대응(제4호 ``prosecution`` 정면) /
+#: 참고인·제보자의 소재(제3호 ``life_body``) / 수용·이송 등 형 집행(제4호
+#: ``correction_security``) / 확정 판결문의 공개된 주문과 이유(이 세부조항의
+#: ``excludes``).
+_TRIAL_INVESTIGATION_SPO = CTrackTemplate(
+    subclause_key=SubclauseKey.TRIAL_INVESTIGATION,
+    agency="검찰청",
+    persona_context="수사 착수 판단과 수사 진행 관리 업무",
+    adversaries=(
+        Adversary(
+            who="수사 대상에 오른 사람",
+            position="external",
+            what_they_gain=(
+                "자신이 수사선상에 있다는 사실과 그 범위를 미리 알면, 확인이 "
+                "끝나기 전까지 상대가 그것을 모른다는 전제 위에 서 있던 수사가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="수사선상에 있다는 사실 자체를 파는 브로커",
+            position="intermediary",
+            what_they_gain=(
+                "누가 대상인지가 확인 전에 밖으로 나가면, 그 사실이 수사기관 "
+                "안에 머문다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="확인 전 단서를 보도 재료로 삼는 외부 관계자",
+            position="external",
+            what_they_gain=(
+                "가려지지 않은 단서가 먼저 알려지면, 확인된 것만 공표된다는 "
+                "전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 수사 기록을 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확인 전 단서와 예정된 조치 시점이 인가 밖으로 퍼지면, 수사와 "
+                "공표가 정해진 순서로 이뤄진다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    # 2026-08-05에 대조한 대검찰청 현행 부서다(spo.go.kr 부서별 연락처).
+    # 공판송무부(공판1·2과·집행과)는 넣지 않았다 — ``prosecution``의 자리다.
+    departments=(
+        "반부패부 반부패1과",
+        "반부패부 반부패2과",
+        "형사부 형사1과",
+        "형사부 형사2과",
+        "공공수사부 공안수사지원과",
+        "마약·조직범죄부 마약과",
+        "과학수사부 디지털수사과",
+    ),
+    instruction=(
+        "수사 착수 판단과 수사 진행 관리의 내부 자료를 쓴다. 확인 전 단서와 그에 "
+        "대한 판단, 강제수사를 언제 어느 범위로 할지, 아직 확인되지 않은 항목처럼 "
+        "미리 알려지면 상대가 확인 전에 알게 되어 수사 직무수행이 현저히 곤란해지는 "
+        "내용을 담되, 그 사안에서 다루는 것만 쓴다. 공소 제기 여부 판단과 공판 "
+        "대응 방침은 이 문서가 다루는 것이 아니다. 수사 방법과 절차를 적을 자리에는 "
+        "무엇을 확인하려 했고 무엇이 아직 확인되지 않았는지를 적는다."
+    ),
+    slots=(
+        CaseSlot(
+            name="관할청",
+            place=True,
+            values=(
+                "서울중앙지방검찰청",
+                "서울동부지방검찰청",
+                "인천지방검찰청",
+                "수원지방검찰청",
+                "부산지방검찰청",
+                "광주지방검찰청",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "고소·고발장 접수",
+                "관계기관 수사의뢰 접수",
+                "내사 단서 확보 보고",
+                "압수물 분석 결과 회신",
+                "장기 미제사건 점검 결과 접수",
+            ),
+        ),
+        _SPO_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="내사 단서 검토",
+            document_form=DocumentForm.REPORT,
+            document_name="내사 단서 검토보고",
+            contents=(
+                "확보된 단서의 내용과 출처 구분, 그것으로 확인되는 범위",
+                "단서만으로는 가려지지 않는 항목과 그 이유",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="내사 단서 검토",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="수사 착수 여부 검토(안)",
+            contents=(
+                "착수·보류·종결 안별 판단 근거와 각 안이 지는 부담",
+                "착수할 경우의 대상 범위와 시기, 그 범위로 한정한 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="내사 단서 검토",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="착수 여부 검토 회의록",
+            contents=(
+                "착수 여부를 두고 갈린 근거와 참석자별 발언",
+                "결정된 방향과 보류된 사항, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="강제수사 실시 여부 결정",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="강제수사 실시 품의",
+            contents=(
+                "실시가 필요한 사유와 대상 범위, 그 범위로 한정한 근거",
+                "실시 시기와 그 시기로 정한 이유, 소요 인력 규모",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="강제수사 실시 여부 결정",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="강제수사 요건 법률 검토의견",
+            contents=(
+                "법령상 요건 충족 여부와 소명이 부족한 항목",
+                "다툼이 예상되는 쟁점과 그에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="강제수사 실시 여부 결정",
+            document_form=DocumentForm.REPORT,
+            document_name="강제수사 실시 결과보고",
+            contents=(
+                "당초 정한 대상 범위와 실제 확보한 자료의 대비표",
+                "확보하지 못한 항목과 그 원인, 그로 인해 남은 확인 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="수사 진행 상황 점검",
+            document_form=DocumentForm.REPORT,
+            document_name="수사 진행 현황보고",
+            contents=(
+                "당초 수사 계획과 항목별 진행 상황의 대비표",
+                "확인이 늦어진 항목과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="수사 진행 상황 점검",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="수사 지휘 회의록",
+            contents=(
+                "확인 우선순위를 두고 갈린 근거와 참석자별 발언",
+                "지휘된 사항과 보류된 사항, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="수사 진행 상황 점검",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="수사 계획 조정(안)",
+            contents=(
+                "조정 전후의 확인 항목과 순서, 조정이 필요해진 사유",
+                "조정에 따라 뒤로 밀리는 항목과 그때까지 남는 미확인 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관계기관 공조 수사",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공조 수사 추진계획(안)",
+            contents=(
+                "기관별 분담 항목과 그렇게 나눈 사유",
+                "공조로도 확인되지 않을 것으로 보는 항목과 그 이유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관계기관 공조 수사",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="공조 협의 회의록",
+            contents=(
+                "분담과 자료 제공 범위를 두고 갈린 근거와 기관별 발언",
+                "합의된 것과 미합의로 남은 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관계기관 공조 수사",
+            document_form=DocumentForm.REPORT,
+            document_name="공조 수사 결과보고",
+            contents=(
+                "기관별 분담 항목과 실제 회신 실적의 대비표",
+                "회신이 오지 않은 항목과 그로 인해 남은 확인 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="압수물·디지털 증거 분석 관리",
+            document_form=DocumentForm.INVESTIGATION_REPORT,
+            document_name="증거 분석 회신 검토 결과",
+            contents=(
+                "의뢰한 확인 항목과 회신된 분석 결과, 그 결과로 가려진 범위",
+                "회신으로도 가려지지 않은 항목과 추가 의뢰가 필요한 것",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="압수물·디지털 증거 분석 관리",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="분석 의뢰 우선순위 조정(안)",
+            contents=(
+                "의뢰 대상과 순서, 그 순서로 정한 사유",
+                "뒤로 밀리는 의뢰와 그때까지 확인되지 않는 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="압수물·디지털 증거 분석 관리",
+            document_form=DocumentForm.REPORT,
+            document_name="분석 의뢰 처리 현황보고",
+            contents=(
+                "의뢰 건수와 회신 실적의 항목별 대비표",
+                "회신이 늦은 항목의 원인과 수사 일정에 미치는 영향",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="장기 미제사건 처리 점검",
+            document_form=DocumentForm.REPORT,
+            document_name="장기 미제사건 점검 결과보고",
+            contents=(
+                "사건별 경과 기간과 남아 있는 확인 항목의 대비표",
+                "진행이 멈춘 사건의 원인 구분",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="장기 미제사건 처리 점검",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="미제사건 처리 계획(안)",
+            contents=(
+                "재개·유지·종결 안별 판단 근거와 각 안이 지는 부담",
+                "재개할 사건의 확인 항목과 그 순서를 정한 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="장기 미제사건 처리 점검",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="미제사건 처리 심의 회의록",
+            contents=(
+                "처리 방향을 두고 갈린 근거와 참석자별 발언",
+                "결정된 처리와 보류된 사건, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+    ),
+)
+
+
+#: 고위공직자범죄수사처 역할구성.
+_CIO_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "주임검사 단독 검토",
+        "부장검사가 주재하는 부 내 검토",
+        "수사부와 공판 담당의 협의",
+        "외부 위원이 참여하는 심의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "주임검사 단독 검토": (
+                "주임검사가 쓴 것만 적는다. 검토 의견을 먼저 적고, 그 의견이 딛고 "
+                "선 근거를 적은 다음, 결재선에 올릴 결론으로 끝낸다. 다른 사람의 "
+                "발언을 등장시키지 않는다."
+            ),
+            "부장검사가 주재하는 부 내 검토": (
+                "주임검사의 보고를 먼저 적고, 부장검사의 질의와 그에 대한 답변을 "
+                "적은 다음, 보완이 필요하다고 지적된 항목을 짚고, 지시된 방향으로 "
+                "끝낸다. 지적은 보고 내용과 다른 판단을 담아야 한다."
+            ),
+            "수사부와 공판 담당의 협의": (
+                "수사부가 확보했다고 보는 것을 먼저 적고, 공판 담당이 법정에서 "
+                "다투어질 것으로 보는 항목을 적은 다음, 둘의 판단이 어긋난 지점을 "
+                "짚고, 보완하기로 한 것과 그대로 가기로 한 것으로 끝낸다."
+            ),
+            "외부 위원이 참여하는 심의": (
+                "안건 상정과 담당 부서의 설명을 먼저 적고, 위원별 질의와 그에 "
+                "대한 답변을 적은 다음, 쟁점별 견해와 근거를 적고, 의결 또는 보류 "
+                "결정과 그 사유로 끝낸다. 뒤에 오는 발언은 앞에서 나온 말을 받아야 "
+                "한다."
+            ),
+        }
+    ),
+)
+
+
+#: 고위공직자범죄수사처 / 제4호 ``prosecution``. 여덟 번째 C트랙 템플릿이다.
+#:
+#: **기관을 검찰청과 갈랐다.** ``FALLBACK_AGENCY_WHITELIST["4"]``가 검찰청·
+#: 고위공직자범죄수사처·법무부 셋이고, 그중 법무부는 ``correction_security``가
+#: 이미 쓴다. 남은 둘을 ``trial_investigation``·``prosecution``에 하나씩 주면
+#: 인접 세부조항이 같은 기관에 겹치지 않는다 — 결정 2가 경계한 자리다.
+#:
+#: **결정 3이 이 템플릿의 요건이다.** 검찰청 쪽 브로커는 "수사선상에 있다는 사실
+#: 자체"를 팔고, 이쪽 브로커는 "처분 결론이 어느 쪽으로 기울었는지"를 판다. 그
+#: 차이가 사안에도 그대로 온다 — 여기서는 단서를 모으는 일이 사안이 아니고,
+#: **기소 여부 판단과 법정에서 다투어질 것에 대한 대비**만 사안이 된다.
+#:
+#: 장소축은 심급별 법원이다. 검찰청 템플릿이 일선 지검을 쓰므로 그쪽과 겹치지
+#: 않고, 공소 유지 문서가 향하는 곳이 법정이라 사안과도 맞는다.
+#:
+#: 조항이 새는 자리 넷. 단서 확보와 강제수사 계획(제4호 ``trial_investigation``
+#: 정면) / 증인의 소재와 신변 보호(제3호 ``life_body``) / 형 집행과 수용(제4호
+#: ``correction_security``) / 이미 공표된 기소 사실과 죄명(이 세부조항의
+#: ``excludes``).
+_PROSECUTION_CIO = CTrackTemplate(
+    subclause_key=SubclauseKey.PROSECUTION,
+    agency="고위공직자범죄수사처",
+    persona_context="공소 제기 여부 판단과 공소 유지 업무",
+    adversaries=(
+        Adversary(
+            who="처분을 기다리는 피의자와 그 변호인",
+            position="external",
+            what_they_gain=(
+                "결론이 어느 쪽으로 기울었고 무엇이 약한 고리로 꼽혔는지를 처분 "
+                "전에 알면, 양쪽이 같은 시점에 법정에서 다툰다는 전제가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="처분 결론이 어느 쪽으로 기울었는지를 파는 브로커",
+            position="intermediary",
+            what_they_gain=(
+                "확정 전 판단이 밖으로 나가면, 처분이 공표로만 알려진다는 전제가 "
+                "성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="사건의 결론에 이해가 걸린 소속 기관 관계자",
+            position="external",
+            what_they_gain=(
+                "누구까지 기소 대상으로 검토되는지가 결정 전에 알려지면, 처분이 "
+                "정해지기 전까지 그 범위가 밖에서 보이지 않는다는 전제가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 검토 자료를 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확정 전 의견과 공판에서 다툴 항목이 인가 밖으로 퍼지면, 처분과 "
+                "공표가 정해진 순서로 이뤄진다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    # 2023-12-18 직제 개정으로 공소부가 수사4부로 개편됐고, 송무는 인권수사
+    # 정책관실로, 사면·형사보상 사무는 사건관리담당관실로 갔다(확인 2026-08-05).
+    # 부 이름만으로는 과 단위가 없는 기관이라 부·관실이 곧 작성 단위다.
+    departments=(
+        "수사1부",
+        "수사2부",
+        "수사3부",
+        "수사4부",
+        "인권수사정책관실",
+        "사건관리담당관실",
+        "수사기획관실",
+    ),
+    instruction=(
+        "공소 제기 여부 판단과 공소 유지 대비의 내부 자료를 쓴다. 확정 전 기소·"
+        "불기소 의견과 그 법리 검토, 우리가 약하다고 보는 고리, 법정에서 다투어질 "
+        "것으로 보는 항목과 그에 대한 대비처럼 미리 알려지면 상대가 처분 전에 그 "
+        "판단을 알게 되어 형사절차의 공정이 깨지는 내용을 담되, 그 사안에서 다루는 "
+        "것만 쓴다. 단서를 모으는 일과 강제수사 계획은 이 문서가 다루는 것이 "
+        "아니다. 증인은 진술로 다투어질 항목으로만 다루고 소재와 신변은 적지 "
+        "않는다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상법원",
+            place=True,
+            values=(
+                "서울중앙지방법원",
+                "서울고등법원",
+                "대법원",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "수사 종결 보고 접수",
+                "피의자 측 의견서 제출",
+                "공판기일 지정 통지",
+                "관련 사건 판결 선고",
+                "보완 수사 결과 회신",
+            ),
+        ),
+        _CIO_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="기소 여부 판단",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="기소 의견 법률 검토의견",
+            contents=(
+                "적용 법조와 구성요건별 충족 여부, 소명이 부족한 요건",
+                "반대 결론이 가능한 지점과 그에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기소 여부 판단",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="처분 방향 결재 품의",
+            contents=(
+                "승인받을 처분 방향과 그 범위로 한정한 사유",
+                "대상자별 처분 구분과 그렇게 나눈 근거",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기소 여부 판단",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="처분 방향 검토 회의록",
+            contents=(
+                "기소·불기소를 두고 갈린 근거와 참석자별 발언",
+                "결정된 방향과 보류된 대상자, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="공판 대응 방침 수립",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공판 대응 방침(안)",
+            contents=(
+                "쟁점별 우리 주장과 그것을 받치는 증거의 강약 판단",
+                "상대가 다툴 것으로 보는 항목과 그에 대한 대응 논리",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="공판 대응 방침 수립",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="공판 대응 협의 회의록",
+            contents=(
+                "쟁점별 대응 수위를 두고 갈린 근거와 참석자별 발언",
+                "확정된 방침과 재검토로 넘긴 쟁점",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="공판 대응 방침 수립",
+            document_form=DocumentForm.REPORT,
+            document_name="공판 진행 경과보고",
+            contents=(
+                "당초 방침과 실제 심리 결과의 쟁점별 대비표",
+                "방침과 어긋난 쟁점의 원인과 다음 기일 대응 과제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="증거 채부 대비",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="증거능력 검토의견",
+            contents=(
+                "증거별 채부가 다투어질 지점과 그 근거",
+                "배제될 경우 남는 입증 범위와 보완이 필요한 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="증거 채부 대비",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="입증 계획 조정(안)",
+            contents=(
+                "쟁점별 입증 순서와 그 순서로 정한 사유",
+                "배제 위험이 큰 증거를 대신할 항목과 그 한계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="증거 채부 대비",
+            document_form=DocumentForm.REPORT,
+            document_name="증거 채부 결과 검토보고",
+            contents=(
+                "신청한 증거와 채택·기각 결과의 대비표",
+                "기각된 증거로 비게 된 입증 범위와 보완 방향",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="상소 여부 판단",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="상소 이유 법률 검토의견",
+            contents=(
+                "판결 이유 중 다툴 지점과 그 법리적 근거",
+                "상소로 뒤집힐 가능성이 낮다고 보는 항목과 그 이유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="상소 여부 판단",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="상소 제기 품의",
+            contents=(
+                "상소가 필요한 사유와 다툴 범위, 그 범위로 한정한 근거",
+                "제기 기한과 준비에 드는 소요",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="상소 여부 판단",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="상소 여부 심의 회의록",
+            contents=(
+                "상소 실익을 두고 갈린 근거와 참석자별 발언",
+                "결정된 방향과 보류된 쟁점, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관련 사건 처리 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="관련 사건 처리 조정(안)",
+            contents=(
+                "함께 다루는 사건별 처리 순서와 그 순서로 정한 사유",
+                "한쪽 결론이 다른 쪽에 미치는 영향과 그에 대한 대비",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관련 사건 처리 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="관련 사건 협의 회의록",
+            contents=(
+                "처리 순서와 이송 여부를 두고 갈린 근거와 참석자별 발언",
+                "합의된 것과 미합의로 남은 사건",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="관련 사건 처리 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="관련 사건 처리 현황보고",
+            contents=(
+                "사건별 처리 목표와 실제 진행의 대비표",
+                "지연된 사건의 원인과 다른 사건에 미치는 영향",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="처분 결과 공표 범위 검토",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공표 범위 검토(안)",
+            contents=(
+                "공표할 항목과 공표하지 않을 항목의 구분, 그 기준",
+                "공표 시점과 그 시점까지 취급을 제한하는 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="처분 결과 공표 범위 검토",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="공표 범위 법률 검토의견",
+            contents=(
+                "관계 법령상 공표가 가능한 범위와 제한되는 항목",
+                "다툼이 예상되는 항목과 그에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="처분 결과 공표 범위 검토",
+            document_form=DocumentForm.REPORT,
+            document_name="공표 시행 결과보고",
+            contents=(
+                "당초 정한 공표 범위와 실제 공표 내용의 대비표",
+                "범위를 벗어난 항목이 나온 경위와 그 영향",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 국가정보원 역할구성.
+_NIS_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 센터 단독 검토",
+        "보안심사 부서와의 합동 검토",
+        "대상 기관 보안담당관과의 협의",
+        "외부 위원이 참여하는 심의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 센터 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 상급자 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 기관 의견을 끌어들이지 않는다."
+            ),
+            "보안심사 부서와의 합동 검토": (
+                "담당 센터가 요구한 사항을 먼저 적고, 심사 부서가 든 규정상 "
+                "제약을 적은 다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 "
+                "끝낸다. 심사 부서 의견은 담당 센터 판단과 다른 내용을 담아야 "
+                "한다."
+            ),
+            "대상 기관 보안담당관과의 협의": (
+                "요구한 조치와 그 근거 조문을 먼저 적고, 대상 기관이 제기한 "
+                "이행상의 어려움을 적은 다음, 요구와 현장 사정이 어긋난 지점을 "
+                "짚고, 조정된 것과 물러서지 않은 것으로 끝낸다. 대상 기관 "
+                "의견은 우리 판단과 다른 내용을 담아야 한다."
+            ),
+            "외부 위원이 참여하는 심의": (
+                "안건 상정과 담당 부서의 설명을 먼저 적고, 위원별 질의와 그에 "
+                "대한 답변을 적은 다음, 쟁점별 견해와 근거를 적고, 의결 또는 "
+                "보류 결정과 그 사유로 끝낸다. 뒤에 오는 발언은 앞에서 나온 말을 "
+                "받아야 한다."
+            ),
+        }
+    ),
+)
+
+
+#: 국가정보원 / 제1호 ``legal_secret``. 아홉 번째이자 마지막 C트랙 템플릿이다.
+#:
+#: **이 세부조항은 내용이 아니라 형식으로 선다.** 판정 기준이 "다른 법률 또는
+#: 법률이 위임한 명령이 해당 정보를 비밀 또는 비공개로 규정한 **근거가 문서에
+#: 드러나는** 경우"이고, ``excludes``의 첫 줄이 "'대외비'·'비밀유지' 표기만 있고
+#: 근거 법령이 없는 경우"다. 그래서 다른 여덟과 달리 **모든 사안의 contents가
+#: 근거 조문을 요구한다** — 조문이 값으로 들어오지 않으면 그 문서는 이 세부조항이
+#: 아니다.
+#:
+#: 기관은 ``FALLBACK_AGENCY_WHITELIST["1"]``의 넷(국가정보원·국방부·검찰청·
+#: 고위공직자범죄수사처) 중 나머지 셋이 이미 다른 세부조항에 쓰여 국가정보원이
+#: 남는다. ``is_military_secret_agency``가 참이라 등급축이 1~3급 셋이다.
+#:
+#: **부서는 공개된 센터만 쓴다.** 이 기관은 조직 대부분이 비공개라 실존명 원칙을
+#: 지킬 수 있는 범위가 공개 센터로 한정된다(nis.go.kr, 확인 2026-08-05).
+#:
+#: 조항이 새는 자리 넷. 보안 취약점의 진단 결과와 그 목록(제7호
+#: ``security_diagnosis``) / 인가 대상자의 신원 사항(제6호 ``personnel_pii``) /
+#: 군사 대비태세와 전력(제2호 ``security_defense``) / 근거 조문 없이 '대외비'
+#: 표기만 있는 문서(이 세부조항의 ``excludes`` 정면).
+_LEGAL_SECRET_NIS = CTrackTemplate(
+    subclause_key=SubclauseKey.LEGAL_SECRET,
+    agency="국가정보원",
+    persona_context="비밀 지정·관리와 보안업무 감독 업무",
+    adversaries=(
+        Adversary(
+            who="인가 없이 자료에 닿으려는 외부인",
+            position="external",
+            what_they_gain=(
+                "무엇이 어느 등급으로 지정돼 어디까지 도는지가 밖에서 읽히면, "
+                "인가받은 사람만 그것을 안다는 전제가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="우리 기관이 무엇을 다루는지 알아내려는 국외 정보수집 조직",
+            position="external",
+            what_they_gain=(
+                "무엇을 비밀로 지정해 두었는지가 알려지면, 우리가 어디에 손을 "
+                "대고 있는지 밖에서 알 수 없다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="협조 요청을 매개로 자료를 받는 다른 기관 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "제공 범위가 정해지기 전에 그 논의가 밖으로 나가면, 제공이 정해진 "
+                "범위 안에서만 이뤄진다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="인가 범위를 넘어 자료를 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "누가 무엇까지 인가받았는지가 인가 밖으로 퍼지면, 취급이 인가 "
+                "범위 안에 머문다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "국가사이버안보센터",
+        "산업기밀보호센터",
+        "국제범죄정보센터",
+        "테러정보통합센터",
+        "방첩정보공유센터",
+        "국가우주안보센터",
+        "방위산업침해대응센터",
+    ),
+    instruction=(
+        "법령이 비밀 또는 비공개로 정한 사항의 지정·관리·제공에 관한 내부 자료를 "
+        "쓴다. **어느 법률의 어느 조문이 그것을 비밀로 정하고 있는지를 본문에 "
+        "값으로 적는다** — 근거 조문 없이 '대외비'·'비밀유지' 표기만 있으면 이 "
+        "문서는 성립하지 않는다. 지정 등급과 그 사유, 취급 범위와 인가 단위, 제공 "
+        "요청에 대한 판단처럼 미리 알려지면 인가받은 사람만 그것을 안다는 전제가 "
+        "깨지는 내용을 담되, 그 사안에서 다루는 것만 쓴다. 보안 취약점의 진단 "
+        "결과와 대상자의 신원 사항은 이 문서가 다루는 것이 아니다."
+    ),
+    slots=(
+        # 초안은 ``대상기관``(국방부·외교부·과기정통부…)이었고 어긋났다(사용자
+        # 지적, 2026-08-05): 부서축이 주제별 정보 업무 센터라 `국가우주안보센터`가
+        # `외교부 관련 수사자료`의 재분류를 심의하는 조합이 대량으로 나온다.
+        # 자료군으로 바꾼 뒤에도 축이 따로 돌아 절반쯤은 여전히 어긋났으므로
+        # ``department_paired_slot``으로 부서와 한 자리에 묶었다 — 값 순서가
+        # ``departments`` 순서와 1:1로 맞는다.
+        CaseSlot(
+            name="대상자료군",
+            place=True,
+            values=(
+                "사이버 위협 대응 자료",
+                "산업기술 유출 대응 자료",
+                "국제범죄 정보 자료",
+                "테러 정보 통합 자료",
+                "방첩 정보 공유 자료",
+                "우주 자산 안보 자료",
+                "방위산업 침해 대응 자료",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "비밀 재분류 주기 도래",
+                "수사기관의 자료 제공 요청 접수",
+                "국회 자료 제출 요구 접수",
+                "보안규정 위반 사실 통보",
+                "관계 법령 개정 시행",
+            ),
+        ),
+        _NIS_ROLE_SLOT,
+    ),
+    department_paired_slot="대상자료군",
+    subject_cases=(
+        SubjectCase(
+            subject="비밀 지정·재분류 심사",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="비밀 재분류(안)",
+            contents=(
+                "대상 자료별 현행 등급과 조정안, 그 등급을 정한 근거 법령 조문",
+                "재분류에 따라 달라지는 취급 범위와 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비밀 지정·재분류 심사",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="비밀 재분류 심사 회의록",
+            contents=(
+                "등급 조정을 두고 갈린 근거와 참석자별 발언, 인용된 법령 조문",
+                "확정된 등급과 보류된 자료, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비밀 지정·재분류 심사",
+            document_form=DocumentForm.REPORT,
+            document_name="비밀 재분류 처리 현황보고",
+            contents=(
+                "등급별 대상 건수와 처리 실적의 대비표",
+                "처리가 늦은 항목의 원인과 그때까지 유지되는 취급 제한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="비밀취급 인가 관리",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="비밀취급 인가 범위 조정(안)",
+            contents=(
+                "직위별 인가 등급과 조정안, 그 인가의 근거 법령 조문",
+                "조정에 따라 늘거나 주는 취급 단위와 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비밀취급 인가 관리",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="인가 조정 승인 품의",
+            contents=(
+                "조정이 필요한 사유와 승인받을 인가 범위, 근거 법령 조문",
+                "조정에 따른 취급 통제 변경 사항",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비밀취급 인가 관리",
+            document_form=DocumentForm.REPORT,
+            document_name="인가 관리 현황보고",
+            contents=(
+                "기준 시점의 인가 단위별 인원 규모와 등급 분포",
+                "인가 요건을 다시 확인해야 하는 단위와 그 사유",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요청 처리",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="제공 가부 법률 검토의견",
+            contents=(
+                "요청 항목별 제공 가부와 그 판단의 근거 법령 조문",
+                "제공하더라도 가려야 하는 부분과 그 처리 방법",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요청 처리",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="자료 제공 승인 품의",
+            contents=(
+                "제공할 범위와 그 범위로 한정한 근거 법령 조문",
+                "제공 방식과 제공 후 취급 조건",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요청 처리",
+            document_form=DocumentForm.REPLY_NOTICE,
+            document_name="제공 범위 회신 통지",
+            contents=(
+                "회신 상대와 요청 건, 제공하는 항목과 제외하는 항목의 구분",
+                "제외한 항목마다 그 근거 법령 조문과 취급 시 준수 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기관 간 정보 공유 범위 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공유 범위 조정(안)",
+            contents=(
+                "기관별 공유 항목과 등급, 공유를 허용·제한하는 근거 법령 조문",
+                "조정에 따라 새로 열거나 닫는 항목과 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기관 간 정보 공유 범위 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="공유 범위 협의 회의록",
+            contents=(
+                "공유 범위를 두고 갈린 근거와 기관별 발언, 인용된 법령 조문",
+                "합의된 범위와 미합의로 남은 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기관 간 정보 공유 범위 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="공유 시행 현황보고",
+            contents=(
+                "기관별 공유 항목과 실제 제공 실적의 대비표",
+                "합의 범위를 벗어난 요청이 있었던 항목과 그 처리",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="보안규정 위반 사항 처리",
+            document_form=DocumentForm.INVESTIGATION_REPORT,
+            document_name="위반 사실 확인 조사 결과",
+            contents=(
+                "확인된 위반 사실과 위반된 규정의 조문",
+                "취급 범위를 벗어난 자료의 등급과 범위, 확인되지 않은 항목",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="보안규정 위반 사항 처리",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="시정 요구 발령 품의",
+            contents=(
+                "요구할 시정 사항과 그 근거 법령 조문",
+                "이행 기한과 미이행 시 뒤따르는 조치",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="보안규정 위반 사항 처리",
+            document_form=DocumentForm.REPORT,
+            document_name="시정 이행 현황보고",
+            contents=(
+                "시정 항목별 요구 사항과 실제 이행 실적의 대비표",
+                "이행이 늦은 항목의 원인과 그때까지 유지되는 취급 제한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="법령 개정에 따른 비밀관리 기준 정비",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="개정 법령 적용 검토의견",
+            contents=(
+                "개정된 조문과 그로 인해 달라지는 지정·취급 기준",
+                "기존 지정 자료 중 재검토가 필요한 범위와 그 판단 근거",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="법령 개정에 따른 비밀관리 기준 정비",
+            document_form=DocumentForm.ADMINISTRATIVE_RULE,
+            document_name="비밀관리 지침 개정(안)",
+            contents=(
+                "개정 조항별 신·구 대비와 각 조항이 딛고 선 상위 법령 조문",
+                "시행일과 경과 조치, 그때까지 적용되는 기준",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="법령 개정에 따른 비밀관리 기준 정비",
+            document_form=DocumentForm.REPORT,
+            document_name="기준 정비 추진 현황보고",
+            contents=(
+                "정비 대상 항목과 처리 실적의 대비표",
+                "정비가 끝나지 않은 항목과 그 사이 적용되는 기준",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 대통령경호처 역할구성.
+_PSS_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 부서 단독 검토",
+        "경호안전대책본부 합동 검토",
+        "경찰·소방 등 관계기관 협의",
+        "행사 주관기관과의 협의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 부서 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 상급자 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 부서나 기관 의견을 끌어들이지 않는다."
+            ),
+            "경호안전대책본부 합동 검토": (
+                "본부가 요구한 사항을 먼저 적고, 참여 부서가 올린 현장 의견을 "
+                "적은 다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 끝낸다. 현장 "
+                "의견은 본부 판단과 다른 내용을 담아야 한다."
+            ),
+            "경찰·소방 등 관계기관 협의": (
+                "협조를 요청한 사유를 먼저 적고, 기관별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 기관마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "행사 주관기관과의 협의": (
+                "요구한 안전 조치와 그 근거를 먼저 적고, 주관기관이 제기한 행사 "
+                "운영상의 어려움을 적은 다음, 요구와 운영 사정이 어긋난 지점을 "
+                "짚고, 조정된 것과 물러서지 않은 것으로 끝낸다."
+            ),
+        }
+    ),
+)
+
+
+#: 대통령경호처 / 제2호 ``security_defense``. ``security_defense``의 두 번째
+#: 기관이다.
+#:
+#: **초안은 제3호 ``life_body``였고 그건 틀렸다**(사용자 지적, 2026-08-05).
+#: 이 기관의 경호는 일반적인 신체 안전이 아니라 **대통령 등에 대한 경호**이고,
+#: 그 문서의 비공개 근거는 공개 시 국가의 중대한 이익을 현저히 해칠 우려(제2호)와
+#: 대통령 등의 경호에 관한 법률이 정한 비밀(제1호)에 선다. 사람의 생명·신체를
+#: 다룬다는 이유로 제3호에 넣으면 행정안전부의 재난 문서와 같은 라벨을 달게 되고,
+#: 정작 이 문서가 지키는 것(국가의 중대한 이익)은 라벨에서 사라진다.
+#:
+#: 라벨은 제2호 하나로 잡고, 제1호 성격은 **근거 조문을 본문에 요구**하는 것으로
+#: 함께 드러나게 한다 — 세부조항은 학습 라벨이라 하나여야 하고, 둘 다 걸리는
+#: 문서라는 사실은 본문의 값으로 남는 편이 낫다.
+#:
+#: **국방부와는 다루는 것이 다르다.** 저쪽은 부대·전력·군사시설이고 이쪽은 경호
+#: 대상과 그를 둘러싼 통제 기준이다. 장소축도 부대 대 행사 시설로 갈린다.
+#:
+#: **사안을 제도 층위로만 세웠다.** 이 기관의 문서는 잘못 세우면 실제 위해에
+#: 쓰이는 서식이 된다 — 경호 대상자의 이동 시각과 동선, 배치 인원의 위치,
+#: 사람이 비는 구간 같은 값이 그렇다. 그래서 사안 여섯이 전부 지정·기준·협조·
+#: 이행 점검처럼 **제도와 절차**에 서고, ``instruction``이 동선·배치·시각을
+#: 정면으로 막는다. 행정안전부에서 세운 "무엇이 취약한가" 축을 여기에 그대로
+#: 옮기지 않은 이유다 — 저쪽에서는 그 축이 조항을 정확히 맞히지만 이쪽에서는
+#: 그것이 곧 위해 표적 목록이 된다.
+#:
+#: 부서는 ``대통령경호처와 그 소속기관 직제``의 편제다(확인 2026-08-05).
+#:
+#: 조항이 새는 자리 넷. 경호 대상자와 참석자의 신원·연락처(제6호
+#: ``petitioner_pii``) / 시설 자체의 구조 판정(제3호 ``property``) / 재난이 사람에게
+#: 닿는 자리(제3호 ``life_body``) / 이미 공지된 행사 안내와 통제 구간 고지(이
+#: 세부조항의 ``excludes``).
+_SECURITY_DEFENSE_PSS = CTrackTemplate(
+    subclause_key=SubclauseKey.SECURITY_DEFENSE,
+    agency="대통령경호처",
+    persona_context="대통령 등 경호 대상에 대한 경호구역 지정과 경호안전 협조 업무",
+    adversaries=(
+        Adversary(
+            who="경호 대상에게 해를 끼치려는 자",
+            position="external",
+            what_they_gain=(
+                "어디까지가 통제 안이고 무엇을 상정해 그 선을 그었는지가 밖에서 "
+                "읽히면, 상정 밖의 일까지 막아 낸다는 전제 위에 서 있던 보호가 "
+                "무력화된다."
+            ),
+        ),
+        Adversary(
+            who="행사 운영을 맡아 통제 기준을 쥐고 있는 수탁 업체 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "출입과 반입을 가르는 기준이 관리 밖으로 나가면, 그 기준을 아는 "
+                "사람이 관리 책임 안에 머문다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="협조 요청을 받아 자료를 함께 보는 다른 기관 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "협조 범위가 정해지기 전에 그 논의가 밖으로 나가면, 안전 조치가 "
+                "정해진 범위 안에서만 알려진다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 안전 자료를 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "확정 전 통제 기준과 시행 시점이 인가 밖으로 퍼지면, 기준과 "
+                "고지가 정해진 순서로 이뤄진다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "기획관리실",
+        "경호본부",
+        "경비안전본부",
+        "경호지원단",
+        "감사관실",
+        "경호안전교육원",
+    ),
+    instruction=(
+        "대통령 등 경호 대상에 대한 경호구역 지정과 출입·반입 통제 기준, 관계기관 "
+        "협조에 관한 내부 자료를 쓴다. 이 문서가 다루는 것은 일반적인 안전관리가 "
+        "아니라 **경호 대상에 대한 경호**이며, 그 사실이 본문에서 드러나야 한다. "
+        "확정 전 통제 기준과 그 근거, 협조 요청 항목과 미이행으로 남은 것, 점검에서 "
+        "확인된 이행 수준처럼 미리 알려지면 경호가 딛고 선 전제가 깨져 국가의 "
+        "중대한 이익이 현저히 훼손되는 내용을 담되, 그 사안에서 다루는 것만 쓴다. "
+        "대통령 등의 경호에 관한 법률 등 그 취급을 정한 근거 조문을 본문에 값으로 "
+        "적는다. **경호 대상의 이동 시각과 경로, 인원이 서는 위치, 사람이 비는 "
+        "구간과 시간대는 적지 않는다** — 그 자리에는 통제 기준과 그것이 상정한 "
+        "범위를 적는다. 이미 공지된 행사 안내와 통제 구간 고지는 문서의 본체가 "
+        "아니다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상시설",
+            place=True,
+            values=(
+                "국회의사당",
+                "국립서울현충원",
+                "인천국제공항",
+                "정부세종청사",
+                "국립중앙박물관",
+                "서울월드컵경기장",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "국가행사 개최 계획 접수",
+                "외국 정상 방한 일정 통보",
+                "위해 첩보 통보 접수",
+                "안전활동 협조 요청 회신 지연",
+                "이행 점검 결과 지적사항 접수",
+            ),
+        ),
+        _PSS_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="경호구역 지정·해제",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="경호구역 지정(안)",
+            contents=(
+                "지정할 구역의 범위와 지정 기간, 그 범위로 정한 근거",
+                "지정에 따라 달라지는 통제 항목과 관계기관 통보 시점",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호구역 지정·해제",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="경호구역 지정 승인 품의",
+            contents=(
+                "지정이 필요한 사유와 승인받을 범위, 그 범위로 한정한 근거",
+                "지정 기간과 해제 요건",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호구역 지정·해제",
+            document_form=DocumentForm.REPORT,
+            document_name="경호구역 운영 결과보고",
+            contents=(
+                "당초 지정 범위와 실제 운영 실적의 대비표",
+                "범위를 조정해야 했던 항목과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="출입·반입 통제 기준 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="출입·반입 통제 기준 조정(안)",
+            contents=(
+                "현행 기준과 조정안, 조정이 필요해진 사유",
+                "기준별 적용 대상과 예외를 인정하는 범위, 승인 경로",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="출입·반입 통제 기준 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="통제 기준 검토 회의록",
+            contents=(
+                "기준 수위를 두고 갈린 근거와 참석 기관별 발언",
+                "확정된 기준과 재검토로 넘긴 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="출입·반입 통제 기준 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="통제 기준 적용 결과보고",
+            contents=(
+                "기준별 적용 건수와 예외 인정 건수의 대비표",
+                "기준대로 적용되지 않은 항목과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="안전활동 협조 요청 처리",
+            document_form=DocumentForm.REPLY_NOTICE,
+            document_name="협조 요청 회신 통지",
+            contents=(
+                "회신 상대와 요청 건, 협조할 항목과 협조하지 않는 항목의 구분",
+                "제외한 항목마다 그 사유와 대신 요구하는 조치",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="안전활동 협조 요청 처리",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="협조 사항 협의 회의록",
+            contents=(
+                "협조 범위를 두고 갈린 근거와 기관별 발언",
+                "합의된 항목과 미합의로 남은 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="안전활동 협조 요청 처리",
+            document_form=DocumentForm.REPORT,
+            document_name="협조 이행 현황보고",
+            contents=(
+                "기관별 협조 항목과 실제 이행 실적의 대비표",
+                "이행되지 않은 항목과 그로 인해 남는 부담",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="위해 신고·통보 처리",
+            document_form=DocumentForm.INVESTIGATION_REPORT,
+            document_name="신고 내용 확인 결과",
+            contents=(
+                "신고·통보의 접수 경위와 확인된 사실의 범위",
+                "확인되지 않은 항목과 그 이유, 추가 확인이 필요한 것",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="위해 신고·통보 처리",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="대응 수위 심의 회의록",
+            contents=(
+                "대응 수위를 두고 갈린 근거와 참석자별 발언",
+                "결정된 조치와 보류된 조치, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="위해 신고·통보 처리",
+            document_form=DocumentForm.REPORT,
+            document_name="신고 처리 현황보고",
+            contents=(
+                "접수 건수와 처리 구분별 실적의 대비표",
+                "처리가 늦은 건의 원인과 그때까지 유지되는 조치",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전대책본부 운영",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="대책본부 구성·운영 계획(안)",
+            contents=(
+                "참여 기관과 기관별 분담 항목, 그렇게 나눈 사유",
+                "운영 기간과 단계별 보고·전파 체계",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전대책본부 운영",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="대책본부 운영 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "분담 항목별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전대책본부 운영",
+            document_form=DocumentForm.REPORT,
+            document_name="대책본부 운영 결과보고",
+            contents=(
+                "당초 분담과 실제 이행 실적의 기관별 대비표",
+                "분담대로 되지 않은 항목의 원인과 다음 운영에 반영할 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전 통제 이행 점검",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="통제 이행 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "통제 항목별 이행 여부와 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전 통제 이행 점검",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="시정 요구 발령 품의",
+            contents=(
+                "요구할 시정 사항과 그 범위로 한정한 근거",
+                "이행 기한과 미이행 시 뒤따르는 조치",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="경호안전 통제 이행 점검",
+            document_form=DocumentForm.REPORT,
+            document_name="시정 이행 현황보고",
+            contents=(
+                "시정 항목별 요구 사항과 실제 이행 실적의 대비표",
+                "이행이 늦은 항목의 원인과 그때까지 유지되는 통제",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 대통령비서실·국가안보실 공용 역할구성. 둘 다 실(室) 안에서 비서관실 단위로
+#: 움직이고 바깥과는 부처를 상대하므로 층위가 같다.
+_PRESIDENTIAL_ROLE_SLOT = CaseSlot(
+    name="역할구성",
+    phrasing="{value}로 진행된 건이다.",
+    values=(
+        "담당 비서관실 단독 검토",
+        "실 내 관련 비서관실 합동 검토",
+        "관계부처와의 협의",
+        "외부 위원이 참여하는 심의",
+    ),
+    guidance=MappingProxyType(
+        {
+            "담당 비서관실 단독 검토": (
+                "작성 부서 안에서 오간 것만 적는다. 담당자 검토 의견을 먼저 "
+                "적고, 비서관 지시사항을 적은 다음, 지시를 반영한 결과로 끝낸다. "
+                "다른 비서관실이나 부처 의견을 끌어들이지 않는다."
+            ),
+            "실 내 관련 비서관실 합동 검토": (
+                "주관 비서관실이 요구한 사항을 먼저 적고, 관련 비서관실이 낸 "
+                "다른 판단을 적은 다음, 둘이 어긋난 지점을 짚고, 조정된 결과로 "
+                "끝낸다."
+            ),
+            "관계부처와의 협의": (
+                "협의를 요청한 사유를 먼저 적고, 부처별 입장 표명을 적은 다음, "
+                "입장이 갈린 쟁점을 짚고, 합의된 것과 미합의로 남은 것으로 "
+                "끝낸다. 부처마다 서로 다른 소관 사정이 드러나야 한다."
+            ),
+            "외부 위원이 참여하는 심의": (
+                "안건 상정과 담당 부서의 설명을 먼저 적고, 위원별 질의와 그에 "
+                "대한 답변을 적은 다음, 쟁점별 견해와 근거를 적고, 의결 또는 "
+                "보류 결정과 그 사유로 끝낸다."
+            ),
+        }
+    ),
+)
+
+
+#: 대통령비서실 / 제1호 ``legal_secret``. ``legal_secret``의 두 번째 기관이다.
+#:
+#: **국가정보원판과 근거 법령으로 갈린다.** 이 세부조항은 "근거가 문서에 드러나는
+#: 경우"가 판정 기준이므로, 같은 세부조항의 두 기관은 **어느 법률이 그것을 비밀로
+#: 정하는가**로 나뉘어야 한다. 저쪽은 보안업무규정(비밀 지정·인가·제공)이고
+#: 이쪽은 대통령기록물 관리에 관한 법률과 공공기록물 관리에 관한 법률(지정기록물·
+#: 보호기간·비공개 재분류)이다. 사안도 그 축을 따라간다.
+#:
+#: **부서축은 확정된 것이 아니다.** 대통령비서실 직제는 정권마다 바뀌고 공개 자료로
+#: 현행 비서관실 목록을 확정하지 못했다(2026-08-05). ``기록관리비서관실``은 이번
+#: 정부에서 신설이 확인된 것이고 나머지는 여러 정부에 걸쳐 유지돼 온 이름이다.
+#: 통일부에서 없어진 부서명을 적었던 일이 있으므로, 현행 직제가 확인되면 이 축부터
+#: 대조해야 한다.
+#:
+#: 조항이 새는 자리 넷. 기록물 **내용**의 정책 판단(제5호 ``decision_review``) /
+#: 열람 요구인의 신원(제6호 ``petitioner_pii``) / 안보 회의 자료의 취급(같은
+#: 제1호의 국가안보실) / 근거 조문 없이 '대외비' 표기만 있는 문서(이 세부조항의
+#: ``excludes``).
+_LEGAL_SECRET_PRESIDENTIAL_OFFICE = CTrackTemplate(
+    subclause_key=SubclauseKey.LEGAL_SECRET,
+    agency="대통령비서실",
+    persona_context="대통령기록물 관리와 비공개 기록물 지정 업무",
+    adversaries=(
+        Adversary(
+            who="보호기간 안의 기록을 미리 보려는 외부 요구인",
+            position="external",
+            what_they_gain=(
+                "무엇이 어느 근거로 지정돼 언제까지 닫히는지가 지정 전에 알려지면, "
+                "지정이 정해진 절차를 거쳐 효력을 갖는다는 전제가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="이관 실무를 함께 맡아 목록을 먼저 보는 위탁 인력",
+            position="intermediary",
+            what_they_gain=(
+                "확정 전 이관 목록이 관리 밖으로 나가면, 목록이 확정된 뒤에만 "
+                "그 존재가 알려진다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="기록의 존부 자체를 확인하려는 이해관계인",
+            position="external",
+            what_they_gain=(
+                "어떤 기록이 있는지가 재분류 전에 드러나면, 존부가 법이 정한 "
+                "절차로만 확인된다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 기록을 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "지정 전 판단과 보호기간 산정이 인가 밖으로 퍼지면, 취급이 인가 "
+                "범위 안에 머문다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "총무비서관실",
+        "기록관리비서관실",
+        "법률비서관실",
+        "공직기강비서관실",
+        "인사비서관실",
+        "국정상황실",
+    ),
+    instruction=(
+        "대통령기록물과 비공개 기록물의 지정·이관·재분류에 관한 내부 자료를 쓴다. "
+        "**어느 법률의 어느 조문이 그것을 비밀 또는 비공개로 정하고 있는지를 본문에 "
+        "값으로 적는다** — 근거 조문 없이 '대외비'·'비밀유지' 표기만 있으면 이 "
+        "문서는 성립하지 않는다. 지정 대상과 그 사유, 보호기간과 산정 근거, 이관 "
+        "목록과 확정 시점, 열람 요구에 대한 판단처럼 미리 알려지면 지정이 정해진 "
+        "절차를 거쳐 효력을 갖는다는 전제가 깨지는 내용을 담되, 그 사안에서 다루는 "
+        "것만 쓴다. 기록에 담긴 정책 판단의 내용 자체와 열람 요구인의 신원은 이 "
+        "문서가 다루는 것이 아니다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상기록군",
+            place=True,
+            values=(
+                "정상외교 기록",
+                "인사 검증 기록",
+                "국정과제 점검 기록",
+                "재난·위기 대응 기록",
+                "법률안 검토 기록",
+                "민원·청원 처리 기록",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "기록물 생산현황 통보 시기 도래",
+                "이관 대상 목록 제출 요구 접수",
+                "비공개 기록물 재분류 주기 도래",
+                "열람 요구서 접수",
+                "관계 법령 개정 시행",
+            ),
+        ),
+        _PRESIDENTIAL_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="대통령지정기록물 지정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="지정기록물 지정(안)",
+            contents=(
+                "지정 대상 기록군과 지정 사유, 그 지정의 근거 법령 조문",
+                "지정에 따라 달라지는 취급 범위와 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="대통령지정기록물 지정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="지정 심의 회의록",
+            contents=(
+                "지정 여부를 두고 갈린 근거와 참석자별 발언, 인용된 법령 조문",
+                "확정된 지정과 보류된 기록군, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="대통령지정기록물 지정",
+            document_form=DocumentForm.REPORT,
+            document_name="지정 처리 현황보고",
+            contents=(
+                "기록군별 지정 대상 건수와 처리 실적의 대비표",
+                "처리가 늦은 기록군의 원인과 그때까지 유지되는 취급 제한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="보호기간 설정",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="보호기간 설정 법률 검토의견",
+            contents=(
+                "기록군별 보호기간과 그 산정의 근거 법령 조문",
+                "기간을 다투게 될 지점과 그에 대한 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="보호기간 설정",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="보호기간 설정 승인 품의",
+            contents=(
+                "승인받을 보호기간과 그 기간으로 한정한 근거 법령 조문",
+                "기간 중 예외적으로 열람이 가능한 범위",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="보호기간 설정",
+            document_form=DocumentForm.REPORT,
+            document_name="보호기간 설정 현황보고",
+            contents=(
+                "기록군별 설정 기간의 분포와 당초 계획 대비 실적",
+                "설정이 끝나지 않은 기록군과 그 사이 적용되는 기준",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="이관 목록 확정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="이관 목록 확정(안)",
+            contents=(
+                "이관 대상 기록군과 제외 대상의 구분, 그 구분의 근거 법령 조문",
+                "이관 시기와 확정 전까지 유지되는 취급 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="이관 목록 확정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="이관 목록 검토 회의록",
+            contents=(
+                "제외 대상 판단을 두고 갈린 근거와 참석자별 발언",
+                "확정된 목록과 재검토로 넘긴 기록군",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="이관 목록 확정",
+            document_form=DocumentForm.REPORT,
+            document_name="이관 추진 현황보고",
+            contents=(
+                "기록군별 이관 목표와 실제 처리 실적의 대비표",
+                "이관이 늦은 기록군의 원인과 보완 사항",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="비공개 기록물 재분류",
+            document_form=DocumentForm.REPORT,
+            document_name="재분류 심사 결과보고",
+            contents=(
+                "기록군별 현행 구분과 재분류 결과, 그 판단의 근거 법령 조문",
+                "공개로 전환하지 않은 기록군과 그 사유",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="비공개 기록물 재분류",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="재분류 기준 법률 검토의견",
+            contents=(
+                "적용할 비공개 사유와 그 근거 법령 조문",
+                "사유가 소멸했다고 볼 여지가 있는 항목과 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="비공개 기록물 재분류",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="재분류 심의 회의록",
+            contents=(
+                "공개 전환 여부를 두고 갈린 근거와 참석자별 발언",
+                "확정된 구분과 보류된 기록군, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="열람 요구 처리",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="열람 가부 법률 검토의견",
+            contents=(
+                "요구 항목별 열람 가부와 그 판단의 근거 법령 조문",
+                "열람을 허용하더라도 가려야 하는 부분과 그 처리 방법",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="열람 요구 처리",
+            document_form=DocumentForm.REPLY_NOTICE,
+            document_name="열람 범위 회신 통지",
+            contents=(
+                "회신 상대와 요구 건, 허용하는 항목과 제외하는 항목의 구분",
+                "제외한 항목마다 그 근거 법령 조문과 불복 절차 안내",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="열람 요구 처리",
+            document_form=DocumentForm.REPORT,
+            document_name="열람 요구 처리 현황보고",
+            contents=(
+                "접수 건수와 처리 구분별 실적의 대비표",
+                "처리가 늦은 건의 원인과 그때까지 유지되는 제한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="기록물 관리 기준 정비",
+            document_form=DocumentForm.ADMINISTRATIVE_RULE,
+            document_name="기록물 관리 지침 개정(안)",
+            contents=(
+                "개정 조항별 신·구 대비와 각 조항이 딛고 선 상위 법령 조문",
+                "시행일과 경과 조치, 그때까지 적용되는 기준",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기록물 관리 기준 정비",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="개정 법령 적용 검토의견",
+            contents=(
+                "개정된 조문과 그로 인해 달라지는 지정·보호기간 기준",
+                "기존 지정 기록군 중 재검토가 필요한 범위와 그 판단 근거",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="기록물 관리 기준 정비",
+            document_form=DocumentForm.REPORT,
+            document_name="기준 정비 추진 현황보고",
+            contents=(
+                "정비 대상 항목과 처리 실적의 대비표",
+                "정비가 끝나지 않은 항목과 그 사이 적용되는 기준",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+    ),
+)
+
+
+#: 국가안보실 / 제1호 ``legal_secret``. ``legal_secret``의 세 번째 기관이다.
+#:
+#: **셋을 근거 법령으로 갈랐다.** 국가정보원은 보안업무규정(지정·인가·제공),
+#: 대통령비서실은 대통령기록물법·공공기록물법(지정기록물·보호기간), 여기는
+#: 국가안전보장회의법과 그 운영에 따르는 회의 자료의 취급이다. 같은 세부조항에
+#: 기관을 셋 두는 것이 성립하려면 이 축이 갈려 있어야 한다 — 판정 기준 자체가
+#: "근거가 문서에 드러나는 경우"이기 때문이다.
+#:
+#: **제2호와도 갈라야 한다.** 안보실 문서는 내용이 안보라 ``security_defense``와
+#: 만나기 쉽다. 그래서 사안이 **회의체 운영과 자료 취급**에만 서고 전력·부대·
+#: 대비태세는 값으로 들어오지 않는다. ``instruction``이 그 선을 정면으로 긋는다.
+_LEGAL_SECRET_NSO = CTrackTemplate(
+    subclause_key=SubclauseKey.LEGAL_SECRET,
+    agency="국가안보실",
+    persona_context="국가안전보장회의 운영과 안보 자료 취급 관리 업무",
+    adversaries=(
+        Adversary(
+            who="회의에서 무엇이 다뤄졌는지를 알아내려는 국외 정보수집 조직",
+            position="external",
+            what_they_gain=(
+                "어떤 안건이 언제 상정돼 어느 등급으로 묶였는지가 알려지면, "
+                "우리가 무엇을 논의했는지 밖에서 알 수 없다는 전제가 성립하지 "
+                "않게 된다."
+            ),
+        ),
+        Adversary(
+            who="자료를 제출하고 회신을 기다리는 관계부처 관계자",
+            position="intermediary",
+            what_they_gain=(
+                "취급 범위가 정해지기 전에 그 논의가 밖으로 나가면, 제출 자료가 "
+                "정해진 범위 안에서만 돈다는 전제가 성립하지 않게 된다."
+            ),
+        ),
+        Adversary(
+            who="회의 결과를 확정 전에 재료로 삼는 외부 관계자",
+            position="external",
+            what_they_gain=(
+                "공표 범위가 정해지기 전에 논의가 알려지면, 결과가 정해진 범위로만 "
+                "공표된다는 전제가 무력화된다."
+            ),
+        ),
+        Adversary(
+            who="취급 범위를 넘어 회의 자료를 열람한 내부 관계자",
+            position="internal",
+            what_they_gain=(
+                "지정 전 등급과 배포 단위가 인가 밖으로 퍼지면, 취급이 인가 범위 "
+                "안에 머문다는 전제가 무력화된다."
+            ),
+        ),
+    ),
+    departments=(
+        "안보전략비서관실",
+        "외교정책비서관실",
+        "통일정책비서관실",
+        "국방비서관실",
+        "사이버안보비서관실",
+        "경제안보비서관실",
+        "국가위기관리센터",
+    ),
+    instruction=(
+        "국가안전보장회의 운영과 그 회의 자료의 취급에 관한 내부 자료를 쓴다. "
+        "**어느 법률의 어느 조문이 그것을 비밀 또는 비공개로 정하고 있는지를 본문에 "
+        "값으로 적는다** — 근거 조문 없이 표기만 있으면 이 문서는 성립하지 않는다. "
+        "안건 자료의 등급 지정과 배포 단위, 부처 제출 자료의 취급 범위, 자료 제공 "
+        "요구에 대한 판단, 공표 범위처럼 미리 알려지면 자료가 정해진 범위 안에서만 "
+        "돈다는 전제가 깨지는 내용을 담되, 그 사안에서 다루는 것만 쓴다. **논의된 "
+        "안보 정책의 내용 자체와 전력·부대·대비태세는 이 문서가 다루는 것이 "
+        "아니다** — 그 자리에는 그 자료가 어느 등급으로 어디까지 도는지를 적는다."
+    ),
+    slots=(
+        CaseSlot(
+            name="대상자료군",
+            place=True,
+            values=(
+                "상임위원회 안건 자료",
+                "부처 제출 검토자료",
+                "위기관리 상황 보고자료",
+                "정상외교 후속조치 자료",
+                "합동 점검 결과자료",
+            ),
+        ),
+        CaseSlot(
+            name="촉발계기",
+            phrasing="{value}에서 비롯된 건이다.",
+            values=(
+                "회의 개최 일정 확정",
+                "부처 자료 제출 마감 도래",
+                "국회 자료 제출 요구 접수",
+                "비밀 재분류 주기 도래",
+                "취급 실태 점검 결과 접수",
+            ),
+        ),
+        _PRESIDENTIAL_ROLE_SLOT,
+    ),
+    subject_cases=(
+        SubjectCase(
+            subject="회의 안건 자료 등급 지정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="안건 자료 등급 지정(안)",
+            contents=(
+                "자료군별 지정 등급과 그 지정의 근거 법령 조문",
+                "등급별 배포 단위와 회수 시점",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의 안건 자료 등급 지정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="등급 지정 심의 회의록",
+            contents=(
+                "등급 수위를 두고 갈린 근거와 참석자별 발언, 인용된 법령 조문",
+                "확정된 등급과 보류된 자료군, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의 안건 자료 등급 지정",
+            document_form=DocumentForm.REPORT,
+            document_name="등급 지정 처리 현황보고",
+            contents=(
+                "자료군별 지정 건수와 등급 분포의 대비표",
+                "지정이 늦은 자료군과 그때까지 적용되는 취급 기준",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의록 작성·취급 관리",
+            document_form=DocumentForm.ADMINISTRATIVE_RULE,
+            document_name="회의록 취급 지침 개정(안)",
+            contents=(
+                "개정 조항별 신·구 대비와 각 조항이 딛고 선 상위 법령 조문",
+                "시행일과 경과 조치, 그때까지 적용되는 기준",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의록 작성·취급 관리",
+            document_form=DocumentForm.INSPECTION_REPORT,
+            document_name="회의록 취급 실태 점검 결과",
+            contents=(
+                "점검 일시·점검대상·점검자",
+                "취급 항목별 지적사항과 시정 요구 사항, 이행 기한",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의록 작성·취급 관리",
+            document_form=DocumentForm.REPORT,
+            document_name="회의록 관리 현황보고",
+            contents=(
+                "회차별 작성·보관 실적과 당초 기준 대비 이행률",
+                "기준대로 처리되지 않은 항목과 그 원인",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="부처 제출 자료 취급 범위 조정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="취급 범위 조정(안)",
+            contents=(
+                "부처별 제출 자료군과 허용·제한하는 취급 범위, 그 근거 법령 조문",
+                "조정에 따라 새로 열거나 닫는 항목과 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="부처 제출 자료 취급 범위 조정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="취급 범위 협의 회의록",
+            contents=(
+                "범위를 두고 갈린 근거와 부처별 발언, 인용된 법령 조문",
+                "합의된 범위와 미합의로 남은 항목",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="부처 제출 자료 취급 범위 조정",
+            document_form=DocumentForm.REPORT,
+            document_name="취급 범위 적용 현황보고",
+            contents=(
+                "부처별 적용 실적과 당초 합의 범위의 대비표",
+                "범위를 벗어난 요청이 있었던 항목과 그 처리",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요구 처리",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="제공 가부 법률 검토의견",
+            contents=(
+                "요구 항목별 제공 가부와 그 판단의 근거 법령 조문",
+                "제공하더라도 가려야 하는 부분과 그 처리 방법",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요구 처리",
+            document_form=DocumentForm.APPROVAL_REQUEST,
+            document_name="자료 제공 승인 품의",
+            contents=(
+                "제공할 범위와 그 범위로 한정한 근거 법령 조문",
+                "제공 방식과 제공 후 취급 조건",
+                "기안-검토-결재 열을 가진 결재란",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="자료 제공 요구 처리",
+            document_form=DocumentForm.REPLY_NOTICE,
+            document_name="제공 범위 회신 통지",
+            contents=(
+                "회신 상대와 요구 건, 제공하는 항목과 제외하는 항목의 구분",
+                "제외한 항목마다 그 근거 법령 조문과 취급 시 준수 사항",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="위기관리 자료 비공개 범위 검토",
+            document_form=DocumentForm.LEGAL_REVIEW,
+            document_name="비공개 범위 법률 검토의견",
+            contents=(
+                "자료 항목별 비공개 사유와 그 근거 법령 조문",
+                "사유가 소멸했다고 볼 여지가 있는 항목과 검토 결론",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="위기관리 자료 비공개 범위 검토",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="비공개 범위 조정(안)",
+            contents=(
+                "현행 구분과 조정안, 조정이 필요해진 사유와 근거 법령 조문",
+                "조정에 따라 달라지는 배포 단위와 시행 시기",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="위기관리 자료 비공개 범위 검토",
+            document_form=DocumentForm.REPORT,
+            document_name="비공개 범위 정비 현황보고",
+            contents=(
+                "자료군별 정비 대상과 처리 실적의 대비표",
+                "정비가 끝나지 않은 항목과 그 사이 적용되는 기준",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의 결과 공표 범위 결정",
+            document_form=DocumentForm.PLAN_DRAFT,
+            document_name="공표 범위 결정(안)",
+            contents=(
+                "공표할 항목과 공표하지 않을 항목의 구분과 그 근거 법령 조문",
+                "공표 시점과 그 시점까지 취급을 제한하는 범위",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의 결과 공표 범위 결정",
+            document_form=DocumentForm.MEETING_MINUTES,
+            document_name="공표 범위 협의 회의록",
+            contents=(
+                "공표 수위를 두고 갈린 근거와 참석자별 발언",
+                "확정된 범위와 보류된 항목, 그 보류 사유",
+            ),
+            allowed_stages=_PRE_DECISION_STAGES,
+        ),
+        SubjectCase(
+            subject="회의 결과 공표 범위 결정",
+            document_form=DocumentForm.REPORT,
+            document_name="공표 시행 결과보고",
+            contents=(
+                "당초 정한 공표 범위와 실제 공표 내용의 대비표",
+                "범위를 벗어난 항목이 나온 경위와 그 영향",
+            ),
+            allowed_stages=_POST_ACTION_STAGES,
         ),
     ),
 )
@@ -947,7 +4737,20 @@ C_TRACK_TEMPLATES: Mapping[
 ] = MappingProxyType(
     {
         (template.subclause_key, template.agency): template
-        for template in (_CORRECTION_SECURITY_MOJ,)
+        for template in (
+            _CORRECTION_SECURITY_MOJ,
+            _SECURITY_DEFENSE_MND,
+            _UNIFICATION_DIPLOMACY_MOFA,
+            _UNIFICATION_DIPLOMACY_MOU,
+            _LIFE_BODY_MOIS,
+            _PROPERTY_MOLIT,
+            _TRIAL_INVESTIGATION_SPO,
+            _PROSECUTION_CIO,
+            _LEGAL_SECRET_NIS,
+            _SECURITY_DEFENSE_PSS,
+            _LEGAL_SECRET_PRESIDENTIAL_OFFICE,
+            _LEGAL_SECRET_NSO,
+        )
     }
 )
 
@@ -1003,12 +4806,6 @@ def expand_cases(
     if count < 0:
         raise ValueError("count must not be negative")
 
-    radices = (
-        len(template.departments),
-        len(template.case_stage_pairs),
-        len(template.security_grades),
-        *(len(slot.values) for slot in template.slots),
-    )
     total = template.case_count
     if total > MAX_SHUFFLED_CASE_COUNT:
         raise ValueError(
@@ -1016,29 +4813,64 @@ def expand_cases(
             "전개 방식을 다시 정해야 한다"
         )
 
-    pairs = template.case_stage_pairs
     order = list(range(total))
     random.Random(seed).shuffle(order)
 
     for i in range(count):
-        raw = order[i % total]
-        digits = _mixed_radix_decode(raw, radices)
-        case, stage = pairs[digits[1]]
-        yield CaseFrame(
-            subclause_key=template.subclause_key,
-            agency=template.agency,
-            department=template.departments[digits[0]],
-            subject_case=case,
-            stage=stage,
-            security_grade=template.security_grades[digits[2]],
-            slot_values=MappingProxyType(
-                {
-                    slot.name: slot.values[digit]
-                    for slot, digit in zip(template.slots, digits[3:])
-                }
-            ),
-            case_index=raw,
+        yield case_frame(template, order[i % total])
+
+
+def case_frame(template: CTrackTemplate, case_index: int) -> CaseFrame:
+    """좌표 하나를 사건 프레임으로 되돌린다.
+
+    ``CaseFrame.case_index``는 전개 **순번**이 아니라 mixed-radix로 접힌
+    **좌표**다(``expand_cases``의 ``order[i]``). 그래서 프레임은 seed와 순번
+    없이 이 값 하나로 정해진다 — 산출물에 좌표만 남겨 두면 나중에 같은 프레임을
+    다시 세울 수 있다는 뜻이고, 되쓰기(``writeback_c_track_to_rds``)가 기관·부서를
+    거기서 읽는다.
+
+    순번으로 오해해 ``islice``로 세면 **다른 프레임이 조용히 나온다.** 그 착각은
+    기관이 한 칸 어긋난 행으로만 드러난다.
+    """
+
+    free_slots = template.free_slots
+    radices = (
+        len(template.departments),
+        len(template.case_stage_pairs),
+        len(template.security_grades),
+        *(len(slot.values) for slot in free_slots),
+    )
+    if not 0 <= case_index < template.case_count:
+        raise ValueError(
+            f"case_index={case_index}가 이 템플릿의 조합 수"
+            f"({template.case_count})를 벗어난다"
         )
+
+    digits = _mixed_radix_decode(case_index, radices)
+    case, stage = template.case_stage_pairs[digits[1]]
+    # 부서와 묶인 슬롯은 부서 자리(digits[0])를 그대로 쓴다. 나머지는 자기 자리다.
+    chosen = dict(zip((slot.name for slot in free_slots), (
+        slot.values[digit] for slot, digit in zip(free_slots, digits[3:])
+    )))
+    if template.department_paired_slot is not None:
+        paired = next(
+            slot for slot in template.slots
+            if slot.name == template.department_paired_slot
+        )
+        chosen[paired.name] = paired.values[digits[0]]
+    return CaseFrame(
+        subclause_key=template.subclause_key,
+        agency=template.agency,
+        department=template.departments[digits[0]],
+        subject_case=case,
+        stage=stage,
+        security_grade=template.security_grades[digits[2]],
+        # 템플릿에 적힌 슬롯 순서를 지킨다 — 프롬프트 절의 줄 순서가 이걸 따른다.
+        slot_values=MappingProxyType(
+            {slot.name: chosen[slot.name] for slot in template.slots}
+        ),
+        case_index=case_index,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1190,6 +5022,8 @@ def render_cot_fixed_prefix(template: CTrackTemplate) -> str:
             "",
             _COT_TITLE_RULE,
             "",
+            _COT_CONDITION_USE_RULE,
+            "",
             _DOCUMENT_STYLE_RULES,
             "",
             _BLOCK_STRUCTURE_RULES,
@@ -1237,30 +5071,33 @@ def render_cot_case_section(template: CTrackTemplate, frame: CaseFrame) -> str:
         f"- 법적 근거: 정보공개법 제9조제1항 제{template.clause_no.value}호"
         f" — {SUBCLAUSE_DEFINITIONS[template.subclause_key].label}",
         "",
+        # 여기부터는 ``라벨: 값``이 아니라 문장이다. 이유는 ``CaseSlot.phrasing``
+        # 주석에 적어 뒀다 — 라벨 형태로 두면 그 표가 통째로 문서의 첫 절이 된다.
         "[다루는 사건]",
-        f"- 사안: {case.subject}",
-        f"- 진행단계: {frame.stage}",
-        f"  → {STAGE_GUIDANCE[frame.stage]}",
+        f"{case.subject}, {frame.stage} 단계에서 작성한다.",
+        STAGE_GUIDANCE[frame.stage],
     ]
     for slot in event_slots:
         value = frame.slot_values[slot.name]
-        lines.append(f"- {slot.name}: {value}")
+        lines.append(slot.phrasing.format(value=value))
         hint = slot.guidance.get(value)
         if hint:
-            lines.append(f"  → {hint}")
+            lines.append(hint)
 
     lines += [
         "",
-        # 절 이름은 ``[문서 정보]``여야 한다. ``_TITLE_RULE``이 "[문서 정보]의
-        # `문서`에 적힌 이름은 종류이지 제목이 아니다"라고 이 절을 지목한다 —
-        # 이름을 바꾸면 규칙이 없는 절을 가리키게 되고, 그러면 제목이
-        # ``document_name``으로 돌아간다(실측 2026-08-03, 10건 중 8건).
+        # 절 이름은 그대로 ``[문서 정보]``다. 안쪽만 문장으로 바꿨고, 종류 이름을
+        # 가리키던 ``_COT_TITLE_RULE``의 지목도 절 이름이 아니라 "종류로 주어진
+        # 이름"으로 옮겼다 — 규칙이 없는 것을 가리키면 제목이 ``document_name``
+        # 으로 돌아간다(실측 2026-08-03, 10건 중 8건).
         "[문서 정보]",
-        f"- 문서: {case.document_name}",
-        f"- 문서형식: {DOCUMENT_FORM_DEFINITIONS[case.document_form].label}",
-        f"- 표제부 항목: {' / '.join(header_keys_for(case.document_form))}",
-        f"- 비밀등급: {_grade_display(frame.security_grade)}",
-        f"  → {_GRADE_GUIDANCE[frame.security_grade]}",
+        f"이 문서의 종류는 '{case.document_name}'"
+        f"({DOCUMENT_FORM_DEFINITIONS[case.document_form].label})이다.",
+        # 조사를 붙이지 않는다. 표제부 항목의 마지막 글자가 무엇이냐에 따라
+        # 을/를이 갈리는데 그 값은 문서형식마다 다르다.
+        f"표제부 항목은 {' / '.join(header_keys_for(case.document_form))}다.",
+        f"{_grade_display(frame.security_grade)} 문서다. "
+        f"{_GRADE_GUIDANCE[frame.security_grade]}",
         "",
         "[핵심 정보 — 알려지면 이 세부조항에 가장 큰 피해를 주는 값]",
         "아래 항목을 새 가상 값으로 채운다. 성명·일자·인원·시각·식별자는 실제 "

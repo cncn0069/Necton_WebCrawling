@@ -186,6 +186,11 @@ def test_title_rule_labels_exist_in_the_case_section(template):
     ``대상 장소``로 올라가, 60/60 프레임에서 규칙이 값 없는 이름을 가리켰다.
     제목을 건마다 구별시키는 축 중 값 종류가 가장 많은 것이 사정권 밖으로
     나가면 제목이 ``document_name``으로 돌아간다(실측 2026-08-03, 10건 중 8건).
+
+    검사하는 것은 라벨이 아니라 **값**이다. 프롬프트 v5에서 ``[다루는 사건]``의
+    ``라벨: 값`` 표가 문장으로 바뀌었으므로(``CaseSlot.phrasing``) ``- 촉발계기: ``
+    같은 형태를 찾으면 값이 멀쩡히 실려 있는데도 실패한다. 이 테스트가 지키려는
+    것은 표기 형태가 아니라 "규칙이 부르는 축에 값이 있는가"다.
     """
 
     prefix = render_cot_fixed_prefix(template)
@@ -195,8 +200,9 @@ def test_title_rule_labels_exist_in_the_case_section(template):
 
     for frame in expand_cases(template, 30, seed=7):
         section = render_cot_case_section(template, frame)
-        for label in called:
-            assert f"- {label}: " in section, f"[제목]이 부르는 {label}에 값이 없다"
+        for slot_name, value in frame.slot_values.items():
+            assert value in section, f"[제목]이 기대는 {slot_name}에 값이 없다"
+        assert frame.stage in section, "[제목]이 부르는 진행단계에 값이 없다"
 
 
 @pytest.mark.parametrize("template", _TEMPLATES, ids=_IDS)
@@ -299,11 +305,16 @@ def test_both_prefixes_carry_the_boundary_rule(template):
 
     대조군을 글자 그대로 보존하는 것보다 우선한다 — 두 경로가 같은 종류의
     문서를 만들고, 한쪽만 경계를 빼두는 것은 실험 순도로 정당화되지 않는다.
+
+    문장 끝까지 맞추지 않는다. v5에서 이 절이 목록에서 산문 한 문단으로 바뀌며
+    ``…이름을 쓴다``가 ``…이름을 쓰고``가 됐다(실측 근거는 ``_BOUNDARY_RULE``
+    주석). 이 테스트가 지키는 것은 표현이 아니라 **두 경로 모두에 경계가 실리고
+    그 안에 대체 지시가 살아 있는가**다.
     """
 
     for prompt in (render_cot_fixed_prefix(template), render_fixed_prefix(template)):
         assert "[경계]" in prompt
-        assert "기관·부서·시설은 실재하는 이름을 쓴다" in prompt
+        assert "기관·부서·시설은 실재하는 이름" in prompt
         assert "무엇이 무력화되는지" in prompt
 
 
