@@ -13,8 +13,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence, TypeVar
 
-from rd2.generators.agency_categories import AGENCY_CATEGORIES
-from rd2.generators.clause_data import CLAUSES
+from rd2.disclosure.agency_categories import AGENCY_CATEGORIES
+from rd2.disclosure.clause_data import CLAUSES
 from rd2.generators.template_matrix import STATUS_AWARE_TARGETS, TemplateStatusTarget
 
 

@@ -14,8 +14,10 @@ from typing import Mapping
 
 from rd2.source_generation.classification_taxonomy import (
     ClauseNumber,
+    DOCUMENT_FORM_DEFINITIONS,
     DocumentForm,
     SUBCLAUSES_BY_CLAUSE,
+    SUBCLAUSE_LABELS,
     SubclauseKey,
     clause_of_subclause,
 )
@@ -277,6 +279,37 @@ def render_form_subclause_bridge_guidance(
             f"- {_CLAUSE_BRIDGE_GUIDANCE[clause]}",
         )
     )
+
+
+def render_form_conflict_guidance() -> str:
+    """판별기에게 형식별 **금지** 세부유형만 보여준다.
+
+    판별기는 문서형식과 세부유형을 한 번의 호출에서 함께 정하므로, 형식이
+    잠긴 뒤에 필터를 거는 생성기(``render_form_subclause_bridge_guidance``)와
+    달리 목록 전체를 미리 받아야 한다.
+
+    native/bridge는 싣지 않는다. 272셀 중 충돌은 일부이고, 허용 목록을 실으면
+    같은 정보를 훨씬 긴 표로 두 번 말하는 셈이 된다. 무엇보다 taxonomy가 이미
+    "무엇을 고르는가"를 담고 있어 여기서 더할 것은 "무엇을 고르지 않는가"뿐이다.
+    """
+
+    lines = [
+        "[문서형식별 선택 금지 세부유형]",
+        "아래는 그 문서형식으로는 성립할 수 없는 세부유형이다. 문서형식을 먼저 "
+        "고른 뒤, 그 형식의 금지 목록에 있는 것은 primary_subclause로 고르지 "
+        "않는다. 목록에 없는 형식은 제한이 없다.",
+    ]
+    for document_form in DocumentForm:
+        conflicts = _CONFLICT_BY_FORM[document_form]
+        if not conflicts:
+            continue
+        names = ", ".join(
+            f"{SUBCLAUSE_LABELS[subclause]}({subclause.value})"
+            for subclause in sorted(conflicts, key=lambda key: key.value)
+        )
+        label = DOCUMENT_FORM_DEFINITIONS[document_form].label
+        lines.append(f"- {document_form.value} ({label}): {names}")
+    return "\n".join(lines)
 
 
 def compatibility_counts() -> Mapping[FormSubclauseCompatibility, int]:

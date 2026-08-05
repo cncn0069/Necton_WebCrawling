@@ -30,7 +30,7 @@ from rd2.generators.research_report_rendering import (
 from rd2.generators.status_report_rendering import (
     build_status_report_variation_specs,
 )
-from scripts import render_generated_documents as render_cli
+from scripts.report import render_generated_documents as render_cli
 
 
 def _fake_synthetic_scan(

@@ -431,9 +431,9 @@ def test_official_context_compacts_marked_heading_and_bullet_blocks() -> None:
     ]
     payload["result"]["generated_document"]["body_text"] = (
         "□ 추진 배경 및 경위임\n\n"
-        "- ○ 첫 번째 확인사항임\n"
-        "- - 두 번째 확인사항임\n"
-        "- ※ 외부 공유 금지임\n\n"
+        "○ 첫 번째 확인사항임\n"
+        "- 두 번째 확인사항임\n"
+        "※ 외부 공유 금지임\n\n"
         "일반적인 설명 문장입니다."
     )
 

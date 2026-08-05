@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -145,7 +146,9 @@ def test_generated_row_inherits_source_metadata_and_marks_its_origin():
     assert doc.ref_id == 18752
 
 
-def test_generated_row_leaves_the_body_file_path_for_the_template_backfill():
+def test_body_file_path_is_null_until_a_pdf_exists():
+    """경로를 주지 않으면 NULL로 남는다 — 렌더가 안 된 행이 그걸로 식별된다."""
+
     doc = build_generated_document(
         document=_document(),
         plan=_plan(),
@@ -161,15 +164,15 @@ def test_source_url_is_stable_so_reruns_do_not_duplicate_rows():
     """dedup_key가 흔들리면 나중에 PDF 경로를 백필할 행을 찾을 수 없다."""
 
     plan = _plan()
-    first = generated_source_url("seoul_opengov-18752", plan)
-    second = generated_source_url("seoul_opengov-18752", plan)
+    first = generated_source_url("seoul_opengov-18752", plan.final_target)
+    second = generated_source_url("seoul_opengov-18752", plan.final_target)
 
     assert first == second
     assert "18752" in first
     # 다른 세부조항으로 생성하면 별도 행이 된다.
     other = generated_source_url(
         "seoul_opengov-18752",
-        _plan(target=_target(subclause=SubclauseKey.PERSONNEL_PII)),
+        _target(subclause=SubclauseKey.PERSONNEL_PII),
     )
     assert other != first
 
@@ -218,7 +221,11 @@ def test_document_rejects_non_positive_ref_id():
     ],
 )
 def test_only_approved_documents_are_committed(status):
-    assert not should_commit(status=status, plan=_plan(), assessment=None)
+    assert not should_commit(
+        status=status,
+        generation_route=_plan().generation_route,
+        assessment=None,
+    )
 
 
 def test_mask_restoration_with_an_o_verdict_is_held_back(monkeypatch):
@@ -232,12 +239,12 @@ def test_mask_restoration_with_an_o_verdict_is_held_back(monkeypatch):
 
     assert not should_commit(
         status=SensitivePipelineStatus.ACCEPTED_S,
-        plan=plan,
+        generation_route=plan.generation_route,
         assessment=_Assessment(),
     )
     assert should_commit(
         status=SensitivePipelineStatus.ACCEPTED_S,
-        plan=plan,
+        generation_route=plan.generation_route,
         assessment=_Assessment(),
         include_weak_mask_restoration=True,
     )
@@ -249,7 +256,7 @@ def test_mask_restoration_with_an_s_verdict_is_committed():
 
     assert should_commit(
         status=SensitivePipelineStatus.ACCEPTED_S,
-        plan=_plan(route=GenerationRoute.MASK_RESTORATION),
+        generation_route=GenerationRoute.MASK_RESTORATION,
         assessment=_Assessment(),
     )
 
@@ -267,7 +274,7 @@ def test_administrative_status_only_target_still_has_a_reason():
         )
     )
 
-    reason = non_disclosure_reason(plan)
+    reason = non_disclosure_reason(plan.final_target, plan.generation_route)
 
     assert reason
     assert "제5~8호" in reason
@@ -303,7 +310,8 @@ def test_reason_keeps_route_and_verdict_machine_filterable():
 
     doc = build_generated_document(
         document=_document(),
-        plan=_plan(route=GenerationRoute.MASK_RESTORATION),
+        target=_target(),
+        generation_route=GenerationRoute.MASK_RESTORATION,
         source_document_id="seoul_opengov-18752",
         source_row=_row(),
         assessment=open_sensitive_assessment(),
@@ -340,3 +348,77 @@ def test_evidence_quotes_are_capped_so_a_row_is_not_a_body_copy():
     quoted = doc.non_disclosure_reason.split("근거 인용: ")[1]
     assert quoted.count("|") == 2  # 인용 3개
     assert len(quoted) < 400
+
+
+def test_plan_free_route_fills_the_generation_provenance_columns():
+    """계획기가 없는 하네스(최소 프롬프트 루트)도 같은 행을 만든다.
+
+    plan을 요구하면 그 경로는 해시 네 개를 지어내야 하고, 그러면 "계획기 v3가
+    이 입력으로 만들었다"는 거짓이 행에 남는다.
+    """
+
+    from rd2.source_generation.minimal_envelope import (
+        MINIMAL_GENERATION_ROUTE,
+        minimal_generation_target,
+    )
+
+    target = minimal_generation_target(SubclauseKey.AUDIT_INSPECTION)
+    doc = build_generated_document(
+        document=_document(),
+        target=target,
+        generation_route=MINIMAL_GENERATION_ROUTE,
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(),
+        input_prompt="[SYSTEM]\n조항 사례\n\n[USER]\n원문",
+        content="원문 본문",
+        body_file_path="output/x/rendered/문서/01_classic/문서.pdf",
+    )
+
+    # 판별기가 준 세부조항이 그대로 라벨이 된다 — 갈아타기 자리가 없다.
+    assert doc.cso_sub_clause == ClauseNumber.CLAUSE_5.value
+    assert doc.cso_classification == CsoClassification.S
+    assert "audit_inspection" in doc.non_disclosure_reason
+    assert "[생성 route: source_aligned]" in doc.non_disclosure_reason
+
+    # 사용자가 지목한 네 컬럼.
+    assert doc.input_prompt is not None and "조항 사례" in doc.input_prompt
+    # generated_text는 사람이 그냥 읽는 평문이고, 그 평문을 만든 IR 구조는
+    # batch_json이 갖는다(2026-08-05 이전에는 둘이 한 칸에 있었다).
+    assert doc.generated_text == _document().body_text
+    assert json.loads(doc.batch_json) == _document().model_dump(
+        mode="json", exclude_computed_fields=True
+    )
+    assert "body_text" not in json.loads(doc.batch_json)
+    # 컬럼이 BINARY(1)이라 int가 아니라 ASCII '1'이다(models.py 참고).
+    assert doc.generated_yn == "1"
+    assert doc.ref_id == 18752
+    # 렌더가 upsert보다 앞서는 하네스는 경로를 조립 시점에 함께 넣는다. 최소
+    # 프롬프트 루트는 반대로 None으로 넣고 set_body_file_path로 채운다.
+    assert doc.body_file_path == "output/x/rendered/문서/01_classic/문서.pdf"
+
+
+def test_plan_and_target_together_are_rejected():
+    """어느 값으로 라벨이 붙었는지 호출부만 봐서 알 수 있어야 한다."""
+
+    with pytest.raises(ValueError):
+        build_generated_document(
+            document=_document(),
+            plan=_plan(),
+            target=_target(),
+            generation_route=GenerationRoute.SOURCE_ALIGNED,
+            source_document_id="seoul_opengov-18752",
+            source_row=_row(),
+        )
+
+
+def test_minimal_target_derives_classification_from_the_subclause():
+    """손으로 S를 박으면 조항↔분류 정합성 검사와 어긋날 자리가 생긴다."""
+
+    from rd2.source_generation.minimal_envelope import minimal_generation_target
+
+    target = minimal_generation_target(SubclauseKey.PERSONNEL_PII)
+
+    assert target.clause_no == ClauseNumber.CLAUSE_6
+    assert target.classification == TargetClassification.S
+    assert target.subclause_key == SubclauseKey.PERSONNEL_PII
+    assert target.generation_mode == GenerationMode.SOURCE_ALIGNED

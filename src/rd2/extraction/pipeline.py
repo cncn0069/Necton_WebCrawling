@@ -1,4 +1,4 @@
-"""Unified PDF/HWP/HWPX canonical extraction pipeline."""
+"""Unified PDF/HWP/HWPX/XLSX canonical extraction pipeline."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from rd2.extraction.excel_text import excel_extraction_metadata, extract_excel_document
 from rd2.extraction.hwp_text import extract_hwp_document, hwp_extraction_metadata
 from rd2.extraction.pdf_text import extract_pdf_document, pdf_extraction_metadata
 from rd2.extraction.storage import (
@@ -18,7 +19,7 @@ from rd2.extraction.storage import (
     write_json_gz_atomic,
 )
 
-SUPPORTED_SUFFIXES = {".pdf", ".hwp", ".hwpx"}
+SUPPORTED_SUFFIXES = {".pdf", ".hwp", ".hwpx", ".xlsx", ".xlsm"}
 NON_SOURCE_DIRS = {
     "extracted",
     "ocr_queue",
@@ -82,6 +83,8 @@ def extraction_metadata_for(source_path: Path) -> dict[str, Any]:
         return pdf_extraction_metadata()
     if suffix in {".hwp", ".hwpx"}:
         return hwp_extraction_metadata()
+    if suffix in {".xlsx", ".xlsm"}:
+        return excel_extraction_metadata()
     raise ValueError(f"unsupported document format: {source_path}")
 
 
@@ -102,6 +105,12 @@ def extract_document(
         )
     if suffix in {".hwp", ".hwpx"}:
         return extract_hwp_document(
+            source_path,
+            data_root=data_root,
+            source_sha256=source_sha256,
+        )
+    if suffix in {".xlsx", ".xlsm"}:
+        return extract_excel_document(
             source_path,
             data_root=data_root,
             source_sha256=source_sha256,

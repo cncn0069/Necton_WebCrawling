@@ -11,7 +11,8 @@ from typing import Any, Collection, Mapping, Sequence
 
 import fitz
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from weasyprint import HTML
+
+from rd2.generators.weasyprint_runtime import HTML
 
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"

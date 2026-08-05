@@ -8,7 +8,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import fcntl
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # Windows에는 없다 (POSIX 전용)
+    # 아래 lock은 같은 출력 디렉터리에 동시에 렌더링이 들어오는 것을 막는다.
+    # 윈도우에는 flock이 없어 모듈 import 자체가 죽었고, 그러면 이 렌더러를
+    # 쓰지 않는 문서(공문·감사자료)까지 통째로 렌더링이 불가능해진다 —
+    # ``generated_document_pipeline``이 이 모듈을 import 시점에 끌어오기
+    # 때문이다. 윈도우에서는 잠금 없이 진행한다: 배치 렌더는 EC2(리눅스)에서
+    # 돌고, 로컬은 한 번에 한 프로세스만 돌리는 확인용이다.
+    fcntl = None  # type: ignore[assignment]
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -16,11 +26,12 @@ import random
 from tempfile import TemporaryDirectory
 from typing import Any, Collection, Mapping, Sequence
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import fitz
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-from weasyprint import HTML
-from weasyprint.urls import URLFetcher
+
+from rd2.generators.weasyprint_runtime import HTML, URLFetcher
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -277,7 +288,11 @@ class _RestrictedURLFetcher(URLFetcher):
     def fetch(self, url: str, headers: Mapping[str, str] | None = None) -> Any:
         parsed = urlparse(url)
         if parsed.scheme == "file":
-            resource_path = Path(unquote(parsed.path)).resolve()
+            # ``unquote``만 쓰면 윈도우에서 file:///C:/... 의 앞 슬래시가
+            # 남아 경로가 ``C:CODE\...``로 뭉개진다 - 자산이 검색 루트
+            # 밖으로 보여 번들 CSS까지 차단된다. url2pathname이 플랫폼별
+            # 변환을 담당한다(POSIX에서는 결과가 같다).
+            resource_path = Path(url2pathname(parsed.path)).resolve()
             if not any(
                 resource_path.is_relative_to(root)
                 for root in _ALLOWED_ASSET_ROOTS
@@ -577,7 +592,8 @@ def render_press_release_variations(
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     lock_path = output_dir.parent / f".{output_dir.name}.press.lock"
     with lock_path.open("a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             return _render_and_publish_press_release(
                 base_context,
@@ -591,7 +607,8 @@ def render_press_release_variations(
                 input_metadata=input_metadata,
             )
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _render_and_publish_press_release(

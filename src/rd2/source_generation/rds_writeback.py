@@ -1,23 +1,32 @@
 """승인된 생성 문서(S)를 수집 코퍼스와 같은 ``documents`` 테이블 행으로 옮긴다.
 
-**왜 별도 모듈인가.** 두 하네스가 갈라져 있었다 —
-``run_source_generation_batch.py``는 RDS에서 O 원문을 읽지만 S/O 승인 게이트가
-없었고, ``run_seoul_official_batch.py``는 게이트가 있지만 입력이 로컬 파일이라
-결과를 RDS로 되돌리는 자리가 아예 없었다. 합치면서 "무엇을 행으로 만들 것인가"는
-스크립트 인자 파싱과 섞이면 테스트가 불가능해지므로 여기로 분리한다. 이 모듈은
-DB에 접속하지 않는다 — ``Document``를 조립하기만 하고 저장은 ``DocumentStore``가
-한다.
+**왜 별도 모듈인가.** "무엇을 행으로 만들 것인가"는 스크립트 인자 파싱과 섞이면
+테스트가 불가능해지므로 여기로 분리한다. 이 모듈은 DB에 접속하지 않는다 —
+``Document``를 조립하기만 하고 저장은 ``DocumentStore``가 한다.
 
-이 모듈에서는 PDF 경로를 아직 정하지 않는다. 렌더링이 성공한 뒤 배치 스크립트가
-최종 PDF 경로를 ``body_file_path``에 넣고 저장한다. 원본이 RDS 행이면 그 행의
-``documents.id``를 ``ref_id``에도 보존한다. 재실행 중복 방지를 위해
-``generated_source_url()``은 계속 결정론적으로 만든다.
+**PDF 경로는 있으면 받고, 없어도 된다.** 최소 프롬프트 루트는 행을 **렌더보다
+먼저** 넣는다 — 행에 들어갈 값이 전부 생성 시점에 정해지고 렌더는 경로 하나만
+더하기 때문이다. 그래서 None으로 조립한 뒤 ``DocumentStore.set_body_file_path``가
+그 칸만 뒤에서 메운다. 렌더가 먼저인 호출자는 경로를 그대로 넘기면 된다
+(``body_file_path`` 인자).
+
+그래서 ``generated_source_url()``은 결정론적이어야 한다 — 나중에 같은 행을 다시
+찾으려면(그리고 재실행이 새 행을 만들지 않고 조용히 스킵되려면) ``dedup_key``가
+같아야 하고, ``storage/db.py``의 ``_dedup_key``는 source_url이 비면 매번 새
+UUID를 붙인다.
+
+**계획기가 없는 경로도 받는다.** 행 조립이 ``GenerationPlan``에서 읽는 것은
+``final_target``과 ``generation_route`` 둘뿐이라, 그 둘을 직접 받는 길을 함께
+연다(``resolve_target_and_route``). 최소 프롬프트 루트처럼 계획기가 없는
+하네스가 plan의 해시 필드를 지어내지 않게 하기 위한 것이다.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
+from typing import Mapping, Sequence
 
 from rd2.schema.models import CsoClassification, DisclosureStatus, Document
 from rd2.source_generation.classification_taxonomy import (
@@ -25,19 +34,22 @@ from rd2.source_generation.classification_taxonomy import (
     DocumentForm,
 )
 from rd2.source_generation.contracts import (
+    ConfidentialSnippet,
     GeneratedDocumentIR,
     GenerationPlan,
     GenerationRoute,
+    GenerationTarget,
     SensitiveConsistencyAssessment,
     SensitivePipelineStatus,
     SensitiveVerdict,
 )
 
-#: 생성 행의 ``source`` 접두사. ``is_synthetic`` 컬럼이 2026-07-15 스키마 정리로
-#: 사라져(``storage/db.py`` ``_DEPRECATED_COLUMNS``) 수집 문서와 생성 문서를
-#: DB에서 구분할 컬럼이 없다. 원문 출처를 보존하면서 구분도 되도록 접두사를 쓴다 —
-#: ``WHERE source LIKE 'gen\\_%'``로 생성분만, ``source = 'gen_alio'``로 출처별로
-#: 고를 수 있다.
+#: 생성 행의 ``source`` 접두사. 수집분/생성분 구분 자체는 2026-08-04에 추가된
+#: ``data_origin`` 컬럼('O'/'G')이 담당하므로 접두사는 더 이상 유일한 표시가
+#: 아니지만, 원문 출처를 보존하면서 출처별로도 고를 수 있어(``source = 'gen_alio'``)
+#: 그대로 둔다. 생성분 전체를 고를 때는 접두사 LIKE보다 ``WHERE data_origin = 'G'``를
+#: 쓴다 — 접두사 규약을 안 따르는 옛 생성 경로(``generators/generate.py``의
+#: ``synthetic-llm``)가 있어 LIKE는 전량을 잡지 못한다.
 GENERATED_SOURCE_PREFIX = "gen_"
 
 #: 메타데이터를 물려받을 원문 행이 없을 때(로컬 파일 입력) 쓰는 기관명.
@@ -72,11 +84,37 @@ class SourceRow:
         return f"{self.source}-{self.id}"
 
 
+@dataclass(frozen=True)
+class RowMetadata:
+    """원문 행이 **없는** 생성 경로가 직접 들고 오는 메타데이터.
+
+    C트랙(제1~4호)에는 물려받을 원문이 없다 — rd2 DB에 해당 기관 문서가 0건이라
+    seed를 뽑을 원문 자체가 없고, 기관·부서는 템플릿이 잠근 축에서 온다
+    (``c_track_templates.CaseFrame``). 그런데 ``build_generated_document``가
+    이 값들을 ``SourceRow``에서만 읽어서, 아는 기관이 ``UNKNOWN_AGENCY``로
+    떨어지고 부서는 NULL로 남았다. 모르는 값이 아니라 **통로가 없던 값**이다.
+
+    필드 이름을 ``SourceRow``와 같게 둔다. 조립 쪽이 둘을 같은 이름으로 읽으면
+    "원문에서 왔든 템플릿에서 왔든 이 칸에 들어간다"가 한 줄로 끝나고, 한쪽에만
+    있는 칸이 생기면 그게 곧 타입 오류로 드러난다.
+    """
+
+    ordering_agency: str | None = None
+    department: str | None = None
+    unit_task: str | None = None
+    production_date: date | None = None
+    subject_category: str | None = None
+    doc_type: str | None = None
+
+
 def generated_source_name(source: str) -> str:
     return f"{GENERATED_SOURCE_PREFIX}{source}"
 
 
-def generated_source_url(source_document_id: str, plan: GenerationPlan) -> str:
+def generated_source_url(
+    source_document_id: str,
+    target: GenerationTarget,
+) -> str:
     """재실행해도 같은 값이 나오는 합성 문서 URL(= dedup_key의 재료).
 
     목표(호·세부조항)까지 키에 넣는다. 같은 원문에서 같은 목표를 다시 생성하면
@@ -84,7 +122,6 @@ def generated_source_url(source_document_id: str, plan: GenerationPlan) -> str:
     다른 세부조항으로 생성하면 별도 행이 된다.
     """
 
-    target = plan.final_target
     clause = target.clause_no.value if target.clause_no else "none"
     subclause = target.subclause_key.value if target.subclause_key else "none"
     return f"synthetic://source-generation/{source_document_id}/{clause}-{subclause}"
@@ -96,8 +133,7 @@ MAX_EVIDENCE_QUOTES = 3
 MAX_QUOTE_CHARS = 120
 
 
-def _target_reason(plan: GenerationPlan) -> str:
-    target = plan.final_target
+def _target_reason(target: GenerationTarget) -> str:
     if target.clause_no is None:
         statuses = ", ".join(
             status.value for status in target.administrative_statuses
@@ -112,8 +148,11 @@ def _target_reason(plan: GenerationPlan) -> str:
 
 
 def non_disclosure_reason(
-    plan: GenerationPlan,
+    target: GenerationTarget,
+    generation_route: GenerationRoute,
     assessment: SensitiveConsistencyAssessment | None = None,
+    snippets: Sequence[ConfidentialSnippet] = (),
+    storage_reasoning: str | None = None,
 ) -> str:
     """비공개 사유 + 검증기가 그렇게 판정한 근거.
 
@@ -132,11 +171,21 @@ def non_disclosure_reason(
     route와 verdict는 **문장 앞의 고정 형식**으로 둔다. 사후에
     ``WHERE non_disclosure_reason LIKE '%검증: assessed_o%'``로 근거가 약한
     행을 골라낼 수 있어야 하기 때문이다(``should_commit`` 참고).
+
+    ``snippets``·``storage_reasoning``은 C트랙 3단계 경로가 낸 3단계 산출물이다
+    (``CTrackCoTResponse``). **어느 block 때문에 비공개인지**를 여기 적는다 —
+    호 번호만으로는 "이 문서가 왜 제1호인가"에 답할 수 없고, 답할 재료는 이미
+    모델이 block을 지목해 내놓았는데 지금까지 행에 남지 않았다.
+
+    S트랙의 ``assessment``와 자리가 겹치지 않는다. 저쪽은 **검증기**가 사후에
+    매긴 판정이고 이쪽은 **생성기**가 쓰면서 지목한 자리다. 그래서 접두사도
+    ``검증 근거:``와 ``근거 block:``으로 나눈다 — 사후에 둘을 LIKE로 갈라야
+    한다.
     """
 
-    parts = [_target_reason(plan)]
+    parts = [_target_reason(target)]
     parts.append(
-        f"[생성 route: {plan.generation_route.value}"
+        f"[생성 route: {generation_route.value}"
         + (
             f" / 검증: {assessment.sensitivity_verdict.value}]"
             if assessment is not None
@@ -152,13 +201,74 @@ def non_disclosure_reason(
         ]
         if quotes:
             parts.append("근거 인용: " + " | ".join(quotes))
+
+    if snippets:
+        # block_id를 앞에 세운다. 사유만 읽고도 본문의 어느 자리를 펴 봐야
+        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``generated_text``의
+        # 같은 block_id로 그대로 찾아진다.
+        parts.append(
+            "근거 block: "
+            + " | ".join(
+                f"[{snippet.block_id}] {snippet.quote[:MAX_QUOTE_CHARS]}"
+                for snippet in snippets[:MAX_EVIDENCE_QUOTES]
+            )
+        )
+    if storage_reasoning:
+        parts.append(f"저장 사유: {storage_reasoning}")
     return "\n".join(parts)
+
+
+def generated_document_json(
+    document: GeneratedDocumentIR,
+    *,
+    contract_version: str | None = None,
+) -> str:
+    """``batch_json`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
+
+    **평문이 아니라 JSON이다.** PDF 앞에서 생성기가 실제로 내놓는 산출물이 이
+    JSON이고(블록·표·key-value 구조), 평문 본문은 거기서 파생된다. 파생된 쪽은
+    ``generated_text`` 컬럼에 있으므로 두 컬럼에 같은 평문을 두 번 넣기보다
+    한쪽에 원본 구조를 남긴다 — 렌더가 깨졌을 때 무엇을 만들었는지 되짚거나
+    다른 서식으로 다시 렌더할 근거가 DB 안에 남는다.
+
+    이 값이 ``generated_text``에 있던 시절이 있었다(2026-08-05 이전). 그 칸을
+    열었을 때 사람이 문서를 그냥 읽을 수 없다는 것이 바뀐 이유다.
+
+    ``exclude_computed_fields=True``로 계산 필드(``body_text``)를 뺀다. 배치
+    기록(``documents/*.json``의 ``generation.document``)이 같은 방식으로 직렬화
+    되므로 DB 값과 파일 값이 글자 단위로 같고, 컬럼 안에 본문 평문이 한 번 더
+    복사되지도 않는다.
+
+    ``contract_version``은 **옛 기록을 되쓸 때만** 준다. ``GeneratedDocumentIR``의
+    그 필드는 ``Literal``이라 옛 배치의 산출물은 현재 값으로 맞춰야 파싱되는데
+    (``writeback_minimal_to_rds._generated_document``), 그 값이 그대로 직렬화되면
+    행에는 "2.3.0 계약으로 만든 문서"라는 거짓이 남는다. 계약 버전을 담는 컬럼이
+    없던 시절에는 파싱용 임시 값이라 새어 나갈 곳이 없었지만, 이 JSON이 컬럼이 된
+    지금은 원래 버전을 되살려 넣어야 한다.
+    """
+
+    dumped = document.model_dump(mode="json", exclude_computed_fields=True)
+    if contract_version:
+        dumped["contract_version"] = contract_version
+    return json.dumps(dumped, ensure_ascii=False)
+
+
+# C트랙(3단계 경로)에는 아직 이 자리에 해당하는 게이트가 없다.
+#
+# ``should_commit_c_track``을 두었다가 뺐다(2026-08-05). 거르는 근거가
+# ``CTrackCoTResponse.drift_markers``(낱말 목록)였는데 A/B/C 대조 15회에서
+# 정밀도 18%였고, 잘 쓴 문장에 더 잘 붙어 켜두면 좋은 문서를 더 많이 버렸다 —
+# 근거는 ``contracts.py``의 그 자리에 남겼다.
+#
+# 대신 세울 지표 후보는 (1) 한 줄에 붙은 빈 곳의 목록, (2) 상대를 주어로 끝나는
+# 문형이다. 둘 다 15건에 아직 안 돌려봤다. 그때까지 C트랙은 전량이 코퍼스
+# 후보이고, 거르는 판단은 사람이 한다.
 
 
 def should_commit(
     *,
     status: SensitivePipelineStatus,
-    plan: GenerationPlan,
+    generation_route: GenerationRoute,
     assessment: SensitiveConsistencyAssessment | None,
     include_weak_mask_restoration: bool = False,
 ) -> bool:
@@ -181,42 +291,140 @@ def should_commit(
         return False
     if include_weak_mask_restoration:
         return True
-    if plan.generation_route != GenerationRoute.MASK_RESTORATION:
+    if generation_route != GenerationRoute.MASK_RESTORATION:
         return True
     if assessment is None:
         return False
     return assessment.sensitivity_verdict == SensitiveVerdict.ACCEPTED_S
 
 
+def resolve_target_and_route(
+    *,
+    plan: GenerationPlan | None,
+    target: GenerationTarget | None,
+    generation_route: GenerationRoute | None,
+) -> tuple[GenerationTarget, GenerationRoute]:
+    """행을 조립하는 데 실제로 필요한 두 조각만 꺼낸다.
+
+    ``GenerationPlan``은 계획기가 돌아야 나오는 물건이다 — 해시 세 개와 정책
+    해시를 품고 있고, 그 값들은 "계획기 v3가 이 입력으로 만들었다"는 주장이다.
+    그런데 행 조립이 plan에서 읽는 것은 ``final_target``과 ``generation_route``
+    둘뿐이다. 계획기가 없는 경로(최소 프롬프트 루트)까지 plan을 요구하면 해시를
+    지어내야 하고, 그러면 provenance가 거짓이 된다. 그래서 두 조각을 직접 받는
+    길을 연다.
+
+    plan을 주면 거기서 뽑고, 아니면 target과 route를 직접 받는다. 둘 다 주거나
+    둘 다 없으면 거부한다 — 조용히 한쪽을 이기게 하면 어느 값으로 라벨이
+    붙었는지 호출부만 봐서는 알 수 없다.
+    """
+
+    if plan is not None:
+        if target is not None or generation_route is not None:
+            raise ValueError(
+                "plan과 target/generation_route를 함께 줄 수 없다"
+            )
+        return plan.final_target, plan.generation_route
+    if target is None or generation_route is None:
+        raise ValueError(
+            "plan을 주지 않으면 target과 generation_route가 모두 있어야 한다"
+        )
+    return target, generation_route
+
+
 def build_generated_document(
     *,
     document: GeneratedDocumentIR,
-    plan: GenerationPlan,
     source_document_id: str,
+    plan: GenerationPlan | None = None,
+    target: GenerationTarget | None = None,
+    generation_route: GenerationRoute | None = None,
     source_row: SourceRow | None = None,
+    metadata: RowMetadata | None = None,
     fallback_source: str | None = None,
     document_form: DocumentForm | None = None,
     assessment: SensitiveConsistencyAssessment | None = None,
+    snippets: Sequence[ConfidentialSnippet] = (),
+    storage_reasoning: str | None = None,
+    input_prompt: str | None = None,
+    content: str | None = None,
+    body_file_path: str | None = None,
+    pdf_renderd_json: Mapping[str, object] | None = None,
+    store_generated_body_text: bool = True,
+    document_contract_version: str | None = None,
 ) -> Document:
     """승인된 생성 문서를 ``documents`` 행으로 조립한다.
 
-    분류 두 값은 요청 target이 아니라 **최종 target**(``plan.final_target``)에서
-    읽는다. 원문이 요청 목표를 지지하지 못하면 계획기가 판별기의 호환 세부조항으로
-    조용히 대체하므로, 요청 target을 그대로 쓰면 라벨과 본문이 어긋난다.
-    ``ClauseNumber``의 값이 이미 ``"5"``~``"8"``이라 ``cso_sub_clause``의 숫자만
-    규약과 변환 없이 맞는다.
+    목표는 ``plan``(계획기 경로) 또는 ``target``+``generation_route``(계획기가
+    없는 경로)로 받는다 — ``resolve_target_and_route`` 참고.
+
+    plan으로 받을 때 분류 두 값은 요청 target이 아니라 **최종 target**
+    (``plan.final_target``)에서 읽는다. 원문이 요청 목표를 지지하지 못하면
+    계획기가 판별기의 호환 세부조항으로 조용히 대체하므로, 요청 target을 그대로
+    쓰면 라벨과 본문이 어긋난다. ``ClauseNumber``의 값이 이미 ``"5"``~``"8"``이라
+    ``cso_sub_clause``의 숫자만 규약과 변환 없이 맞는다.
 
     메타데이터는 원문 행에서 물려받는다 — 생성물이 원문 업무 맥락을 그대로
     쓰기 때문에 기관·부서·주제분류가 바뀌지 않는다. 원문 행이 없는 로컬 파일
     입력에서는 ``fallback_source``만으로 최소 필드를 채운다.
+
+    원문이 **아예 없는** 경로(C트랙)는 ``metadata``로 같은 칸을 직접 채운다 —
+    ``RowMetadata`` 참고. ``source_row``와 함께 주는 것은 거부한다. 둘 다 값이
+    있으면 어느 쪽이 이겼는지가 산출물만 봐서는 드러나지 않고, 그 착각은 기관이
+    한 칸 어긋난 행으로 남는다.
+
+    ``input_prompt``·``content``는 생성 provenance다. 주지 않으면 NULL로 남는다 —
+    호출자가 프롬프트를 손에 쥐고 있지 않을 수 있고(재조립 경로), 그때 빈 문자열을
+    넣으면 "프롬프트 없이 만든 문서"와 구분되지 않는다.
+
+    생성물은 세 칸으로 나뉜다. **같은 값을 두 칸에 두지 않는다** — 두면 한쪽만
+    고쳐지는 자리가 생긴다.
+
+        ``generated_text``     사람이 그냥 읽는 평문 본문
+        ``batch_json``         그 평문을 만든 문서 IR(블록·표 구조) JSON
+        ``pdf_renderd_json``   본문 밖에서 서식을 정하는 값 (인자로 받는다)
+
+    ``pdf_renderd_json``을 주지 않으면 NULL로 남는다.
+
+    ``body_file_path``는 렌더된 PDF 경로다. upsert가 렌더 이후인 하네스는 그 시점에
+    경로를 이미 쥐고 있으므로 여기서 함께 넣고, 행을 렌더보다 먼저 넣는 최소
+    프롬프트 루트는 None으로 둔 뒤 ``DocumentStore.set_body_file_path``로 채운다.
+    어느 쪽이든 렌더가 안 된 문서는 경로가 NULL인 것으로 그 행이 식별된다.
+
+    ``document_contract_version``은 옛 배치 기록을 현재 계약으로 맞춰 읽었을 때
+    원래 버전을 ``batch_json``의 IR에 되살리는 자리다 —
+    ``generated_document_json`` 참고. 새로 생성한 문서에는 줄 필요가 없다.
+
+    ``ref_id``는 원문 행 id다. ``source_row``가 없으면 참조할 행 자체가 없으므로
+    (로컬 파일 입력) None이 된다 — 그 경우 원문 연결은 ``source_url`` 문자열의
+    ``source_document_id``에만 남는다.
+
+    ``store_generated_body_text``는 생성 평문을 ``body_text``에도 둘지다.
+    **컬럼 규약은 "생성분은 ``generated_text``, ``body_text``는 원문"**이고,
+    그 규약대로면 이 값은 False여야 한다. 기본값이 True인 것은 5~8호 경로가
+    지금까지 생성 평문을 이 칸에 넣어 왔고(기존 행이 그 상태다) 기본값을 뒤집는
+    순간 같은 컬럼에 두 규약이 섞이기 때문이다 — 어느 쪽으로 통일할지는 기존
+    행을 함께 옮기는 결정이라 사람이 정한다. 원문이 아예 없는 C트랙은 넣을
+    원문이 없으므로 False로 부르고 ``body_text``는 NULL로 남는다.
     """
+
+    if source_row is not None and metadata is not None:
+        raise ValueError("source_row와 metadata는 함께 줄 수 없다")
 
     origin_source = source_row.source if source_row is not None else fallback_source
     if not origin_source:
         raise ValueError("source_row 또는 fallback_source 중 하나는 있어야 한다")
 
-    target = plan.final_target
-    doc_type = source_row.doc_type if source_row is not None else None
+    #: 물려받을 값의 출처. 둘은 필드 이름이 같아 이 아래로는 구분이 필요 없다.
+    inherited: SourceRow | RowMetadata = (
+        source_row if source_row is not None else (metadata or RowMetadata())
+    )
+
+    target, route = resolve_target_and_route(
+        plan=plan,
+        target=target,
+        generation_route=generation_route,
+    )
+    doc_type = inherited.doc_type
     if not doc_type and document_form is not None:
         # 수집 라벨이 없으면 문서 형식을 대신 쓴다. 둘 다 문자열 컬럼이고,
         # 비워두면 파일 저장 경로(files.py)가 미분류 버킷으로 떨어진다.
@@ -224,31 +432,39 @@ def build_generated_document(
 
     return Document(
         title=document.title,
-        ordering_agency=(
-            (source_row.ordering_agency if source_row is not None else None)
-            or UNKNOWN_AGENCY
-        ),
-        department=source_row.department if source_row is not None else None,
-        unit_task=source_row.unit_task if source_row is not None else None,
-        production_date=(
-            source_row.production_date if source_row is not None else None
-        ),
+        ordering_agency=inherited.ordering_agency or UNKNOWN_AGENCY,
+        department=inherited.department,
+        unit_task=inherited.unit_task,
+        production_date=inherited.production_date,
         disclosure_status=DisclosureStatus.CLOSED,
-        subject_category=(
-            source_row.subject_category if source_row is not None else None
+        subject_category=inherited.subject_category,
+        body_text=document.body_text if store_generated_body_text else None,
+        body_file_path=body_file_path,
+        non_disclosure_reason=non_disclosure_reason(
+            target,
+            route,
+            assessment,
+            snippets=snippets,
+            storage_reasoning=storage_reasoning,
         ),
-        body_text=document.body_text,
-        # 템플릿 렌더링 전이라 PDF가 없다. 템플릿이 나오면
-        # DocumentStore.update_files(dedup_key, ...)로 이 자리를 백필한다.
-        body_file_path=None,
-        non_disclosure_reason=non_disclosure_reason(plan, assessment),
         cso_classification=CsoClassification(target.classification.value),
         cso_sub_clause=(
             target.clause_no.value if target.clause_no is not None else None
         ),
         source=generated_source_name(origin_source),
-        source_url=generated_source_url(source_document_id, plan),
+        source_url=generated_source_url(source_document_id, target),
         doc_type=doc_type,
-        ref_id=source_row.id if source_row is not None else None,
         is_synthetic=True,
+        input_prompt=input_prompt,
+        content=content,
+        generated_text=document.body_text,
+        batch_json=generated_document_json(
+            document, contract_version=document_contract_version
+        ),
+        ref_id=source_row.id if source_row is not None else None,
+        pdf_renderd_json=(
+            None
+            if pdf_renderd_json is None
+            else json.dumps(dict(pdf_renderd_json), ensure_ascii=False, sort_keys=True)
+        ),
     )

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from rd2.schema.models import CsoClassification, DisclosureStatus, Document
+from rd2.schema.models import CsoClassification, DataOrigin, DisclosureStatus, Document
 
 
 def _base_kwargs(**overrides):
@@ -54,6 +54,32 @@ def test_cs_track_valid_with_is_synthetic_true():
     )
     assert doc.is_synthetic is True
     assert doc.cso_sub_clause == "1"
+
+
+def test_data_origin_derives_from_is_synthetic():
+    assert Document(**_base_kwargs()).data_origin is DataOrigin.ORIGINAL
+    generated = Document(
+        **_base_kwargs(
+            cso_classification=CsoClassification.C,
+            cso_sub_clause="1",
+            source="synthetic-llm",
+            source_url=None,
+            is_synthetic=True,
+        )
+    )
+    assert generated.data_origin is DataOrigin.GENERATED
+    # DB에 그대로 들어갈 값이므로 직렬화 결과가 한 글자여야 한다.
+    assert generated.model_dump(mode="json")["data_origin"] == "G"
+
+
+def test_data_origin_is_independent_of_cso_classification():
+    """cso_classification의 'O'(공개 트랙)와 data_origin의 'O'(원본)는 다른 축이다 —
+    C/S 트랙 생성물이 G이듯, 공개 트랙 문서도 생성물이면 G여야 한다."""
+    doc = Document(
+        **_base_kwargs(cso_classification=CsoClassification.O, is_synthetic=True)
+    )
+    assert doc.cso_classification is CsoClassification.O
+    assert doc.data_origin is DataOrigin.GENERATED
 
 
 def test_non_open_document_requires_non_disclosure_reason():

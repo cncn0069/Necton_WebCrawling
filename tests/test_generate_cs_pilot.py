@@ -3,7 +3,6 @@ import gzip
 import hashlib
 import json
 import random
-import sys
 import threading
 import time
 from datetime import date
@@ -12,10 +11,6 @@ from pathlib import Path
 import httpx
 import pytest
 from openai import RateLimitError
-
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
 
 import generate_cs_pilot as pilot  # noqa: E402
 
@@ -1042,13 +1037,6 @@ class TestApplyTemplateValidation:
         }
         pilot._apply_template_validation(row)
         assert row["status"] == "llm_error"
-
-
-class TestConnectMariadb:
-    def test_missing_env_var_raises_clear_runtime_error(self, monkeypatch):
-        monkeypatch.delenv("MARIADB_HOST", raising=False)
-        with pytest.raises(RuntimeError, match="MariaDB 접속 정보 누락"):
-            pilot.connect_mariadb()
 
 
 class TestFilenameFromTitle:

@@ -1,4 +1,4 @@
-"""scripts/plan_cs_generation.py end-to-end 테스트.
+"""scripts/eval/plan_cs_generation.py end-to-end 테스트.
 
 설계 문서 "Target User & Narrowest Wedge": LLM 호출이나 RDS 반영 없이
 generation_plan만 만든다. 작은 fixture candidate manifest로 CLI 전체 흐름
@@ -6,12 +6,10 @@ generation_plan만 만든다. 작은 fixture candidate manifest로 CLI 전체 �
 """
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import plan_cs_generation as plan_cli  # noqa: E402
 
@@ -79,7 +77,7 @@ class TestPlanCsGenerationCli:
         candidates_dir = tmp_path / "candidates"
         output_dir = tmp_path / "audit" / "run-1"
         _write_candidate_fixture(candidates_dir)
-        monkeypatch.setattr(plan_cli, "connect_mariadb", lambda: _FakeConn())
+        monkeypatch.setattr(plan_cli, "connect", lambda **kwargs: _FakeConn())
 
         exit_code = plan_cli.main(
             [
@@ -109,7 +107,7 @@ class TestPlanCsGenerationCli:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["status"] = "partial"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-        monkeypatch.setattr(plan_cli, "connect_mariadb", lambda: _FakeConn())
+        monkeypatch.setattr(plan_cli, "connect", lambda **kwargs: _FakeConn())
 
         with pytest.raises(RuntimeError):
             plan_cli.main(

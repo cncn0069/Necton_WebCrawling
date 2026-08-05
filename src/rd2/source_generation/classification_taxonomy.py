@@ -604,6 +604,46 @@ SUBCLAUSE_LABELS: Mapping[SubclauseKey, str] = MappingProxyType(
     {key: definition.label for key, definition in SUBCLAUSE_DEFINITIONS.items()}
 )
 
+#: 근거 식별자. 생성기가 심은 자료를 이름으로 부를 수 있게 하는 기호다.
+#: 기호가 없으면 근거를 지목할 방법이 문장 인용뿐이고, 그러면 사후에 어느
+#: 근거로 성립했는지 집계할 수 없다.
+#:
+#: 길이는 ``SUBCLAUSE_GENERATION_RULES``의 ``document_patterns`` 중 가장 긴
+#: 것(5개)에 맞춘다.
+GROUND_IDS: tuple[str, ...] = ("A", "B", "C", "D", "E")
+
+#: 근거 식별자. 두 근거 목록 중 긴 쪽(``SUBCLAUSE_GENERATION_RULES``의
+#: ``document_patterns``, 최대 5개)에 맞춘다. ``includes``는 2~3개다.
+GROUND_IDS: tuple[str, ...] = ("A", "B", "C", "D", "E")
+
+if any(len(d.includes) > len(GROUND_IDS) for d in SUBCLAUSE_DEFINITIONS.values()):
+    raise RuntimeError("subclause grounds outgrew the available ground ids")
+
+
+def subclause_grounds(subclause: SubclauseKey) -> Mapping[str, str]:
+    """세부조항을 성립시키는 **대안적** 근거. 하나만 충족해도 그 조항이다.
+
+    셋을 모두 만족해야 하는 요건 분해가 아니다. 그래서 생성기는 하나만 심어도
+    되고, 여러 개가 자연스럽게 들어가도 라벨은 같다 — 다만 실제로 들어간 것은
+    전부 보고해야 어느 근거로 성립했는지 사후에 알 수 있다.
+
+    ``includes``에 기호를 붙인 것이 전부이고 별도 표를 두지 않는다. 두 목록이
+    갈라지면 판별기가 읽는 근거와 생성기가 심는 근거가 달라지기 때문이다 —
+    ``EVIDENCE_QUOTE_GUIDANCE``를 공용 절로 둔 것과 같은 이유다.
+    """
+
+    includes = SUBCLAUSE_DEFINITIONS[subclause].includes
+    return MappingProxyType(dict(zip(GROUND_IDS, includes)))
+
+
+def render_subclause_grounds(subclause: SubclauseKey) -> str:
+    """한 세부조항의 근거를 기호와 함께 여러 줄로 렌더링한다."""
+
+    return "\n".join(
+        f"조건{ground_id}: {text}"
+        for ground_id, text in subclause_grounds(subclause).items()
+    )
+
 
 def expected_classification(clause_no: ClauseNumber) -> CsoClassification:
     """정보공개법 조항 번호에 대응하는 프로젝트 C/S 분류를 반환한다."""
@@ -1097,7 +1137,15 @@ def render_taxonomy_guidance(
                 f"- {subclause.value} [제{clause_no.value}호] ({definition.label}): "
                 f"{definition.definition}"
             )
-            lines.append(f"  포함: {' / '.join(definition.includes)}")
+            # 근거에 기호를 붙여 판별기·생성기·검증기가 같은 이름으로 부르게
+            # 한다. 셋 다 이 렌더링을 받으므로 "조건B"가 세 프롬프트에서 같은
+            # 것을 가리킨다. 기호가 없으면 근거를 지목할 방법이 문장 인용뿐이고,
+            # 그러면 사후에 어느 근거로 성립했는지 집계할 수 없다.
+            grounds = " / ".join(
+                f"{ground_id}. {text}"
+                for ground_id, text in subclause_grounds(subclause).items()
+            )
+            lines.append(f"  포함(하나만 충족해도 이 세부유형이다): {grounds}")
             # 경계 규칙과 같은 필터를 ``제외`` 항목에도 적용한다. 목록에서 뺀
             # 세부유형을 인용하는 항목은 가리키는 곳 없는 참조로 남는다 —
             # 실측(2026-08-01): 제5~8호만 준 검증기 프롬프트에 제3호
@@ -1275,13 +1323,19 @@ DOCUMENT_FORM_DEFINITIONS: Mapping[DocumentForm, DocumentFormDefinition] = Mappi
         ),
         DocumentForm.AUDIT_MATERIAL: DocumentFormDefinition(
             label="감사자료",
-            definition="감사·검사의 계획, 수행, 지적사항과 처분을 담은 문서",
+            definition=(
+                "감사·검사의 계획, 수행, 지적사항과 처분을 담은 문서. "
+                "사람의 복무·공직기강·회계·업무 적정성을 대상으로 하면 제목에 "
+                "`점검`이 들어가도 이쪽이다"
+            ),
             includes=(
                 "감사 대상과 기간, 표본 선정 기준",
                 "지적사항, 조치 요구, 처분 의견",
+                "복무감사, 공직기강 특별점검, 복무점검처럼 사람의 복무·기강을 "
+                "대상으로 한 점검 결과",
             ),
             excludes=(
-                "설비·보안 상태 점검이면 inspection_report",
+                "점검 대상이 시설·장비·시스템·보안 **상태**이면 inspection_report",
                 "감사와 무관한 일반 업무 결과는 report",
             ),
             generation_detail=(
@@ -1486,13 +1540,24 @@ DOCUMENT_FORM_DEFINITIONS: Mapping[DocumentForm, DocumentFormDefinition] = Mappi
         ),
         DocumentForm.INSPECTION_REPORT: DocumentFormDefinition(
             label="점검보고서",
-            definition="시설·시스템·보안 상태를 점검한 결과와 취약점을 담은 문서",
+            definition=(
+                "시설·장비·시스템·보안의 **상태**를 점검한 결과와 취약점을 담은 "
+                "문서. 점검 **대상이 사물**일 때만 이쪽이다"
+            ),
             includes=(
                 "점검 항목과 기준, 발견된 취약점과 위험도",
                 "보안 진단 결과, 조치 필요 사항과 기한",
             ),
             excludes=(
                 "회계·업무 적정성 감사면 audit_material",
+                # 실측(2026-08-03): `2026년도 3차 복무감사결과`, `공직기강 특별점검
+                # 감사결과` 등 15건이 제목의 `점검`만 보고 이쪽으로 왔다. 같은
+                # 배치에서 제목이 거의 같은 `2026년도 복무감사결과`는
+                # audit_material로 가서 통과했다 — 판별이 갈리는 자리다.
+                # audit_inspection이 이 형식과 CONFLICT라 15건 전부 계획 단계에서
+                # 끝났다. 구분 기준은 `점검`이라는 낱말이 아니라 점검 대상이다.
+                "복무·공직기강·인사처럼 **사람**을 대상으로 한 점검이면 제목에 "
+                "`점검`이 있어도 audit_material",
                 "발견한 위험에 대한 대응 절차 설계면 response_plan",
             ),
             generation_detail=(

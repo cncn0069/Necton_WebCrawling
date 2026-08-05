@@ -84,87 +84,6 @@ def test_upsert_includes_ref_id_without_touching_a_database():
     assert connection.committed is True
 
 
-def test_rendered_pdf_writeback_updates_only_compatible_existing_provenance():
-    class FakeCursor:
-        def __init__(self, existing):
-            self.existing = existing
-            self.executed = []
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def execute(self, sql, params):
-            self.executed.append((sql, params))
-
-        def fetchone(self):
-            return self.existing
-
-    class FakeConnection:
-        def __init__(self, existing):
-            self.cursor_instance = FakeCursor(existing)
-            self.committed = False
-
-        def cursor(self):
-            return self.cursor_instance
-
-        def commit(self):
-            self.committed = True
-
-    connection = FakeConnection((SOURCE_OPEN_GO_KR, None))
-    fake_store = DocumentStore.__new__(DocumentStore)
-    fake_store._conn = connection
-    document = _doc(ref_id=42, body_file_path="output/final.pdf")
-
-    assert fake_store.writeback_rendered_pdf(document) is True
-    assert connection.committed is True
-    assert len(connection.cursor_instance.executed) == 2
-    update_sql, update_params = connection.cursor_instance.executed[1]
-    assert "body_file_path" in update_sql
-    assert update_params == ("output/final.pdf", 42, f"{SOURCE_OPEN_GO_KR}::{document.source_url}")
-
-
-def test_rendered_pdf_writeback_rejects_conflicting_provenance():
-    class FakeCursor:
-        def __init__(self):
-            self.executed = []
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def execute(self, sql, params):
-            self.executed.append((sql, params))
-
-        def fetchone(self):
-            return (SOURCE_OPEN_GO_KR, 99)
-
-    class FakeConnection:
-        def __init__(self):
-            self.cursor_instance = FakeCursor()
-            self.committed = False
-
-        def cursor(self):
-            return self.cursor_instance
-
-        def commit(self):
-            self.committed = True
-
-    connection = FakeConnection()
-    fake_store = DocumentStore.__new__(DocumentStore)
-    fake_store._conn = connection
-
-    assert fake_store.writeback_rendered_pdf(
-        _doc(ref_id=42, body_file_path="output/final.pdf")
-    ) is False
-    assert connection.committed is False
-    assert len(connection.cursor_instance.executed) == 1
-
-
 def test_upsert_dedup_same_source_url_skipped(store):
     assert store.upsert(_doc()) is True
     assert store.upsert(_doc()) is False  # 동일 source+URL — 중복
@@ -189,6 +108,67 @@ def test_synthetic_docs_without_url_never_deduped(store):
             )
         )
     assert store.count_documents(cso_classification="C") == 3
+
+
+def _generated_yn(store, dedup_key_like: str) -> bytes:
+    with store._conn.cursor() as cur:
+        cur.execute(
+            "SELECT generated_yn FROM documents WHERE dedup_key LIKE %s",
+            (dedup_key_like,),
+        )
+        return cur.fetchone()[0]
+
+
+def test_upsert_stores_generated_yn_0_for_collected_docs(store):
+    store.upsert(_doc())
+    assert _generated_yn(store, f"{SOURCE_OPEN_GO_KR}::%") == b"0"
+
+
+def test_upsert_stores_generated_yn_1_for_generated_docs(store):
+    """생성 문서는 '1' — is_synthetic에서 파생되므로 수집기/생성기가 따로
+    설정할 필요가 없다. BINARY(1) 컬럼이라 ASCII 한 글자로 들어간다."""
+    store.upsert(
+        _doc(
+            cso_classification=CsoClassification.S,
+            cso_sub_clause="5",
+            source="gen_alio",
+            source_url="synthetic://source-generation/alio-1/5-none",
+            is_synthetic=True,
+        )
+    )
+    assert _generated_yn(store, "gen_alio::%") == b"1"
+
+
+def test_count_documents_filters_by_generated_yn(store):
+    store.upsert(_doc())
+    store.upsert(_doc(source="gen_alio", source_url=None, is_synthetic=True))
+    assert store.count_documents() == 2
+    assert store.count_documents(generated_yn="0") == 1
+    assert store.count_documents(generated_yn="1") == 1
+
+
+def test_upsert_stores_generation_provenance(store):
+    """input_prompt/content/generated_text/ref_id는 준 그대로 들어간다."""
+    store.upsert(
+        _doc(
+            cso_classification=CsoClassification.S,
+            cso_sub_clause="5",
+            source="gen_alio",
+            source_url="synthetic://source-generation/alio-7/5-none",
+            is_synthetic=True,
+            input_prompt="생성기 프롬프트",
+            content="원문 앞 40쪽",
+            generated_text="생성된 본문",
+            ref_id=7,
+        )
+    )
+    with store._conn.cursor() as cur:
+        cur.execute(
+            "SELECT input_prompt, content, generated_text, ref_id FROM documents "
+            "WHERE dedup_key LIKE %s",
+            ("gen_alio::%",),
+        )
+        assert cur.fetchone() == ("생성기 프롬프트", "원문 앞 40쪽", "생성된 본문", 7)
 
 
 def test_quarantine_stores_failed_record(store):

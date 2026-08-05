@@ -42,6 +42,27 @@ _DISCLOSURE_TEXT_MAP = {
 }
 
 
+def _save_filename(filename: str, *, is_pdf: str) -> str:
+    """저장할 이름을 **실제로 내려받는 바이트**에 맞춘다.
+
+    이 어댑터는 hwp·hwpx를 받을 때 원문정보 쪽에 PDF 변환을 요청한다
+    (``is_pdf="Y"``). 그런데 저장은 목록에 적힌 원래 이름으로 해서, 내용이
+    PDF인 파일이 ``공고문.hwp``로 디스크에 남았다 — 2026-07-15 EC2 실사에서
+    발견한 확장자·바이트 불일치다. 뒤에서 확장자로 파서를 고르는 쪽이 전부
+    이 파일에서 걸린다.
+
+    ``is_pdf``가 ``"Y"``가 아니면 원본을 그대로 쓴다. 변환을 요청하지 않았으므로
+    받은 바이트가 원래 형식이다.
+
+    마지막 확장자 하나만 바꾼다 — ``2019.최종본.hwp``의 앞 점은 이름의 일부다.
+    """
+
+    if is_pdf != "Y":
+        return filename
+    stem, dot, _suffix = filename.rpartition(".")
+    return f"{stem}.pdf" if dot else f"{filename}.pdf"
+
+
 class OriginalInfoAdapter(SourceAdapter):
     source_name = SOURCE_ORGINL_INFO
 
@@ -113,7 +134,12 @@ class OriginalInfoAdapter(SourceAdapter):
 
             raw_bytes, _content_type = with_retry(_do_download)
             path = save_body_file(
-                self.files_root, self.source_name, doc_type, identifier, file_meta["fileNm"], raw_bytes
+                self.files_root,
+                self.source_name,
+                doc_type,
+                identifier,
+                _save_filename(file_meta["fileNm"], is_pdf=is_pdf),
+                raw_bytes,
             )
             saved.append((path, file_meta))
 

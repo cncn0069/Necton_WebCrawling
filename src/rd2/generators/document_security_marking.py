@@ -23,7 +23,7 @@ from uuid import uuid4
 import fitz
 from PIL import Image, ImageEnhance, ImageOps
 
-from rd2.generators.agency_resolver import (
+from rd2.disclosure.military_secret import (
     MILITARY_SECRET_COVER_FILENAMES,
     MILITARY_SECRET_MARK_FILENAMES,
 )

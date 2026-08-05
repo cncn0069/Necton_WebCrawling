@@ -9,10 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
-
 import run_llm_augment as run_llm  # noqa: E402
 import test_reconstruct_pdf as reconstruct  # noqa: E402
 
@@ -23,7 +19,7 @@ from rd2.augmentation.llm_augment import (  # noqa: E402
     validate_candidates_for_document,
 )
 from rd2.extraction.storage import extraction_output_path  # noqa: E402
-from rd2.generators.clause_data import CLAUSES  # noqa: E402
+from rd2.disclosure.clause_data import CLAUSES  # noqa: E402
 
 
 def _candidate(

@@ -17,7 +17,7 @@ from rd2.generators.press_release_rendering import (
     build_press_release_variation_specs,
     render_press_release_variations,
 )
-from scripts.render_generated_documents import render_input_file
+from scripts.report.render_generated_documents import render_input_file
 
 
 def _press_payload() -> dict:

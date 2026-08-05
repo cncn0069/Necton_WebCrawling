@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent / "scripts")
-if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
 
 import annotate_documents  # noqa: E402
 import extract_documents  # noqa: E402

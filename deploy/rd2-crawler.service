@@ -7,12 +7,12 @@ Wants=network-online.target
 Type=simple
 User=rd2
 WorkingDirectory=/opt/rd2
-ExecStart=/opt/rd2/.venv/bin/python scripts/collect_prism.py 8000
+ExecStart=/opt/rd2/.venv/bin/python scripts/collect/collect_prism.py 8000
 Restart=on-failure
 RestartSec=30
 # DB 접속정보는 /opt/rd2/.env(MARIADB_*)에서 읽는다 — deploy/README.md 3번 참고.
 # collect_prism.py 자체가 rd2.db.prism_checkpoint.json으로 진행 상황을 저장하므로
-# (scripts/collect_prism.py 참고) 재시작해도 처음부터 다시 돌지 않고 이어서 진행한다.
+# (scripts/collect/collect_prism.py 참고) 재시작해도 처음부터 다시 돌지 않고 이어서 진행한다.
 
 [Install]
 WantedBy=multi-user.target

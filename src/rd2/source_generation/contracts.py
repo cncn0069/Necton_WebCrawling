@@ -22,8 +22,10 @@ from pydantic import (
 )
 
 from rd2.administrative_status import AdminStatus
+from rd2.canonical import NORMALIZATION_VERSION, canonical_sha256
 from rd2.schema.models import CsoClassification
 from rd2.source_generation.classification_taxonomy import (
+    GROUND_IDS,
     TAXONOMY_VERSION,
     ClauseNumber,
     DocumentForm,
@@ -31,6 +33,10 @@ from rd2.source_generation.classification_taxonomy import (
     clause_of_subclause,
     expected_classification,
     subclause_belongs_to_clause,
+)
+from rd2.source_generation.document_form_compatibility import (
+    FormSubclauseCompatibility,
+    form_subclause_compatibility,
 )
 from rd2.source_generation.header_fields import DRAFT_BLANK_HEADER_KEYS
 
@@ -49,6 +55,19 @@ class ContractModel(BaseModel):
         frozen=True,
         str_strip_whitespace=True,
         validate_default=True,
+    )
+
+
+def model_sha256(model: BaseModel) -> str:
+    """Pydantic 계약 산출물의 canonical content hash.
+
+    ``pipeline``에 있던 것을 그 모듈이 사라지면서 여기로 옮겼다 — 해시 대상이
+    계약 모델이므로 계약과 같은 자리에 둔다.
+    """
+
+    return canonical_sha256(
+        model.model_dump(mode="json", exclude_computed_fields=True),
+        normalization_version=NORMALIZATION_VERSION,
     )
 
 
@@ -203,13 +222,39 @@ class ParagraphBlock(ContractModel):
         return self.text
 
 
+#: 개조식 문서가 항목 **안에** 직접 달고 오는 기호. C트랙 프롬프트가
+#: ``□ > ○ > - > ※`` 위계를 요구하므로(``c_track_templates._DOCUMENT_STYLE_RULES``)
+#: 생성기가 낸 ``items``에 이 기호가 이미 붙어 있다.
+BULLET_MARKERS = frozenset({"□", "○", "◦", "ㅇ", "-", "•", "‣", "*", "※", "▶", "→"})
+
+
+def render_bullet_item(item: str) -> str:
+    """불릿 항목 한 줄. 항목이 이미 기호를 달고 있으면 ``- ``를 덧붙이지 않는다.
+
+    **왜 기호를 벗기지 않는가.** 기호는 장식이 아니라 **깊이**다 —
+    ``○``는 중항목, ``-``는 소항목, ``※``는 참고다. PDF 렌더러는 ``items``를
+    그대로 그려서 이 위계가 지면에 남는다. 여기서 벗기면 body_text에서만
+    깊이가 사라져 같은 문서의 두 표현이 어긋난다. 그래서 벗기는 대신
+    **덧붙이지 않는다**.
+
+    기호로 보려면 뒤에 공백과 내용이 따라와야 한다. ``-5% 감소``처럼 기호가
+    아니라 값의 일부인 경우를 잡아내기 위한 것이다 — 그쪽은 종전대로
+    ``- ``가 붙는다.
+    """
+
+    head, _, rest = item.lstrip().partition(" ")
+    if head in BULLET_MARKERS and rest.strip():
+        return item
+    return f"- {item}"
+
+
 class BulletListBlock(ContractModel):
     kind: Literal["bullet_list"] = "bullet_list"
     block_id: NonEmptyText
     items: tuple[NonEmptyText, ...] = Field(min_length=1)
 
     def render_text(self) -> str:
-        return "\n".join(f"- {item}" for item in self.items)
+        return "\n".join(render_bullet_item(item) for item in self.items)
 
 
 class KeyValueEntry(ContractModel):
@@ -301,9 +346,17 @@ DocumentBlock = (
 
 
 class GeneratedDocumentIR(ContractModel):
+    #: **필드 순서가 곧 생성 순서다.** ``blocks``가 ``title`` 앞에 온다 — 모델은
+    #: 스키마 순서대로 값을 내므로, 제목이 앞이면 본문을 쓰기도 전에 제목을 짓고
+    #: 그 다음 본문을 제목에 맞춘다. 실측(2026-08-04, 19건)에서 제목에 생성기의
+    #: 작업 설명이 붙은 것도(``…(변형본)``, ``…재작성본(레드팀 샘플)``) 아직
+    #: 쓰지 않은 문서 대신 **작업 자체**를 가리킬 것밖에 없던 자리이기 때문이다.
+    #: 본문을 먼저 쓰게 하면 제목은 그 본문을 요약하는 값이 된다.
+    #:
+    #: ``GeneratorResponse``가 계획을 문서 앞에 두는 것과 같은 장치다.
     contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
-    title: NonEmptyText
     blocks: tuple[DocumentBlock, ...] = Field(min_length=1)
+    title: NonEmptyText
 
     @model_validator(mode="after")
     def _block_ids_must_be_unique(self) -> "GeneratedDocumentIR":
@@ -337,6 +390,255 @@ class GeneratedDocumentIR(ContractModel):
         """IR block 순서에서 결정론적으로 파생되는 본문."""
 
         return "\n\n".join(block.render_text() for block in self.blocks)
+
+
+GroundId = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[A-E]$")]
+
+
+class TransformationNote(ContractModel):
+    """원문의 어느 자리를 무엇으로, 왜 바꿨는지 한 건.
+
+    생성기의 **자기보고**다. 검증기가 확인해 주는 값이 아니므로 라벨의 근거로
+    쓰지 않는다 — 쓰임은 사후 분석이다. 어느 근거를 어느 형식에 심었을 때
+    검증기가 놓치는지는 지금까지 사람이 생성물을 하나씩 읽어야 알 수 있었다.
+    """
+
+    block_id: NonEmptyText
+    changed_to: NonEmptyText
+    rationale: NonEmptyText
+    #: 이 변형이 성립시키려는 근거. 목표와 무관한 서식 정리는 ``None``이다.
+    ground_id: GroundId | None = None
+
+
+class GeneratorResponse(ContractModel):
+    """생성기 LLM의 유일한 출력. 문서는 이 안에 들어 있다.
+
+    **왜 IR에 필드를 붙이지 않는가.** ``pipeline``이 ``GeneratedDocumentIR``을
+    통째로 직렬화해 blind 검증기에 넘긴다. 변형 이력이 IR 안에 있으면 검증기가
+    "어디를 무슨 근거로 바꿨는지"를 읽고 채점하게 되어 일치율이 무의미해진다.
+    한 겹 밖에 두면 파이프라인이 문서만 떼어 넘길 수 있다.
+
+    **필드 순서가 곧 사고 순서다.** ``kept_structure``와 ``ground_plan``이
+    문서보다 앞에 오고 이력은 뒤에 온다 — 계획을 먼저 적게 해야 문서가 그
+    계획을 따르고, 이력은 이미 쓴 것을 가리켜야 하므로 뒤여야 한다.
+    ``SourceSuitability``가 같은 이유로 ``evidence_level``을 span 앞에 둔다.
+    """
+
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
+    #: 원문에서 그대로 지킨 골격. 판별기의 ``layout_analysis``를 받아 무엇을
+    #: 건드리지 않았는지 적는다.
+    kept_structure: NonEmptyText
+    #: 심을 근거를 원문의 어느 자리에 넣을지. ``available_slots``를 가리킨다.
+    ground_plan: NonEmptyText
+    document: GeneratedDocumentIR
+    #: 완성된 문서에서 실제로 성립한 근거. 근거는 대안적이라 하나면 충분하지만
+    #: 업무 흐름상 여러 개가 함께 서기도 한다 — 그때는 전부 적는다.
+    planted_grounds: tuple[GroundId, ...] = Field(min_length=1)
+    transformations: tuple[TransformationNote, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _record_must_point_at_the_document(self) -> "GeneratorResponse":
+        if len(self.planted_grounds) != len(set(self.planted_grounds)):
+            raise ValueError("planted grounds must be unique")
+        unknown = set(self.planted_grounds) - set(GROUND_IDS)
+        if unknown:
+            raise ValueError(f"unknown planted grounds: {sorted(unknown)}")
+        block_ids = {block.block_id for block in self.document.blocks}
+        for note in self.transformations:
+            if note.block_id not in block_ids:
+                raise ValueError(
+                    f"transformation points at unknown block: {note.block_id!r}"
+                )
+            if note.ground_id is not None and note.ground_id not in self.planted_grounds:
+                raise ValueError(
+                    f"transformation cites ground {note.ground_id} that is not planted"
+                )
+        return self
+
+
+GroundId = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[A-E]$")]
+
+
+class TransformationNote(ContractModel):
+    """원문의 어느 자리를 무엇으로, 왜 바꿨는지 한 건.
+
+    생성기의 **자기보고**다. 검증기가 확인해 주는 값이 아니므로 라벨의 근거로
+    쓰지 않는다 — 쓰임은 사후 분석이다. 어느 근거를 어느 형식에 심었을 때
+    검증기가 놓치는지는 지금까지 사람이 생성물을 하나씩 읽어야 알 수 있었다.
+    """
+
+    block_id: NonEmptyText
+    changed_to: NonEmptyText
+    rationale: NonEmptyText
+    #: 이 변형이 성립시키려는 근거. 목표와 무관한 서식 정리는 ``None``이다.
+    ground_id: GroundId | None = None
+
+
+class GeneratorResponse(ContractModel):
+    """생성기 LLM의 유일한 출력. 문서는 이 안에 들어 있다.
+
+    **왜 IR에 필드를 붙이지 않는가.** ``pipeline``이 ``GeneratedDocumentIR``을
+    통째로 직렬화해 blind 검증기에 넘긴다. 변형 이력이 IR 안에 있으면 검증기가
+    "어디를 무슨 근거로 바꿨는지"를 읽고 채점하게 되어 일치율이 무의미해진다.
+    한 겹 밖에 두면 파이프라인이 문서만 떼어 넘길 수 있다.
+
+    **필드 순서가 곧 사고 순서다.** ``kept_structure``와 ``ground_plan``이
+    문서보다 앞에 오고 이력은 뒤에 온다 — 계획을 먼저 적게 해야 문서가 그
+    계획을 따르고, 이력은 이미 쓴 것을 가리켜야 하므로 뒤여야 한다.
+    ``SourceSuitability``가 같은 이유로 ``evidence_level``을 span 앞에 둔다.
+    """
+
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
+    #: 원문에서 그대로 지킨 골격. 판별기의 ``layout_analysis``를 받아 무엇을
+    #: 건드리지 않았는지 적는다.
+    kept_structure: NonEmptyText
+    #: 심을 근거를 원문의 어느 자리에 넣을지. ``available_slots``를 가리킨다.
+    ground_plan: NonEmptyText
+    document: GeneratedDocumentIR
+    #: 완성된 문서에서 실제로 성립한 근거. 근거는 대안적이라 하나면 충분하지만
+    #: 업무 흐름상 여러 개가 함께 서기도 한다 — 그때는 전부 적는다.
+    planted_grounds: tuple[GroundId, ...] = Field(min_length=1)
+    transformations: tuple[TransformationNote, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _record_must_point_at_the_document(self) -> "GeneratorResponse":
+        if len(self.planted_grounds) != len(set(self.planted_grounds)):
+            raise ValueError("planted grounds must be unique")
+        block_ids = {block.block_id for block in self.document.blocks}
+        for note in self.transformations:
+            if note.block_id not in block_ids:
+                raise ValueError(
+                    f"transformation points at unknown block: {note.block_id!r}"
+                )
+            if note.ground_id is not None and note.ground_id not in self.planted_grounds:
+                raise ValueError(
+                    f"transformation cites ground {note.ground_id} that is not planted"
+                )
+        return self
+
+
+# 낱말 목록으로 분석의 드리프트를 재려고 했다가 **철회했다**(2026-08-05).
+# 다시 만들지 않도록 근거를 남긴다.
+#
+# ``OPERATIONAL_DRIFT_MARKERS = ("느슨해지","느슨한","악용","은폐","걸리지 않는",
+# "우회")``를 ``security_analysis``에 걸고 걸린 건을 코퍼스에서 뺐다. A/B/C 대조
+# 15회(3 프롬프트 판본 × 5 사건)로 재보니 쓸 수 없었다.
+#
+# - **정밀도 18%.** 잡은 11문장 중 진짜 문제는 2개였다. ``은폐``·``우회``가 걸린
+#   문장은 대부분 "…가 무력화됨"으로 끝나는, 우리가 쓰라고 지정한 바로 그
+#   형태였다("사전 대비·은폐·교란 대응이 가능해져 단계별 통제 효과가 무력화됨").
+# - **낱말 둘만 바꾸면 통과한다.** 진짜 문제였던 문장에서 ``교대 공백``→``교대
+#   미배치 구간``, ``느슨해지는``→``감시 밀도가 낮은``으로 바꾸면 내용이 그대로인
+#   채 검사만 못 본다.
+# - **방향이 거꾸로다.** 잘 쓴 결과 프레임 문장에 더 잘 붙어서, 게이트로 켜두면
+#   좋은 문서를 더 많이 버린다. 15회에서 마커가 가장 많은 arm이 프롬프트가 가장
+#   나은 arm이었다.
+# - **arm과 무관하게 뜬다.** A 0.6 / B 0.4 / C 1.0 — 프롬프트를 바꿔도 안 움직이고
+#   목록의 6개 중 3개는 15회 동안 한 번도 안 나왔다.
+#
+# 진짜 신호는 낱말이 아니라 둘이었다. (1) 한 줄에 붙은 **빈 곳의 목록**(결원 시각
+# + 순찰 주기 + 교대 공백), (2) 상대를 주어로 끝나는 **문형**("…선택할 수 있음"
+# 대 "…무력화됨"). 둘 다 바꿔 쓰기로 못 빠져나간다. 지표로 세우려면 그쪽이다 —
+# 아직 세우지 않았다.
+
+
+#: **클래스 docstring은 모델이 읽는다.** pydantic v2가 docstring을 JSON Schema의
+#: ``description``으로 싣고 ``gateway.parse``가 그 스키마를 그대로 요청에 넣는다.
+#: 감사 실측(2026-08-05): 여기 있던 설계 근거 docstring 때문에 스키마에
+#: ``[비공개 근거]``·``[출력 순서]``·``minimal_prompt``·``GeneratorResponse``가
+#: 실려 나갔다 — 앞 둘은 v2 프롬프트가 **의도적으로 지운 절 이름**이라, 모델은
+#: 프롬프트에 없는 절을 가리키는 설명을 함께 읽고 있었다.
+#:
+#: 그래서 아래 세 계약의 설계 근거는 전부 이 ``#:`` 주석으로 내린다. 필드 위
+#: ``#:`` 주석과 모듈 주석은 스키마에 실리지 않는다. docstring 자리에는 모델이
+#: 읽어도 되는 한 줄만 남긴다.
+#:
+#: ``SecurityAnalysis``는 ``GeneratorResponse.ground_plan``과 같은 자리다 — 계획을
+#: 문서보다 앞 필드에 두면 문서가 그 계획을 따르고, 뒤로 돌리면 이미 쓴 문서를
+#: 사후에 합리화한다. ``c_track_templates``의 ``[비공개 근거]`` 절이 하던 말을 이
+#: 두 필드가 받는다.
+class SecurityAnalysis(ContractModel):
+    """문서를 쓰기 전에 적는 유출 경로 분석."""
+
+    #: 유출되면 이 세부조항이 막는 것을 노리는 사람이 무엇을 할 수 있는지.
+    vulnerability: NonEmptyText
+    #: 그래서 어느 직무가 무력화되는지.
+    impact: NonEmptyText
+
+
+#: ``block_id``를 함께 받는 것이 요점이다. 문구만 받으면 모델이 본문에 없는 말을
+#: 지어낸다 — ``EvidenceQuote``가 인용문을 원문과 대조하는 것과 같은 처방이고,
+#: 여기서는 대조 대상이 자기가 방금 쓴 문서다.
+class ConfidentialSnippet(ContractModel):
+    """본문에서 그대로 옮긴 민감 문구 하나와 그 문구가 있는 block."""
+
+    block_id: NonEmptyText
+    quote: NonEmptyText
+
+
+#: **왜 IR 밖인가.** ``GeneratorResponse``와 같다 — 검증기에는
+#: ``GeneratedDocumentIR``만 떼어 넘긴다. 분석과 발췌가 문서 안에 있으면 검증기가
+#: "어디가 왜 민감한지"를 읽고 채점하게 되어 일치율이 무의미해진다.
+#:
+#: **필드 순서가 곧 사고 순서다.** 분석 → 문서 → 발췌·사유. 발췌는 이미 쓴 본문을
+#: 가리켜야 하므로 문서 뒤여야 하고, 분석은 본문을 이끌어야 하므로 앞이어야 한다.
+#: ``document`` 안에서 ``blocks``가 ``title`` 앞에 오는 것도 같은 장치의 한 겹
+#: 안쪽이다.
+#:
+#: ``legal_basis``를 두지 않는다. 조항은 ``CTrackTemplate.clause_no``가 이미 잠근
+#: 값이라 모델이 항상 맞힌다 — 검증력 없이 토큰만 쓰는 필드다. DB에 적을 값은
+#: 호출부가 템플릿에서 가져온다.
+class CTrackCoTResponse(ContractModel):
+    """3단계(분석-작성-기록) 생성 결과."""
+
+    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
+    security_analysis: SecurityAnalysis
+    document: GeneratedDocumentIR
+    #: 하한이 3인 것은 실호출(2026-08-05)에서 정했다. 1이었을 때 모델이 정확히
+    #: 하나만 냈고, 하필 그 하나가 본문의 다른 절과 수치가 어긋나는 block이었다.
+    #: 로그가 문서의 한 자리만 가리키면 "가장 민감한 문구"를 고른 것이 아니라
+    #: 처음 눈에 띈 것을 집은 것이 된다.
+    confidential_snippets: tuple[ConfidentialSnippet, ...] = Field(min_length=3)
+    #: 이 문서가 왜 해당 호 비공개로 저장되는지. 분석과 발췌를 가리켜 적는다.
+    reasoning_for_storage: NonEmptyText
+
+    # 메서드 docstring은 스키마에 실리지 않는다(클래스 docstring만 실린다).
+    #
+    # 발췌를 block 단위로 좁히는 것은 ``EvidenceQuote.locate_in`` 쪽 판단을
+    # 따른다. 저쪽이 문서 전체로 넓힌 것은 PDF 추출기가 block 경계를 사람 눈과
+    # 다르게 자르기 때문인데, 여기서는 block을 만든 것이 추출기가 아니라 생성기
+    # 자신이라 경계가 어긋날 자리가 없다.
+    #
+    # 공백만 무시한다. 개조식 항목은 들여쓰기가 곧 깊이라(``BULLET_MARKERS``)
+    # 모델이 발췌하면서 앞뒤 공백을 흘리기 쉽다.
+    @model_validator(mode="after")
+    def _snippets_must_be_in_the_document(self) -> "CTrackCoTResponse":
+        """발췌가 그 block에 글자 그대로 있는지 대조한다."""
+
+        quotes = {
+            (snippet.block_id, condense_whitespace(snippet.quote))
+            for snippet in self.confidential_snippets
+        }
+        if len(quotes) != len(self.confidential_snippets):
+            raise ValueError("duplicate confidential snippet")
+        # 세 발췌가 한 block에서 나오면 로그가 문서의 한 자리만 가리킨다.
+        if len({snippet.block_id for snippet in self.confidential_snippets}) < 2:
+            raise ValueError("confidential snippets must come from at least two blocks")
+
+        for snippet in self.confidential_snippets:
+            needle = condense_whitespace(snippet.quote)
+            if not needle:
+                raise ValueError(
+                    f"confidential snippet for block {snippet.block_id!r} "
+                    "has no visible characters"
+                )
+            haystack = condense_whitespace(self.document.block_text(snippet.block_id))
+            if needle not in haystack:
+                raise ValueError(
+                    "confidential snippet not found in block "
+                    f"{snippet.block_id!r}: {_truncate(snippet.quote)!r}"
+                )
+        return self
 
 
 class SourceTextBlock(ContractModel):
@@ -436,89 +738,6 @@ class RelevanceSelectionResponse(ContractModel):
     def _selected_block_ids_must_be_unique(self) -> "RelevanceSelectionResponse":
         if len(self.selected_block_ids) != len(set(self.selected_block_ids)):
             raise ValueError("selected relevance block IDs must be unique")
-        return self
-
-
-class InsertionMode(str, Enum):
-    """자리를 어떻게 쓸지. ``replace``를 우선한다.
-
-    ``replace``는 바꿀 문장 자체가 그 자리에 무엇이 들어갈지 말해 준다 —
-    ``| 구경 | ****``를 바꾸라고 하면 관 지름이 온다. ``after``는 앞 문장만
-    있어 문맥이 약하고, 약하면 모델이 프롬프트 예시에 기댄다(v1 실측: 예시
-    슬롯 36개 중 22개를 글자 그대로 복사). 그래서 ``after``는 ``want``에
-    값의 종류를 구체적으로 적어야 한다.
-    """
-
-    REPLACE = "replace"
-    AFTER = "after"
-
-
-class InsertionSlot(ContractModel):
-    """원문 어디에 민감정보를 넣을지 가리키는 자리 하나.
-
-    자리를 **block ID**로 받는다. 한때 원문 문장을 인용하게 했는데(anchor) 그
-    문장을 코드가 다시 찾아야 했고 네 가지로 계속 빗나갔다 — 두 block에 걸친
-    인용, 프롬프트 예시를 원문으로 착각, ``감사원`` -> ``감사원의`` 같은 조사
-    한 글자, block 머리표까지 포함. 91건 실행에서 19건이 여기서 끝났다.
-
-    block은 이미 충분히 잘다. 실측 19,148개의 길이 중앙값이 13자이고 90%가
-    47자 이하다 — 한 줄이 곧 한 block이라 "이 block을 바꿔라"가 "이 문장을
-    바꿔라"와 사실상 같다. 찾을 필요가 없는 것을 찾게 만들고 있었다.
-    """
-
-    #: 원문에 붙은 ``[BLOCK …]`` 표시 안의 ID. 사전 조회로 확인한다.
-    block_id: NonEmptyText
-    mode: InsertionMode
-    #: 그 자리에 들어갈 값의 종류. 2단계가 이걸 보고 값을 만든다.
-    want: NonEmptyText
-
-
-class InsertionPlan(ContractModel):
-    """합성 마스킹 1단계의 출력 — **문서가 아니라 자리 목록**.
-
-    이 계약이 이 방식의 전부다. 지금 생성기는 ``GeneratedDocumentIR``을
-    요구하고, 그러면 모델은 원문을 보존하려고 통째로 재타이핑하는 대신
-    요약한다 — 실측 52건의 원문 보존율 중앙값이 1.0%였다(마스킹 복원 건만
-    91%). 문서를 달라고 하지 않으면 요약할 기회가 없다.
-    """
-
-    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
-    slots: tuple[InsertionSlot, ...] = Field(min_length=1, max_length=8)
-    rationale: NonEmptyText
-
-    @model_validator(mode="after")
-    def _slots_must_target_distinct_blocks(self) -> "InsertionPlan":
-        block_ids = [slot.block_id for slot in self.slots]
-        if len(block_ids) != len(set(block_ids)):
-            raise ValueError("insertion slots must target distinct blocks")
-        return self
-
-
-class MaskFill(ContractModel):
-    """마스킹 자리 하나에 들어갈 가상 값."""
-
-    mask_id: NonEmptyText
-    value: NonEmptyText
-
-
-class MaskFillResponse(ContractModel):
-    """``mask_restoration`` route의 유일한 모델 출력.
-
-    문서를 반환하지 않는 것이 이 route의 요점이다 — 원문 block은 코드가 그대로
-    옮기고 모델은 값만 낸다(``mask_restoration.apply_mask_fills``). 그래서 다른
-    route의 ``GeneratedDocumentIR``과 달리 서식·block 구성을 모델이 건드릴 수
-    없고, 표제부·붙임처럼 계약이 걸린 자리에서 실패할 여지가 없다.
-    """
-
-    contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
-    fills: tuple[MaskFill, ...] = Field(min_length=1)
-    rationale: NonEmptyText
-
-    @model_validator(mode="after")
-    def _mask_ids_must_be_unique(self) -> "MaskFillResponse":
-        mask_ids = [fill.mask_id for fill in self.fills]
-        if len(mask_ids) != len(set(mask_ids)):
-            raise ValueError("mask fill IDs must be unique")
         return self
 
 
@@ -782,6 +1001,14 @@ class SourceAssessment(ContractModel):
     """
 
     contract_version: Literal["2.3.0"] = CONTRACT_SCHEMA_VERSION
+    #: 내용을 읽기 **전에** 시각적 구조부터 적는다 — 표제부, 항목번호 체계,
+    #: 서명·결재란, 표의 배치. 문서형식(``source_classification``)보다 앞에
+    #: 두는 것이 이 필드의 전부다: 구조를 먼저 말하게 하면 형식 판정이 제목
+    #: 낱말이 아니라 실제 서식에서 나온다.
+    #:
+    #: 생성기가 이 값을 **유지할 골격**으로 받는다. ``available_slots``와
+    #: 역할이 갈린다 — 이쪽은 "건드리지 않을 틀", 저쪽은 "값을 갈아끼울 자리"다.
+    layout_analysis: NonEmptyText
     source_classification: SourceClassification
     source_suitability: SourceSuitability
     business_context: NonEmptyText
@@ -838,6 +1065,22 @@ class SourceAssessment(ContractModel):
                 raise ValueError(
                     "source assessment only supports subclauses in clauses 5-8"
                 )
+        # ``primary_subclause``가 그대로 생성 목표가 되므로(``_target_from_assessment``)
+        # 형식과 충돌하는 값이 여기를 통과하면 계획 단계에서 갈아탈 곳이 없다.
+        # 이전에는 ``compatible_subclauses``가 그 폴백이었다. 폴백을 쓰지 않기로
+        # 한 이상 충돌은 판별 단계에서 끝나야 한다 — gateway가 계약 위반을 한 번
+        # 재시도하므로(``default_openai_gateway``) 대부분 재판정으로 회수된다.
+        if (
+            form_subclause_compatibility(
+                self.source_classification.document_form,
+                self.primary_subclause,
+            )
+            is FormSubclauseCompatibility.CONFLICT
+        ):
+            raise ValueError(
+                f"primary subclause {self.primary_subclause.value} conflicts with "
+                f"document form {self.source_classification.document_form.value}"
+            )
         return self
 
     def validate_evidence_in_document(self, document_text: str) -> None:
@@ -1282,63 +1525,6 @@ class IdentificationStrength(str, Enum):
     MASKED = "masked"
 
 
-SensitiveClause6Subclause = Literal[
-    SubclauseKey.PETITIONER_PII,
-    SubclauseKey.PERSONNEL_PII,
-    SubclauseKey.WELFARE_PII,
-    SubclauseKey.SUBJECT_PII,
-]
-
-
-class SensitiveMonitorAssertion(ContractModel):
-    """제6호 감시자가 찾은 하나의 의미상 주체-값 연결.
-
-    모델에게 ``EvidenceSpan`` 세 개를 각각 만들게 하면 같은 ``block_id``를 세 번
-    반복하면서 서로 일치시켜야 한다. 감시자 응답에서는 블록 ID를 한 번만 받고,
-    저장용 ``SensitiveAssertion``은 파이프라인 코드가 조립한다.
-    """
-
-    block_id: NonEmptyText
-    subject_role: SensitiveSubjectRole
-    subject_quote: NonEmptyText
-    attribute_kind: SensitiveAttributeKind
-    value_quote: NonEmptyText
-    link_quote: NonEmptyText
-    identification_strength: IdentificationStrength
-
-
-class SensitiveMonitorDecision(ContractModel):
-    """검사기가 반환하는 비차단 S/O 판정 기록.
-
-    문서 형식·조항·세부유형은 잠긴 계획에서 가져온다. ``rationale``은 감사용
-    기록일 뿐 비어 있어도 S/O 판정 자체를 무효화하지 않는다.
-
-    ``evidence_spans``만은 예외로 요구한다. 이 계약은 처음에 "정확한 인용문은
-    반환하지 않는다"로 시작했는데, 원문 보존율이 1%에서 99%로 올라가자 그
-    생략이 값을 치렀다 — 생성물의 대부분이 원문이 되면서 **검사기가 원문 쪽
-    문장을 근거로 S를 줄 수 있게 됐다.**
-
-    실측(alio 연간감사 결과보고서): 우리가 넣은 것은 감사 표본 기준과 적용
-    임계값인데 검사기는 ``부정 행위 및 징계 처분에 대한 상세한 언급``을 근거로
-    들었다. 그건 이미 공표된 원문 내용이다. 라벨은 S로 맞았지만 이유가 원문
-    쪽이면 학습데이터로는 해롭다 — 공개된 감사 연차보고서를 S로 배운다.
-
-    인용문이 있으면 코드가 기계적으로 가른다. 그 문장이 삽입 구간 안에 있으면
-    우리가 만든 S이고, 밖에 있으면 원문이 원래 갖고 있던 것이다
-    (``evidence.evidence_from_inserted_text``).
-    """
-
-    classification: Literal[CsoClassification.S, CsoClassification.O]
-    rationale: str = ""
-    evidence_spans: tuple[EvidenceSpan, ...] = ()
-
-    @model_validator(mode="after")
-    def _s_requires_evidence(self) -> "SensitiveMonitorDecision":
-        if self.classification == CsoClassification.S and not self.evidence_spans:
-            raise ValueError("S decision requires at least one evidence span")
-        return self
-
-
 class SensitiveAssertion(ContractModel):
     """S 판정을 성립시키는 주체-속성-값 연결을 구조화한 내부 근거."""
 
@@ -1586,6 +1772,14 @@ class DocumentPipelineResult(ContractModel):
     validation_receipt: CallReceipt | None = None
     comparison: ConsistencyComparison | None = None
     failure: StageFailure | None = None
+    #: 생성 단계가 실제로 보낸 프롬프트(DB의 ``input_prompt``). 게이트웨이를 쓰지
+    #: 않는 ``fully_synthetic`` 경로에서는 None이고, 그건 "프롬프트가 없었다"는
+    #: 사실이다 — 빈 문자열로 채우면 기록이 없는 것과 구분되지 않는다.
+    #:
+    #: 계약 안에 두는 이유는 이 값이 파이프라인 밖으로 나가는 유일한 통로여서다.
+    #: 하네스가 프롬프트를 다시 조립해 쓰면 repair 재시도·seed 때문에 실제로
+    #: 보낸 것과 어긋난다.
+    generator_prompt: str | None = None
 
     @model_validator(mode="after")
     def _partial_result_must_be_coherent(self) -> "DocumentPipelineResult":

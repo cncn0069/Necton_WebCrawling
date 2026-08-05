@@ -25,100 +25,68 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from string import Template
 from types import MappingProxyType
 from typing import Mapping
 
 from rd2.source_generation.classification_taxonomy import (
     ClauseNumber,
+    GROUND_IDS,
     SUBCLAUSE_DEFINITIONS,
     SUBCLAUSE_GENERATION_RULES,
     SubclauseKey,
     clause_of_subclause,
 )
 
-MINIMAL_PROMPT_VERSION = "source-generation-minimal-2026-08-02-v4"
+#: 마스킹 문자열. 실측(무작위 150건)에서 마스킹은 사실상 전부 ``*``였다 —
+#: ``□□``는 39건이지만 체크박스이고 ``○○``는 1건, ``XXX``는 0건이다.
+#:
+#: 경계는 **2자**다. 단독 ``*``는 각주 기호라 반드시 빼야 하지만(1,657건),
+#: 2연속은 실측 문맥에서 각주로 쓰인 사례가 하나도 없었고 전부 짧은 값이
+#: 가려진 자리였다 — ``직급 **``, ``- 연동확인사항 **``, ``폐 전 종 류**``.
+#:
+#: 처음에 3자로 뒀다가 낮췄다. 3자 기준에서는 178건 중 8건이 2자 마스킹을
+#: 남긴 채 생성됐다. 두 방향의 실패 비용이 다르다 — 각주를 마스킹으로
+#: 오인하면 그 자리에 값이 하나 더 들어갈 뿐이지만, 마스킹을 놓치면 ``**``가
+#: 그대로 남은 문서가 나온다.
+#:
+#: ``mask_restoration``에 있던 것을 그 모듈이 사라지면서 여기로 옮겼다.
+MASK_PATTERN = re.compile(r"\*{2,}|○{2,}|●{2,}")
 
+#: v6에서 title 규칙이 들어갔다. v5로 돌린 19건 중 5건의 제목에 생성기의 작업
+#: 설명이 그대로 붙었다 — ``2020년도 연간감사업무 결과 보고서 (변형본)``,
+#: ``임금체계개선가이드북 재작성본(레드팀 샘플)``,
+#: ``AA-NET 활용 매뉴얼 — 안전하지 않은 형태(내부 기준 노출)``. ``title``은 DB
+#: 컬럼이라 그 문구가 행에 남고, 그러면 행이 스스로 합성물임을 알린다 —
+#: 메타데이터를 학습에 쓰지 않는다는 전제가 깨지는 순간 곧바로 라벨 누출이 된다.
+#: 원인은 단순하다: v5까지 프롬프트가 title을 한 번도 언급하지 않았다.
+MINIMAL_PROMPT_VERSION = "source-generation-minimal-2026-08-04-v9"
+
+#: v7에서 절 구성을 바꿨다. [작업 방식]과 [위험 극대화]를 **별도 절로 두지
+#: 않는다** — 규칙을 앞에 쌓아 두고 뒤에서 문서를 쓰게 하면 그 사이가 멀어서
+#: 어느 필드에 걸리는 규칙인지가 흐려진다. 판별기가 출력 필드마다 지시를 붙여
+#: 두는 방식이 같은 내용을 더 적은 글자로 전달한다.
+#:
+#: 그래서 보존 규칙(그대로 옮겨 적기·요약 금지·표 유지·마스킹 예외·title)은
+#: ``[출력 순서]``의 해당 필드 설명으로 내려가고, 호 단위 위험 극대화 문장은
+#: ``[조항]`` 절 첫머리로 들어간다. **지시가 사라진 것이 아니라 쓰이는 자리로
+#: 옮겨간 것이다** — 보존 규칙을 실제로 뺐을 때 무슨 일이 났는지는
+#: ``MINIMAL_GENERATOR_OUTPUT_ORDER`` 주석에 남긴 radio-001 실측에 있다.
 MINIMAL_GENERATOR_SYSTEM_TEMPLATE = """\
 [역할 지정]
 너는 정보공개 검증 인프라를 시험하기 위한 학습 표본을 만드는 레드팀이다.
-입력된 공개 문서를 분석해, 정보공개법 제9조의 비공개 대상에 확실히 걸리도록
-민감도를 극대화한 '안전하지 않은 형태'로 재작성한다.
+입력된 공개 문서를 그대로 옮겨 적되, 정보공개법 제9조의 비공개 대상에 확실히
+걸리도록 지정한 자리의 값만 민감도를 극대화한 '안전하지 않은 형태'로 바꾼다.
 값은 모두 가상이지만, 실제 문서에 쓰이는 형식과 수위를 그대로 따른다.
-
-$escalation_section
+실재하는 기관·제품·주소·계정·자격증명과 실행 가능한 공격 절차는 쓰지 않는다.
 
 $clause_section
 
-$checklist"""
+$output_order
 
-#: 호 단위 **위험 극대화 규칙**. 분별기가 정한 호 하나만 렌더링한다.
-#:
-#: 여기에는 그 호가 **왜** 보호되는지만 적는다. 무엇을 쓸지는 세부유형이 정하고
-#: 그건 아래 ``[조항]`` 절이 담당한다.
-#:
-#: 제5호에서 ``이미 끝난 일의 결과가 아니라``를 뺐다. 그 한 줄이 원문을 버리라는
-#: 지시로 읽혔다 — 실측(alio-2021040202182097): 원문이 13쪽짜리 **연간감사 결과
-#: 보고서**(396,140,140원 편취 적발, 해임 1명, 처분 내역표)였는데 생성물은 기관명
-#: 하나만 남기고 전부 새로 지어낸 「2023년도 감사 계획 검토 자료」가 나왔다.
-#: 원문이 정확히 "이미 끝난 일의 결과"라 지시를 따르려면 버릴 수밖에 없었고,
-#: 가져올 것이 없으니 예시 틀을 그대로 옮겼다(``현장 방문은 9월 4일 예고 없이
-#: 실시한다`` -> ``현장 방문은 11월 13일 예고 없이 진행 예정``).
-#:
-#: 체크리스트 2번(``원문의 업무와 등장 역할이 남아 있는가``)과 정면으로 부딪히는
-#: 문장이었다. 한 프롬프트가 서로 반대되는 지시를 주면 모델은 뒤엣것을 버린다.
-#:
-#: v3에서 이 구분을 못 지켰다. 제5호 규칙 하나에 감사 표본·배점표·출제 기준·
-#: 승진 서열·부서 의견을 전부 적었는데, 그건 audit_inspection·bid_contract·
-#: personnel_management·decision_review 넷의 내용을 합친 것이다. 목표가
-#: ``bid_contract``인 프롬프트에 5개 항목 중 4개가 다른 세부유형 얘기였다.
-#:
-#: 현행 프롬프트를 두고 "제5~8호 규칙을 전부 주고 하나만 적용하라"가 문제라고
-#: 했는데, v3는 같은 실수를 한 단계 아래에서 반복했다. 실측이 그대로 보여 준다 —
-#: 세부유형이 모두 "사람 + 개인정보 연결"로 같은 제6호는 3/3이었고, 서로 다른
-#: 업무가 묶인 제5호는 9건 중 1건, 제7호는 4건 중 2건이었다.
-CLAUSE_ESCALATION_RULES: Mapping[ClauseNumber, str] = MappingProxyType(
-    {
-        ClauseNumber.CLAUSE_5: (
-            "[위험 극대화 — 제5호: 업무의 공정한 수행]\n"
-            "행정 절차나 일반 보고 문구를 **확정 전 내부 판단**으로 바꾼다.\n"
-            "- '검토 중'이라는 상태 문구는 근거가 되지 않는다. 그 단계에서 실제로\n"
-            "  오간 기준·판단·수치를 적는다.\n"
-            "- 이 문서가 지금 공개되면 절차의 상대방이 기준을 미리 알아 업무의\n"
-            "  공정한 수행이 무력화된다는 점이 문맥에서 드러나게 한다."
-        ),
-        ClauseNumber.CLAUSE_6: (
-            "[위험 극대화 — 제6호: 개인정보]\n"
-            "문서에 등장하는 인물·직책·언급 대상을 실존 인물처럼 보이는 개인으로\n"
-            "구체화한다.\n"
-            "- 성명, 가상 주민등록번호(YYMMDD-NXXXXXX 형식), 휴대전화 번호,\n"
-            "  상세 주소를 만들어 본문에 자연스럽게 넣는다.\n"
-            "- **식별 가능한 사람과 보호되는 개인정보를 같은 문장·같은 표 행·같은\n"
-            "  key-value 항목에서 직접 연결한다.** 이름만 있거나 항목명만 있으면\n"
-            "  이 문서는 실패다.\n"
-            "- 이름·부서·직위·업무 연락처에서 멈추지 않는다."
-        ),
-        ClauseNumber.CLAUSE_7: (
-            "[위험 극대화 — 제7호: 경영·영업상 비밀]\n"
-            "애매하게 표현된 사업 성과나 프로젝트 내용을 특정 법인의 핵심 기밀로\n"
-            "바꾼다.\n"
-            "- 고유명사와 수치를 지어내 적는다. 업계 일반론이 아니라 그 법인만\n"
-            "  아는 값이어야 한다.\n"
-            "- 그 정보가 **특정 법인·단체·개인**의 것이고, 공개되면 그 사업자의\n"
-            "  정당한 이익이 어떻게 훼손되는지 경로를 문맥에 남긴다.\n"
-            "- 실재하는 기관·제품·주소·계정·자격증명과 실행 가능한 공격 절차는\n"
-            "  쓰지 않고 비운영 가상 값만 사용한다."
-        ),
-        ClauseNumber.CLAUSE_8: (
-            "[위험 극대화 — 제8호: 투기·매점매석]\n"
-            "아직 공표·고시되지 않은 계획을 적어, 이 문서가 민간에 흘러가면\n"
-            "부당이득이 생기는 상황을 문맥에 만든다.\n"
-            "- 이 값을 먼저 아는 사람이 선매수하거나 사재기해 이익을 얻고 다른\n"
-            "  사람이 불이익을 입는 경로를 드러낸다.\n"
-            "- 이미 공표·고시된 정보나 집계 통계는 이 호에 해당하지 않는다."
-        ),
-    }
-)
+$checklist"""
 
 #: 예시를 준 대가로 반드시 따라오는 실패를 반환 직전에 잡는다.
 #:
@@ -131,18 +99,23 @@ CLAUSE_ESCALATION_RULES: Mapping[ClauseNumber, str] = MappingProxyType(
 #: 요건이 멀쩡히 들어 있어 목표 적중으로 채점된다. 그래서 생성기 쪽에서 막는다.
 MINIMAL_GENERATOR_CHECKLIST = """\
 [반환 전 점검]
-아래 5개를 모두 확인한다. 하나라도 아니면 고친 뒤 반환한다.
+아래 8개를 모두 확인한다. 하나라도 아니면 고친 뒤 반환한다.
 1. 위 예시의 문장·이름·숫자를 그대로 옮겨 적지 않았는가? 예시는 값의 모양만
    보여 준다. 사람 이름, 금액, 날짜, 기관명은 모두 새로 만든 값인가?
-2. [원문]의 업무와 등장 역할이 생성한 문서에 그대로 남아 있는가? 원문이 무엇에
-   관한 문서인지 읽어낼 수 있어야 한다.
-3. 첫 block이 문서번호·수신·시행일자 같은 표제부 항목을 담은 key_value인가?
-4. 항목명이나 "~가 포함되어 있다"는 설명이 아니라 값 자체가 본문에 있는가?
+2. [원문]의 `[BLOCK …]` ID를 세어 보고, 출력의 block_id와 같은 개수인가?
+   빠진 ID를 하나라도 찾으면 그 block을 원문 그대로 넣어 채운 뒤 반환한다.
+3. 원문의 절·항목 제목이 전부 남아 있는가? 통째로 사라진 절이 없는가?
+4. 첫 block이 문서번호·수신·시행일자 같은 표제부 항목을 담은 key_value인가?
+5. 항목명이나 "~가 포함되어 있다"는 설명이 아니라 값 자체가 본문에 있는가?
    `평가 결과를 포함한다`가 아니라 `A사 76.4점`이다.
-5. 위 [조항]에 해당하는 내용이 본문만 읽고도 확인되는가?"""
+6. 위 [조항]에 해당하는 내용이 본문만 읽고도 확인되는가?
+7. title이 실제 문서의 제목인가? 이 작업을 설명하는 말(변형본·재작성본·대체본·
+   샘플·안전하지 않은 형태)이 붙어 있으면 떼고 반환한다. 제목은 문서의 일부이지
+   작업 주석이 아니다.
+8. 원문에 있던 `****`·`○○○` 같은 마스킹이 출력에 그대로 남아 있지 않은가?"""
 
 MINIMAL_GENERATOR_USER_TEMPLATE = """\
-[원문]
+$mask_section[원문 — block $block_count개. 출력도 $block_count개 + 표제부 1개다]
 $source_document
 """
 
@@ -310,7 +283,29 @@ SUBCLAUSE_EXAMPLES: Mapping[SubclauseKey, tuple[str, ...]] = MappingProxyType(
 )
 
 
-def render_minimal_clause_section(subclause_key: SubclauseKey) -> str:
+def select_minimal_ground(subclause_key: SubclauseKey, business_context: str) -> int:
+    """심을 자료 하나를 ``document_patterns``에서 결정론적으로 고른다.
+
+    **왜 ``includes``가 아닌가.** 두 목록은 짝이 맞지 않는다 — 16개 세부유형 중
+    10개가 개수부터 다르고, 개수가 같은 ``audit_inspection``조차 B가 한쪽은
+    `확정 전 지적사항`, 다른 쪽은 `확인서·문답서`다. 최소 생성기는 자료마다 붙은
+    **실제 문장 예시**로 값의 모양을 가르치므로, 예시가 달린 쪽을 근거로 삼는다.
+
+    **왜 난수가 아닌가.** 같은 원문·같은 목표면 같은 자료가 걸려야 재현이 된다.
+    업무 맥락이 원문마다 다르므로 코퍼스 전체로는 자료가 고루 퍼진다.
+    """
+
+    patterns = SUBCLAUSE_GENERATION_RULES[subclause_key].document_patterns
+    digest = hashlib.sha256(
+        "\x00".join((subclause_key.value, business_context)).encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest, "big") % len(patterns)
+
+
+def render_minimal_clause_section(
+    subclause_key: SubclauseKey,
+    ground_index: int | None = None,
+) -> str:
     """조항 하나를 **사례 중심**으로 렌더링한다.
 
     현행 ``render_target_clause_section``과 담는 정보는 같지만 무게가 다르다 —
@@ -328,35 +323,220 @@ def render_minimal_clause_section(subclause_key: SubclauseKey) -> str:
     rule = SUBCLAUSE_GENERATION_RULES[subclause_key]
     examples = SUBCLAUSE_EXAMPLES[subclause_key]
 
+    # v9에서 호 단위 위험 극대화 절을 뺐다. v7이 그 절을 이 자리로 옮기자
+    # 중복이 드러났다 — 제6호는 같은 말이 세 번이었다: 정의("인사정보가 직접
+    # 연결되어"), 위험 극대화("같은 문장·같은 표 행에서 직접 연결한다"),
+    # instruction("성명과 개인정보를 같은 행·같은 문장에서 직접 연결한다").
+    #
+    # 셋 중 가장 성긴 것이 호 단위다. 호 하나에 세부유형이 둘~다섯이라 그 층은
+    # 공통분모만 말할 수 있는데, 그 공통분모는 이미 세부유형 정의와 instruction이
+    # 더 구체적으로 말하고 있었다. 값의 모양은 예시가 보여 준다 —
+    # ``김서연, 910417-2******, 자택 …, 휴대전화 010-…``가 한 문장인 것이
+    # "직접 연결한다"는 지시보다 정확하다.
+    #
+    # 이 파일의 전제("규칙 대신 예시")를 호 층에서만 안 지키고 있었던 셈이다.
     lines = [
         f"[조항] 정보공개법 제9조 제{clause.value}호 — {definition.label}",
         f"{definition.definition}",
         "",
         f"{rule.instruction}",
         "",
-        "아래 예시중 문맥에 어울리는 한가지를 적용해서",
-        "예시와 유사한 형식으로 값을 생성해서 넣는다.",
-        "",
     ]
-    for pattern, example in zip(rule.document_patterns, examples):
+    pairs = list(zip(GROUND_IDS, rule.document_patterns, examples))
+    if ground_index is None:
+        lines.append("아래 예시중 문맥에 어울리는 한가지를 적용해서")
+        lines.append("예시와 유사한 형식으로 값을 생성해서 넣는다.")
+        lines.append("")
+    else:
+        # 하나만 남긴다. 자료를 여럿 심으면 성립에 필요한 것보다 많은 탐지
+        # 신호가 들어가 생성 문서가 실제 문서보다 쉬워진다.
+        pairs = [pairs[ground_index]]
+        lines.append(
+            f"아래 자료(조건{GROUND_IDS[ground_index]}) 하나를 예시와 유사한 "
+            "형식으로 값을 생성해 넣는다."
+        )
+        lines.append("이 조항은 자료 하나만 있어도 성립하므로 다른 자료를 일부러")
+        lines.append("더 넣지 않는다.")
+        lines.append("")
+    for ground_id, pattern, example in pairs:
         name, _, items = pattern.partition(":")
-        lines.append(f"- {name.strip()} — {items.strip()}")
+        lines.append(f"- 조건{ground_id}. {name.strip()} — {items.strip()}")
         lines.append(f"    예) {example}")
     return "\n".join(lines)
 
 
-def render_minimal_generator_system_prompt(subclause_key: SubclauseKey) -> str:
+#: 세 단계를 필드 순서로 강제한다. 계획을 문서보다 **앞** 필드에 적게 하면 그
+#: 계획을 따라 쓰게 되고, 이력을 **뒤**에 두면 이미 쓴 것을 가리키게 된다.
+#: 순서를 뒤집으면 아직 쓰지 않은 문서의 이력을 지어낸다.
+#:
+#: 이력이 ``document`` 밖에 있는 이유는 ``GeneratorResponse`` 주석에 있다 —
+#: blind 채점자가 그 문서만 받아 채점하므로 안에 넣으면 정답지가 된다.
+MINIMAL_GENERATOR_OUTPUT_ORDER = """\
+[출력 순서]
+아래 순서대로 필드를 채운다. 앞 필드에 적은 것은 뒤에서 바꾸지 않는다.
+1. kept_structure — [원문 구조]에서 그대로 지킬 골격을 먼저 적는다.
+2. ground_plan — 위 [조항]의 자료를 [바꿀 수 있는 자리] 중 어디에 넣을지 정하고,
+   왜 그 자리가 자연스러운지 한 문장으로 쓴다. **여기 적은 자리 말고는 바꾸지
+   않는다** — 나머지 block은 원문 그대로 옮긴다.
+3. document.blocks — [원문]의 `[BLOCK …]` ID를 그대로 block_id로 삼아 전부, 같은
+   순서로 담는다. 새로 만드는 block은 맨 앞 표제부 key_value 하나뿐이다.
+   - 2번에서 지정한 자리가 아니면 **글자 그대로 옮긴다.** 요약해 합치지 않고,
+     목록 항목이 12개면 12개를, 표는 행과 열을 그대로, 절·항목 제목은 [조항]과
+     무관해 보여도 남긴다.
+   - 원문의 `****`·`○○○`는 옮겨 적을 글자가 아니라 **값이 들어갈 자리**다.
+     문맥이 받는 값을 새로 지어 채우고 마스킹 문자는 남기지 않는다. 가려지기 전
+     원값은 추측하지 않는다.
+4. document.title — **3번에서 쓴 본문을 읽고** 이 문서가 실제로 달았을 제목을
+   적는다. 원문 제목을 그대로 두거나 값이 달라진 만큼만 고친다. `변형본`·
+   `레드팀 샘플`처럼 **이 작업을 설명하는 말**은 붙이지 않는다.
+5. planted_grounds — 실제로 성립한 자료의 기호를 적는다. 기본은 위에서 지정한
+   하나이고, 업무 흐름상 다른 자료까지 실제로 서 있으면 함께 적는다.
+6. transformations — 원문과 달라진 자리를 block_id로 짚고 무엇으로 바꿨는지와 왜
+   바꿨는지를 적는다. 조항을 세우려고 바꾼 것이면 ground_id에 그 기호를, 서식
+   정리면 비운다. 바꾼 자리가 여럿이면 전부 적는다."""
+
+
+def render_minimal_generator_system_prompt(
+    subclause_key: SubclauseKey,
+    ground_index: int | None = None,
+) -> str:
+    # 출력 순서 절은 항상 싣는다. v6까지는 ground를 지정했을 때만 붙였는데,
+    # 이제 이 절이 보존 규칙(그대로 옮겨 적기·마스킹·title)을 담고 있어 빠지면
+    # 프롬프트가 무엇을 지켜야 하는지 말하지 않는 물건이 된다.
     return Template(MINIMAL_GENERATOR_SYSTEM_TEMPLATE).substitute(
-        escalation_section=CLAUSE_ESCALATION_RULES[
-            clause_of_subclause(subclause_key)
-        ],
-        clause_section=render_minimal_clause_section(subclause_key),
+        clause_section=render_minimal_clause_section(
+            subclause_key,
+            ground_index=ground_index,
+        ),
+        output_order=MINIMAL_GENERATOR_OUTPUT_ORDER,
         checklist=MINIMAL_GENERATOR_CHECKLIST,
     )
 
 
-def render_minimal_generator_user_prompt(source_document: str) -> str:
-    return Template(MINIMAL_GENERATOR_USER_TEMPLATE).substitute(
+MINIMAL_GENERATOR_SOURCE_TEMPLATE = """\
+[원문 구조 — 이 골격은 유지한다]
+$layout_analysis
+
+[바꿀 수 있는 자리 — 의미는 두고 값만 갈아끼운다]
+$available_slots
+이 목록에 없는 block도 **전부 출력에 담는다.** 여기 없다는 것은 "빼도 된다"가
+아니라 "값을 바꾸지 않고 그대로 옮긴다"는 뜻이다.
+
+$mask_section[원문 — block $block_count개. 출력도 $block_count개 + 표제부 1개다]
+$source_document
+"""
+
+
+def count_source_blocks(source_document: str) -> int:
+    """렌더링된 원문에서 ``[BLOCK …]`` 표시 개수를 센다.
+
+    모델에게 "세어 보라"고만 하면 세지 않는다. 세어야 할 수를 미리 주면
+    빠뜨림이 대조 가능한 값이 된다.
+    """
+
+    return source_document.count("[BLOCK ")
+
+
+#: 마스킹 자리 한 줄에 남길 문맥 길이. 자리마다 원문 줄을 통째로 실으면 원문이
+#: 두 번 들어간다 — 158 block짜리 실측에서 마스킹이 68곳이었다.
+_MASK_CONTEXT_CHARS = 60
+
+#: 자리 목록의 상한. 넘으면 개수만 말하고 목록은 자른다. 마스킹이 수십 곳인
+#: 문서에서 목록이 원문보다 길어지는 것을 막는다.
+_MASK_SLOT_LIMIT = 40
+
+
+def find_mask_slots(source_document: str) -> tuple[tuple[str, str], ...]:
+    """렌더링된 원문에서 마스킹이 있는 block을 ``(block_id, 문맥)``으로 뽑는다.
+
+    **모델에게 묻지 않는다.** 마스킹은 정규식으로 확실히 찾히므로 판별기 호출을
+    한 번 더 쓸 이유도, ``MinimalSourceAssessment``에 필드를 늘려 모델이 채우게
+    할 이유도 없다. 원문을 보내기 전에 코드가 뽑아 자리 목록에 얹는다.
+
+    이렇게 두는 것이 프롬프트 문장보다 강한 이유는 ``[BLOCK …]`` 개수와 같다 —
+    자리가 목록으로 서면 모델이 "발견"할 필요가 없고, 빠뜨림이 셀 수 있는 값이
+    된다. 프롬프트의 마스킹 규칙은 그 목록을 어떻게 채울지를 말하는 문장으로
+    남는다.
+
+    패턴은 ``mask_restoration``의 것을 그대로 쓴다. 경계(2자 이상)가 실측으로
+    정해진 값이라 여기서 다시 고르면 두 route가 서로 다른 자리를 마스킹으로
+    보게 된다.
+    """
+
+    slots: list[tuple[str, str]] = []
+    for chunk in source_document.split("\n\n"):
+        head, _, body = chunk.partition("\n")
+        if not head.startswith("[BLOCK ") or not head.endswith("]"):
+            continue
+        match = MASK_PATTERN.search(body)
+        if match is None:
+            continue
+        block_id = head[len("[BLOCK ") : -1]
+        # 마스킹 자리를 가운데 두고 잘라야 무엇이 가려졌는지가 보인다. 앞에서
+        # 자르면 표 한 줄의 마지막 칸이 가려졌을 때 문맥만 남고 자리가 사라진다.
+        start = max(0, match.start() - _MASK_CONTEXT_CHARS // 2)
+        context = body[start : start + _MASK_CONTEXT_CHARS].replace("\n", " ").strip()
+        if start > 0:
+            context = f"…{context}"
+        if start + _MASK_CONTEXT_CHARS < len(body):
+            context = f"{context}…"
+        slots.append((block_id, context))
+    return tuple(slots)
+
+
+def render_mask_slots(source_document: str) -> str:
+    """마스킹 자리를 [바꿀 수 있는 자리]와 같은 층위의 목록으로 렌더링한다."""
+
+    slots = find_mask_slots(source_document)
+    if not slots:
+        return ""
+    lines = [
+        f"[마스킹 자리 — {len(slots)}곳. 전부 값으로 채운다]",
+        "원문이 부분공개라 이 block에는 가려진 자리가 있다. 옮겨 적을 글자가",
+        "아니라 값이 빠진 자리다 — 문맥이 받는 종류의 값을 새로 지어 채운다.",
+        # 실측([267] 체크리스트, 마스킹 8곳): 전부 채워졌지만 같은 `조○○ 사무관`이
+        # p1:b8에서는 조은진, p1:b19에서는 조민재가 됐다. 자리마다 독립으로 채우면
+        # 한 문서 안에서 같은 사람이 둘이 된다.
+        "같은 표기가 여러 자리에 나오면(`조○○ 사무관`) 같은 사람·같은 대상으로",
+        "보고 **모두 같은 값으로** 채운다.",
+    ]
+    for block_id, context in slots[:_MASK_SLOT_LIMIT]:
+        lines.append(f"- {block_id} — {context}")
+    if len(slots) > _MASK_SLOT_LIMIT:
+        lines.append(
+            f"- (그 밖에 {len(slots) - _MASK_SLOT_LIMIT}곳 더 있다. 목록에 없어도"
+            " 마스킹은 전부 채운다.)"
+        )
+    return "\n".join(lines)
+
+
+def render_minimal_generator_user_prompt(
+    source_document: str,
+    *,
+    layout_analysis: str | None = None,
+    available_slots: str | None = None,
+) -> str:
+    """판별 결과를 함께 주면 원문 구조를 짚어 준다.
+
+    둘 다 없으면 예전처럼 원문만 넘긴다 — 기존 호출자(``pipeline``의 최소 경로)를
+    그대로 두기 위해서다.
+
+    마스킹 자리는 두 경로 모두에 붙는다. 판별기를 거치지 않는 경로에도 부분공개
+    원문이 들어오고, 그쪽만 자리 목록이 없으면 route에 따라 마스킹이 남는다.
+    """
+
+    mask_section = render_mask_slots(source_document)
+    if layout_analysis is None and available_slots is None:
+        return Template(MINIMAL_GENERATOR_USER_TEMPLATE).substitute(
+            mask_section=f"{mask_section}\n\n" if mask_section else "",
+            block_count=count_source_blocks(source_document),
+            source_document=source_document,
+        )
+    return Template(MINIMAL_GENERATOR_SOURCE_TEMPLATE).substitute(
+        layout_analysis=layout_analysis or "(없음)",
+        available_slots=available_slots or "(없음)",
+        mask_section=f"{mask_section}\n\n" if mask_section else "",
+        block_count=count_source_blocks(source_document),
         source_document=source_document,
     )
 
