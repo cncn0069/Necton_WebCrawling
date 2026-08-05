@@ -116,7 +116,7 @@ def test_row_says_there_was_no_source(template):
     assert row.ref_id is None
     assert row.is_synthetic is True
     assert row.generated_yn == "1"
-    # 생성 평문은 사라지지 않는다 — IR JSON 쪽에 남는다.
+    # 생성 평문은 사라지지 않는다 — 읽을 수 있는 칸으로 간다.
     assert "심의 대상 12건" in row.generated_text
 
 
@@ -167,20 +167,31 @@ def test_snippets_land_in_the_non_disclosure_reason():
     assert "검증 근거:" not in reason
 
 
-def test_batch_json_holds_render_inputs_without_the_body():
+def test_the_three_generated_columns_do_not_repeat_each_other():
+    """평문 / 구조 / 서식이 각자 한 칸씩이다."""
+
     template = TEMPLATES[0]
     frame = case_frame(template, 0)
     row = _row(frame, template, prompt_version="c-track-cot-test")
 
-    payload = json.loads(row.batch_json)
+    # 1. generated_text — 사람이 그냥 읽는 평문. JSON이 아니다.
+    assert row.generated_text.startswith("심의 대상 12건")
+    assert "block_id" not in row.generated_text
+
+    # 2. batch_json — 그 평문을 만든 문서 IR.
+    ir = json.loads(row.batch_json)
+    assert [block["block_id"] for block in ir["blocks"]] == ["b0", "b1"]
+
+    # 3. pdf_renderd_json — 본문 밖에서 서식을 정하는 값만.
+    payload = json.loads(row.pdf_renderd_json)
     assert payload["ordering_agency"] == template.agency
     assert payload["department"] == frame.department
     assert payload["document_form"] == frame.document_form.value
     assert payload["security_grade"] == frame.security_grade
     assert payload["case_index"] == frame.case_index
     assert payload["prompt_version"] == "c-track-cot-test"
-    # 본문은 generated_text가 갖는다. 두 칸에 같은 본문을 두지 않는다.
-    assert "심의 대상 12건" not in row.batch_json
+    assert "심의 대상 12건" not in row.pdf_renderd_json
+    assert "block_id" not in row.pdf_renderd_json
 
 
 def test_military_grade_only_rides_along_when_it_is_one():

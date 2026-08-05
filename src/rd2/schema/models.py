@@ -123,9 +123,9 @@ class Document(BaseModel):
     generated_text: str | None = Field(
         default=None,
         description=(
-            "생성기가 낸 문서 IR을 그대로 직렬화한 JSON (생성 문서만). PDF "
-            "앞에서 실제로 나오는 산출물이 이 JSON이고 블록·표 구조가 여기 "
-            "남는다 — 거기서 파생된 평문은 body_text에 있다."
+            "생성된 문서 본문 평문 (생성 문서만). **JSON이 아니라 그냥 읽히는 "
+            "글이다** — 이 칸을 열었을 때 사람이 무엇이 만들어졌는지 바로 볼 수 "
+            "있어야 한다. 그 평문을 만든 블록·표 구조는 batch_json에 있다."
         ),
     )
     ref_id: int | None = Field(
@@ -138,9 +138,17 @@ class Document(BaseModel):
     batch_json: str | None = Field(
         default=None,
         description=(
-            "PDF 렌더에 필요한 값들을 담은 JSON (생성 문서만). 본문은 넣지 "
-            "않는다 — 같은 행의 generated_text가 이미 문서 IR을 통째로 갖고 "
-            "있어 두 칸에 같은 본문을 두면 둘이 갈라질 자리가 생긴다. 여기 "
+            "생성기가 낸 문서 IR을 그대로 직렬화한 JSON (생성 문서만). PDF "
+            "앞에서 실제로 나오는 산출물이 이 JSON이고 블록·표 구조가 여기 "
+            "남는다 — 거기서 파생된 평문은 generated_text에 있다."
+        ),
+    )
+    pdf_renderd_json: str | None = Field(
+        default=None,
+        description=(
+            "PDF 렌더에 필요한 값들을 담은 JSON (생성 문서만). 본문도 구조도 "
+            "넣지 않는다 — 그 둘은 generated_text/batch_json이 이미 갖고 있고, "
+            "같은 값을 두 칸에 두면 한쪽만 고쳐지는 자리가 생긴다. 여기 "
             "들어가는 것은 본문 밖에서 서식을 정하는 값이다: 문서형식(템플릿 "
             "선택), 비밀등급 표기, 표제부에 찍히는 기관·부서, 그리고 어느 "
             "템플릿·사건 프레임에서 나왔는지의 좌표."
