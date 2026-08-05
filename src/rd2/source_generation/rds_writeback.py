@@ -204,7 +204,7 @@ def non_disclosure_reason(
 
     if snippets:
         # block_id를 앞에 세운다. 사유만 읽고도 본문의 어느 자리를 펴 봐야
-        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``generated_text``의
+        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``pdf_renderd_json``의
         # 같은 block_id로 그대로 찾아진다.
         parts.append(
             "근거 block: "
@@ -223,7 +223,7 @@ def generated_document_json(
     *,
     contract_version: str | None = None,
 ) -> str:
-    """``batch_json`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
+    """``pdf_renderd_json`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
 
     **평문이 아니라 JSON이다.** PDF 앞에서 생성기가 실제로 내놓는 산출물이 이
     JSON이고(블록·표·key-value 구조), 평문 본문은 거기서 파생된다. 파생된 쪽은
@@ -348,7 +348,8 @@ def build_generated_document(
     input_prompt: str | None = None,
     content: str | None = None,
     body_file_path: str | None = None,
-    pdf_renderd_json: Mapping[str, object] | None = None,
+    batch_json: Mapping[str, object] | None = None,
+    render_envelope: Mapping[str, object] | None = None,
     store_generated_body_text: bool = True,
     document_contract_version: str | None = None,
 ) -> Document:
@@ -380,10 +381,14 @@ def build_generated_document(
     고쳐지는 자리가 생긴다.
 
         ``generated_text``     사람이 그냥 읽는 평문 본문
-        ``batch_json``         그 평문을 만든 문서 IR(블록·표 구조) JSON
-        ``pdf_renderd_json``   본문 밖에서 서식을 정하는 값 (인자로 받는다)
+        ``pdf_renderd_json``   렌더러가 읽는 것 — 문서 IR과 그 서식 결정값
+        ``batch_json``         배치 좌표와 서식을 정하는 값 (인자로 받는다)
 
-    ``pdf_renderd_json``을 주지 않으면 NULL로 남는다.
+    ``batch_json``을 주지 않으면 NULL로 남는다.
+
+    ``render_envelope``을 주면 그것이 ``pdf_renderd_json``이 된다. IR만으로는
+    렌더러가 서식을 못 고르기 때문이다 — 문서유형과 등급 표기가 IR 밖에 있다
+    (``c_track_render_envelope``). 주지 않으면 지금까지처럼 IR만 담는다.
 
     ``body_file_path``는 렌더된 PDF 경로다. upsert가 렌더 이후인 하네스는 그 시점에
     경로를 이미 쥐고 있으므로 여기서 함께 넣고, 행을 렌더보다 먼저 넣는 최소
@@ -391,7 +396,7 @@ def build_generated_document(
     어느 쪽이든 렌더가 안 된 문서는 경로가 NULL인 것으로 그 행이 식별된다.
 
     ``document_contract_version``은 옛 배치 기록을 현재 계약으로 맞춰 읽었을 때
-    원래 버전을 ``batch_json``의 IR에 되살리는 자리다 —
+    원래 버전을 ``pdf_renderd_json``의 IR에 되살리는 자리다 —
     ``generated_document_json`` 참고. 새로 생성한 문서에는 줄 필요가 없다.
 
     ``ref_id``는 원문 행 id다. ``source_row``가 없으면 참조할 행 자체가 없으므로
@@ -458,13 +463,17 @@ def build_generated_document(
         input_prompt=input_prompt,
         content=content,
         generated_text=document.body_text,
-        batch_json=generated_document_json(
-            document, contract_version=document_contract_version
+        pdf_renderd_json=(
+            generated_document_json(
+                document, contract_version=document_contract_version
+            )
+            if render_envelope is None
+            else json.dumps(dict(render_envelope), ensure_ascii=False)
         ),
         ref_id=source_row.id if source_row is not None else None,
-        pdf_renderd_json=(
+        batch_json=(
             None
-            if pdf_renderd_json is None
-            else json.dumps(dict(pdf_renderd_json), ensure_ascii=False, sort_keys=True)
+            if batch_json is None
+            else json.dumps(dict(batch_json), ensure_ascii=False, sort_keys=True)
         ),
     )

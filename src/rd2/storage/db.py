@@ -77,15 +77,14 @@ _EXTRA_COLUMNS: list[tuple[str, str]] = [
     ("generated_yn", "BINARY(1)"),
     # 참조한 원문의 documents.id. RDS에 FK도 인덱스도 없어 여기서도 걸지 않는다.
     ("ref_id", "INT"),
-    # 생성 문서의 구조(IR JSON). **위 다섯과 달리 RDS에 아직 없다**(2026-08-05
-    # 실측: ingest_data.documents 28컬럼) — 이 정의가 먼저고 마이그레이션이
-    # ADD한다. 전에는 이 값이 generated_text에 있었는데, 그 칸은 사람이 그냥
-    # 읽을 수 있는 평문 자리로 돌리고 구조는 이쪽으로 옮겼다. 8KB대가 나와서
-    # generated_text와 같은 LONGTEXT로 둔다.
-    ("batch_json", "LONGTEXT"),
-    # PDF 렌더 입력. 본문도 구조도 넣지 않는다 — 서식을 정하는 값만 온다
-    # (models.py의 pdf_renderd_json 설명 참고). 실측 1KB 남짓이라 TEXT면 된다.
-    ("pdf_renderd_json", "TEXT"),
+    # 배치 좌표·서식 값. **아래 둘 다 RDS에 아직 없다**(2026-08-05 실측:
+    # ingest_data.documents 28컬럼) — 이 정의가 먼저고 마이그레이션이 ADD한다.
+    # 본문도 구조도 넣지 않아 실측 469B라 TEXT면 된다.
+    ("batch_json", "TEXT"),
+    # PDF 렌더가 읽는 문서 IR JSON. 전에는 이 값이 generated_text에 있었는데,
+    # 그 칸은 사람이 그냥 읽을 수 있는 평문 자리로 돌리고 구조는 이쪽으로
+    # 옮겼다. 실측 4.8KB라 generated_text와 같은 LONGTEXT로 둔다.
+    ("pdf_renderd_json", "LONGTEXT"),
 ]
 
 #: 타입 뒤에 붙는 제약·기본값. ``_EXTRA_COLUMNS``의 타입 문자열에 섞으면
@@ -103,8 +102,8 @@ _COLUMN_COMMENTS: dict[str, str] = {
     "generated_text": "생성된 텍스트",
     "generated_yn": "생성된 문서인지 여부 (0 /1 )",
     "ref_id": "민감으로 생성된 문서일때 본문을 참조한 문서 ",
-    "batch_json": "생성 문서 구조 IR JSON (블록/표/key-value)",
-    "pdf_renderd_json": "PDF 렌더 입력 JSON (문서형식/등급/표제부/템플릿 좌표)",
+    "batch_json": "배치 좌표·서식 JSON (문서형식/등급/표제부/템플릿 좌표)",
+    "pdf_renderd_json": "PDF 렌더가 읽는 문서 IR JSON (블록/표/key-value)",
 }
 
 def _encode_for_storage(value: object) -> object:
