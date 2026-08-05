@@ -13,8 +13,10 @@ from rd2.generators.document_security_marking import (
     resolve_security_marking,
 )
 from rd2.generators.confidential_security_templates import (
+    CONFIDENTIAL_SECURITY_TEMPLATES,
     CONFIDENTIAL_SECURITY_TEMPLATE_SLUGS,
     SECURITY_MARK_HEIGHT_PT,
+    draw_confidential_security_template,
 )
 from rd2.source_generation.classification_taxonomy import ClauseNumber, SubclauseKey
 from rd2.source_generation.contracts import (
@@ -183,8 +185,8 @@ def test_c_document_without_grade_gets_monochrome_confidential_skin(
 
     marking = manifest[0]["security_marking"]
     assert marking["kind"] == "confidential"
-    assert marking["asset"] == "logo/synthetic_confidential.png"
-    assert marking["asset_kind"] == "synthetic_security_stamp"
+    assert marking["asset"] == "logo/보안등급_3급_비밀.png"
+    assert marking["asset_kind"] == "security_classification_stamp"
     assert marking["security_template"]["slug"] == "03_minimal_mark"
     assert marking["palette"] == {
         "mode": "monochrome_dark",
@@ -228,8 +230,29 @@ def test_all_ten_confidential_templates_render_once_and_cycle_by_seed(
     assert tuple(selected) == CONFIDENTIAL_SECURITY_TEMPLATE_SLUGS
     assert assets == {
         "logo/대외비.png",
-        "logo/synthetic_confidential.png",
+        "logo/보안등급_3급_비밀.png",
     }
+
+
+def test_confidential_templates_do_not_add_textual_header_or_footer_labels() -> None:
+    """분류 영문 문구는 보안 스킨이 아닌 실제 마크 자산으로만 표시한다."""
+
+    for template in CONFIDENTIAL_SECURITY_TEMPLATES:
+        document = fitz.open()
+        try:
+            page = document.new_page(width=595, height=842)
+            placement = draw_confidential_security_template(
+                page,
+                template=template,
+                mark_bytes=None,
+                mark_ratio=None,
+            )
+
+            assert page.get_text() == ""
+            assert placement["layout"] == template.layout
+            assert "english_label" not in template.to_dict()
+        finally:
+            document.close()
 
 
 def test_prepend_cover_keeps_existing_body_page_bytes_semantically(
