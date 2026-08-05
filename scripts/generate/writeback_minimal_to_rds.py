@@ -259,8 +259,9 @@ def _insert_rows(args, files: list[Path], store: DocumentStore | None) -> int:
                 content=record["source_text"],
                 # 렌더가 아직 안 돌았다. 이 칸은 --fill-pdf-path가 메운다.
                 body_file_path=None,
-                # 맞춰 읽은 옛 계약 버전을 generated_text JSON에 되살린다.
-                document_contract_version=contract_version or None,
+                # 맞춰 읽은 옛 계약 버전은 행에 남지 않는다 — 그 값이 되살아나던
+                # ``pdf_renderd_json``이 스키마에서 빠졌다(2026-08-05). 어느
+                # 버전에서 왔는지는 아래 요약에만 남는다.
             )
         except Exception as exc:  # noqa: BLE001 - 한 건이 배치를 끊지 않는다
             print(f"  [실패] {document_id} — 조립: {type(exc).__name__}: {exc}")

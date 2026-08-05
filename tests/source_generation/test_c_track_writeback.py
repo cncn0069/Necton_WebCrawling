@@ -36,6 +36,10 @@ from rd2.source_generation.contracts import (
     ConfidentialSnippet,
     GeneratedDocumentIR,
 )
+from rd2.source_generation.doc_type_bucket import (
+    DOC_TYPE_BUCKETS,
+    doc_type_for_form,
+)
 from rd2.source_generation.rds_writeback import (
     RowMetadata,
     SourceRow,
@@ -100,10 +104,28 @@ def test_metadata_comes_from_the_case_frame(template):
     assert metadata.ordering_agency == template.agency
     assert metadata.department == frame.department
     assert metadata.unit_task == frame.subject
-    assert metadata.doc_type == frame.document_form.value
     # 사건 프레임에 날짜축도 분류체계도 없다. 지어내지 않는다.
     assert metadata.production_date is None
     assert metadata.subject_category is None
+    # doc_type은 여기서 정하지 않는다. 이 칸을 채우면 형식→6칸 어댑터보다
+    # 먼저 읽혀 C트랙만 어댑터를 우회한다.
+    assert metadata.doc_type is None
+
+
+@pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.agency)
+def test_row_doc_type_is_one_of_the_six_buckets(template):
+    """행에 나가는 값은 형식 17종이 아니라 6칸 중 하나다."""
+
+    frame = case_frame(template, 0)
+    row = _row(frame, template)
+
+    assert row.doc_type == doc_type_for_form(frame.document_form)
+    assert row.doc_type in DOC_TYPE_BUCKETS
+    # 합쳐도 원래 형식은 생성물 envelope에 그대로 남는다 — 되짚을 수 있다.
+    envelope = json.loads(row.generated_text)["result"]
+    assert envelope["source_classification"]["document_form"] == (
+        frame.document_form.value
+    )
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.agency)
@@ -167,31 +189,32 @@ def test_snippets_land_in_the_non_disclosure_reason():
     assert "검증 근거:" not in reason
 
 
-def test_the_three_generated_columns_do_not_repeat_each_other():
-    """평문 / 구조 / 서식이 각자 한 칸씩이다."""
+def test_generated_text_carries_the_whole_result_envelope():
+    """생성물은 ``generated_text`` 한 칸으로 완결된다.
+
+    본문만 두면 읽는 쪽이 이 문서가 무엇인지 모른다 — 문서형식과 조항이 IR
+    밖에 있다. 세 칸으로 나눠 두면 조인해야 하고 그중 하나만 비어도 조용히
+    반쪽이 된다(2026-08-05 사용자 결정).
+    """
 
     template = TEMPLATES[0]
     frame = case_frame(template, 0)
     row = _row(frame, template, prompt_version="c-track-cot-test")
 
-    # 1. generated_text — 사람이 그냥 읽는 평문. JSON이 아니다.
-    assert row.generated_text.startswith("심의 대상 12건")
-    assert "block_id" not in row.generated_text
+    payload = json.loads(row.generated_text)
+    result = payload["result"]
+    assert result["generation_route"] == "fully_synthetic"
+    assert result["source_classification"]["document_form"] == frame.document_form.value
+    assert result["generation_target"]["subclause_key"] == template.subclause_key.value
+    assert [
+        block["block_id"] for block in result["generated_document"]["blocks"]
+    ] == ["b0", "b1"]
+    # 평문은 envelope의 IR이 만든 값이다. 같은 값을 두 칸에 두지 않는다.
+    assert row.body_text is None
 
-    # 2. pdf_renderd_json — 그 평문을 만든 문서 IR(렌더러가 읽는 값).
-    ir = json.loads(row.pdf_renderd_json)
-    assert [block["block_id"] for block in ir["blocks"]] == ["b0", "b1"]
-
-    # 3. batch_json — 본문 밖에서 배치 좌표·서식을 정하는 값만.
-    payload = json.loads(row.batch_json)
-    assert payload["ordering_agency"] == template.agency
-    assert payload["department"] == frame.department
-    assert payload["document_form"] == frame.document_form.value
-    assert payload["security_grade"] == frame.security_grade
-    assert payload["case_index"] == frame.case_index
-    assert payload["prompt_version"] == "c-track-cot-test"
-    assert "심의 대상 12건" not in row.batch_json
-    assert "block_id" not in row.batch_json
+    # 나머지 두 칸은 아예 없다 — 이 행의 생성물이 어디 있는지가 갈리면 안 된다.
+    assert not hasattr(row, "pdf_renderd_json")
+    assert not hasattr(row, "batch_json")
 
 
 def test_military_grade_only_rides_along_when_it_is_one():

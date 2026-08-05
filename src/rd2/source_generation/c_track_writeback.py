@@ -62,7 +62,9 @@ def c_track_generation_target(frame: CaseFrame) -> GenerationTarget:
 
     ``security_grade``는 군사기밀 등급(1~3급)일 때만 ``military_secret_grade``에
     싣는다. 비군사기관 축의 값은 '대외비'인데 그건 군사기밀 등급이 아니라 문서
-    표기라 계약이 받지 않는다 — 그 값은 ``batch_json``으로만 간다.
+    표기라 계약이 받지 않는다. 그 값이 가던 ``batch_json``이 없어졌으므로
+    '대외비'는 이제 행에 남지 않는다 — 좌표(``source_url``의 seed·case_index)로
+    프레임을 다시 세우면 나온다.
     """
 
     clause_no = clause_of_subclause(frame.subclause_key)
@@ -101,64 +103,40 @@ def c_track_row_metadata(frame: CaseFrame) -> RowMetadata:
 
     ``production_date``도 비운다. 사건 프레임에 날짜축이 없다. 지어내면 그
     날짜로 정렬·필터한 결과가 조용히 틀린다.
+
+    ``doc_type``도 여기서 채우지 않는다. 예전에는 ``frame.document_form.value``를
+    실었는데, 그 값이 ``build_generated_document``에서 형식→6칸 어댑터
+    (``doc_type_bucket``)보다 **먼저** 읽히는 자리라 C트랙만 어댑터를 우회했다.
+    형식은 ``document_form`` 인자로 이미 넘어가므로 이 칸을 비워 두면 컬럼 값이
+    한 곳에서만 정해진다.
     """
 
     return RowMetadata(
         ordering_agency=frame.agency,
         department=frame.department,
         unit_task=frame.subject,
-        doc_type=frame.document_form.value,
     )
 
 
-def c_track_batch_json(
-    template: CTrackTemplate,
-    frame: CaseFrame,
-    *,
-    seed: int,
-    prompt_version: str | None = None,
-) -> dict[str, Any]:
-    """PDF 렌더가 본문 **밖에서** 필요로 하는 값들.
-
-    본문도 구조도 넣지 않는다 — 같은 행의 ``generated_text``가 평문을,
-    ``pdf_renderd_json``이 문서 IR을 갖고 있다. 여기 있는 것은 그 IR을 어떤
-    서식으로 앉힐지를 정하는 값이다:
-    문서형식(템플릿 선택), 등급 표기(대외비/Ⅰ~Ⅲ급 마크), 표제부의 기관·부서,
-    그리고 어느 전개에서 나온 건인지의 좌표.
-
-    좌표를 함께 두는 이유는 렌더가 아니라 **되짚기** 때문이다. 서식이 이상한
-    PDF를 봤을 때 그 행만으로 같은 프레임을 다시 전개할 수 있어야 한다.
-    """
-
-    payload: dict[str, Any] = {
-        "document_form": frame.document_form.value,
-        "document_name": frame.subject_case.document_name,
-        "security_grade": frame.security_grade,
-        "ordering_agency": frame.agency,
-        "department": frame.department,
-        "subject": frame.subject,
-        "stage": frame.stage,
-        "legal_basis": f"9-1-{template.clause_no.value}",
-        "subclause_key": template.subclause_key.value,
-        "template_version": C_TRACK_TEMPLATE_VERSION,
-        "seed": seed,
-        "case_index": frame.case_index,
-        "slot_values": dict(frame.slot_values),
-    }
-    if prompt_version:
-        payload["prompt_version"] = prompt_version
-    return payload
-
-
-def c_track_render_envelope(
+def c_track_result_envelope(
     frame: CaseFrame,
     document: GeneratedDocumentIR,
     *,
     contract_version: str | None = None,
 ) -> dict[str, Any]:
-    """PDF 렌더러가 읽는 ``result`` envelope.
+    """이 행의 생성물 전체를 담는 ``result`` envelope. ``generated_text``로 간다.
 
-    렌더러는 문서 IR만으로는 서식을 못 고른다 — 어떤 문서유형인지
+    **한 칸에 모으는 이유.** 소비하는 쪽이 본문만으로는 이 문서가 무엇인지
+    모른다 — 문서형식과 조항이 IR 밖에 있다. 세 칸(평문·IR·좌표)으로 나눠
+    두면 읽는 쪽이 세 칸을 조인해야 하고, 그중 하나만 비어도 조용히 반쪽이
+    된다. envelope 하나로 두면 그 행의 생성물은 그 칸 하나로 완결된다
+    (2026-08-05 사용자 결정).
+
+    이름이 ``render_envelope``이던 때는 이 값이 ``pdf_renderd_json``으로
+    갔다. 가는 칸이 바뀌었으므로 이름도 바꾼다 — 렌더러 전용이 아니다.
+
+    렌더러도 여전히 이 값을 읽으면 된다. 문서 IR만으로는 서식을 못 고른다 —
+    어떤 문서유형인지
     (``source_classification.document_type``)와 어떤 등급 표기를 붙일지
     (``generation_target.military_secret_grade``)가 IR 밖에 있다. 그래서 IR을
     맨몸으로 두지 않고 그 둘을 함께 싸서 한 칸에 담는다.
@@ -239,14 +217,15 @@ def build_c_track_row(
         storage_reasoning=storage_reasoning,
         input_prompt=f"{system_prompt}\n\n{user_prompt}",
         # 참조한 원문이 없다. content/ref_id는 NULL로 남는다.
-        batch_json=c_track_batch_json(
-            template, frame, seed=seed, prompt_version=prompt_version
-        ),
-        render_envelope=c_track_render_envelope(
+        #
+        # ``batch_json``·``pdf_renderd_json``은 주지 않는다 — 둘 다 NULL로
+        # 남는다. 이 행의 생성물은 ``generated_text``의 envelope 하나로 완결되고,
+        # 거기 문서형식·조항·IR이 다 들어 있다(2026-08-05 사용자 결정). 배치
+        # 좌표(부서·단계·슬롯값)는 행에서 빠지지만 ``source_url``의
+        # ``seed``·``case_index``로 같은 프레임을 다시 전개할 수 있다.
+        generated_text_json=c_track_result_envelope(
             frame, document, contract_version=document_contract_version
         ),
-        # 생성 평문은 generated_text가, 구조는 pdf_renderd_json이 갖는다.
         # body_text는 원문 자리이고, C트랙에는 그 원문이 없다.
         store_generated_body_text=False,
-        document_contract_version=document_contract_version,
     )

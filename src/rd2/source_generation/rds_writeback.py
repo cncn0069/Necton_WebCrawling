@@ -43,6 +43,7 @@ from rd2.source_generation.contracts import (
     SensitivePipelineStatus,
     SensitiveVerdict,
 )
+from rd2.source_generation.doc_type_bucket import doc_type_for_form
 
 #: 생성 행의 ``source`` 접두사. 수집분/생성분 구분 자체는 2026-08-04에 추가된
 #: ``data_origin`` 컬럼('O'/'G')이 담당하므로 접두사는 더 이상 유일한 표시가
@@ -204,7 +205,7 @@ def non_disclosure_reason(
 
     if snippets:
         # block_id를 앞에 세운다. 사유만 읽고도 본문의 어느 자리를 펴 봐야
-        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``pdf_renderd_json``의
+        # 하는지 바로 알 수 있어야 하고, 그 자리는 ``generated_text`` envelope의
         # 같은 block_id로 그대로 찾아진다.
         parts.append(
             "근거 block: "
@@ -216,53 +217,6 @@ def non_disclosure_reason(
     if storage_reasoning:
         parts.append(f"저장 사유: {storage_reasoning}")
     return "\n".join(parts)
-
-
-def generated_document_json(
-    document: GeneratedDocumentIR,
-    *,
-    contract_version: str | None = None,
-) -> str:
-    """``pdf_renderd_json`` 컬럼에 들어갈 값 — 생성 문서 IR을 그대로 직렬화한 것.
-
-    **평문이 아니라 JSON이다.** PDF 앞에서 생성기가 실제로 내놓는 산출물이 이
-    JSON이고(블록·표·key-value 구조), 평문 본문은 거기서 파생된다. 파생된 쪽은
-    ``generated_text`` 컬럼에 있으므로 두 컬럼에 같은 평문을 두 번 넣기보다
-    한쪽에 원본 구조를 남긴다 — 렌더가 깨졌을 때 무엇을 만들었는지 되짚거나
-    다른 서식으로 다시 렌더할 근거가 DB 안에 남는다.
-
-    이 값이 ``generated_text``에 있던 시절이 있었다(2026-08-05 이전). 그 칸을
-    열었을 때 사람이 문서를 그냥 읽을 수 없다는 것이 바뀐 이유다.
-
-    ``exclude_computed_fields=True``로 계산 필드(``body_text``)를 뺀다. 배치
-    기록(``documents/*.json``의 ``generation.document``)이 같은 방식으로 직렬화
-    되므로 DB 값과 파일 값이 글자 단위로 같고, 컬럼 안에 본문 평문이 한 번 더
-    복사되지도 않는다.
-
-    ``contract_version``은 **옛 기록을 되쓸 때만** 준다. ``GeneratedDocumentIR``의
-    그 필드는 ``Literal``이라 옛 배치의 산출물은 현재 값으로 맞춰야 파싱되는데
-    (``writeback_minimal_to_rds._generated_document``), 그 값이 그대로 직렬화되면
-    행에는 "2.3.0 계약으로 만든 문서"라는 거짓이 남는다. 계약 버전을 담는 컬럼이
-    없던 시절에는 파싱용 임시 값이라 새어 나갈 곳이 없었지만, 이 JSON이 컬럼이 된
-    지금은 원래 버전을 되살려 넣어야 한다.
-    """
-
-    dumped = document.model_dump(mode="json", exclude_computed_fields=True)
-    if contract_version:
-        dumped["contract_version"] = contract_version
-    return json.dumps(dumped, ensure_ascii=False)
-
-
-# C트랙(3단계 경로)에는 아직 이 자리에 해당하는 게이트가 없다.
-#
-# ``should_commit_c_track``을 두었다가 뺐다(2026-08-05). 거르는 근거가
-# ``CTrackCoTResponse.drift_markers``(낱말 목록)였는데 A/B/C 대조 15회에서
-# 정밀도 18%였고, 잘 쓴 문장에 더 잘 붙어 켜두면 좋은 문서를 더 많이 버렸다 —
-# 근거는 ``contracts.py``의 그 자리에 남겼다.
-#
-# 대신 세울 지표 후보는 (1) 한 줄에 붙은 빈 곳의 목록, (2) 상대를 주어로 끝나는
-# 문형이다. 둘 다 15건에 아직 안 돌려봤다. 그때까지 C트랙은 전량이 코퍼스
-# 후보이고, 거르는 판단은 사람이 한다.
 
 
 def should_commit(
@@ -348,10 +302,8 @@ def build_generated_document(
     input_prompt: str | None = None,
     content: str | None = None,
     body_file_path: str | None = None,
-    batch_json: Mapping[str, object] | None = None,
-    render_envelope: Mapping[str, object] | None = None,
+    generated_text_json: Mapping[str, object] | None = None,
     store_generated_body_text: bool = True,
-    document_contract_version: str | None = None,
 ) -> Document:
     """승인된 생성 문서를 ``documents`` 행으로 조립한다.
 
@@ -377,27 +329,29 @@ def build_generated_document(
     호출자가 프롬프트를 손에 쥐고 있지 않을 수 있고(재조립 경로), 그때 빈 문자열을
     넣으면 "프롬프트 없이 만든 문서"와 구분되지 않는다.
 
-    생성물은 세 칸으로 나뉜다. **같은 값을 두 칸에 두지 않는다** — 두면 한쪽만
-    고쳐지는 자리가 생긴다.
+    **생성물은 ``generated_text`` 한 칸이다.** 잠시 세 칸이던 때가 있었다 —
+    평문은 ``generated_text``, 문서 IR은 ``pdf_renderd_json``, 배치 좌표는
+    ``batch_json``. 그 둘은 RDS에 ADD되기 전에 스키마에서 빠졌다(2026-08-05
+    사용자 결정). 읽는 쪽이 세 칸을 조인해야 했고 그중 하나만 비어도 조용히
+    반쪽이 됐기 때문이다.
 
-        ``generated_text``     사람이 그냥 읽는 평문 본문
-        ``pdf_renderd_json``   렌더러가 읽는 것 — 문서 IR과 그 서식 결정값
-        ``batch_json``         배치 좌표와 서식을 정하는 값 (인자로 받는다)
+    ``generated_text_json``을 주면 이 칸이 평문이 아니라 그 값을 직렬화한
+    JSON이 된다. 소비하는 쪽이 본문만이 아니라 **문서유형·조항·IR까지 한
+    칸에서** 읽어야 하는 경로를 위한 자리이고, C트랙이 그렇게 쓴다
+    (``c_track_result_envelope``). 주지 않으면 지금까지처럼 평문이 들어간다.
 
-    ``batch_json``을 주지 않으면 NULL로 남는다.
-
-    ``render_envelope``을 주면 그것이 ``pdf_renderd_json``이 된다. IR만으로는
-    렌더러가 서식을 못 고르기 때문이다 — 문서유형과 등급 표기가 IR 밖에 있다
-    (``c_track_render_envelope``). 주지 않으면 지금까지처럼 IR만 담는다.
+    평문이 사라지는 것이 아니다 — envelope의 IR이 그 평문을 만든 원본이므로,
+    같은 값을 두 칸에 두지 않는다는 규약이 여기서도 그대로다.
 
     ``body_file_path``는 렌더된 PDF 경로다. upsert가 렌더 이후인 하네스는 그 시점에
     경로를 이미 쥐고 있으므로 여기서 함께 넣고, 행을 렌더보다 먼저 넣는 최소
     프롬프트 루트는 None으로 둔 뒤 ``DocumentStore.set_body_file_path``로 채운다.
     어느 쪽이든 렌더가 안 된 문서는 경로가 NULL인 것으로 그 행이 식별된다.
 
-    ``document_contract_version``은 옛 배치 기록을 현재 계약으로 맞춰 읽었을 때
-    원래 버전을 ``pdf_renderd_json``의 IR에 되살리는 자리다 —
-    ``generated_document_json`` 참고. 새로 생성한 문서에는 줄 필요가 없다.
+    옛 계약 버전을 받는 인자는 여기 없다. 그 값이 되살아나던 자리가
+    ``pdf_renderd_json``이었고 그 칸이 없어졌기 때문이다. IR을 싣는 경로는
+    envelope을 만들 때 스스로 되살린다(``c_track_result_envelope``의
+    ``contract_version``) — 되살릴 곳을 아는 쪽이 되살린다.
 
     ``ref_id``는 원문 행 id다. ``source_row``가 없으면 참조할 행 자체가 없으므로
     (로컬 파일 입력) None이 된다 — 그 경우 원문 연결은 ``source_url`` 문자열의
@@ -431,9 +385,14 @@ def build_generated_document(
     )
     doc_type = inherited.doc_type
     if not doc_type and document_form is not None:
-        # 수집 라벨이 없으면 문서 형식을 대신 쓴다. 둘 다 문자열 컬럼이고,
-        # 비워두면 파일 저장 경로(files.py)가 미분류 버킷으로 떨어진다.
-        doc_type = document_form.value
+        # 수집 라벨이 없으면 문서형식을 대신 쓴다. 비워두면 파일 저장 경로
+        # (files.py)가 미분류 버킷으로 떨어진다.
+        #
+        # **형식 값을 그대로 넣지 않는다.** 생성 쪽 17종을 이 컬럼의 6칸으로
+        # 몰아주는 것이 마지막에 붙는 어댑터의 일이다(``doc_type_bucket``).
+        # 원래 형식은 생성물 envelope의 ``source_classification.document_form``
+        # 에 그대로 남아 있으므로 여기서 합쳐도 되짚을 수 있다.
+        doc_type = doc_type_for_form(document_form)
 
     return Document(
         title=document.title,
@@ -462,18 +421,10 @@ def build_generated_document(
         is_synthetic=True,
         input_prompt=input_prompt,
         content=content,
-        generated_text=document.body_text,
-        pdf_renderd_json=(
-            generated_document_json(
-                document, contract_version=document_contract_version
-            )
-            if render_envelope is None
-            else json.dumps(dict(render_envelope), ensure_ascii=False)
+        generated_text=(
+            document.body_text
+            if generated_text_json is None
+            else json.dumps(dict(generated_text_json), ensure_ascii=False)
         ),
         ref_id=source_row.id if source_row is not None else None,
-        batch_json=(
-            None
-            if batch_json is None
-            else json.dumps(dict(batch_json), ensure_ascii=False, sort_keys=True)
-        ),
     )
