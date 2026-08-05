@@ -44,6 +44,46 @@ def test_upsert_stores_document(store):
     assert store.count_documents() == 1
 
 
+def test_upsert_includes_ref_id_without_touching_a_database():
+    class FakeCursor:
+        def __init__(self):
+            self.executed = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            self.executed = (sql, params)
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("unexpected rollback")
+
+    connection = FakeConnection()
+    fake_store = DocumentStore.__new__(DocumentStore)
+    fake_store._conn = connection
+
+    assert fake_store.upsert(_doc(ref_id=42)) is True
+
+    sql, params = connection.cursor_instance.executed
+    columns = sql.partition("(")[2].partition(")")[0].split(", ")
+    assert params[columns.index("ref_id")] == 42
+    assert connection.committed is True
+
+
 def test_upsert_dedup_same_source_url_skipped(store):
     assert store.upsert(_doc()) is True
     assert store.upsert(_doc()) is False  # 동일 source+URL — 중복

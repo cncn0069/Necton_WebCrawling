@@ -40,6 +40,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 from rd2.storage.db import DocumentStore, _encode_for_storage  # noqa: E402
+from rd2.storage.body_file_paths import resolve_body_file_path  # noqa: E402
 from rd2.storage.naming import LEGACY_DOC_TYPE_MAP, LEGACY_SOURCE_MAP  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -188,7 +189,11 @@ def _validate(data_root: Path) -> list[str]:
                 _path_folder_segments_have_korean(p) for p in value.split("|")
             ):
                 failures.append(f"row {row_id}: {label}={value!r} 폴더 세그먼트에 한글 잔존")
-        if body_file_path and not (data_root / body_file_path).exists():
+        if body_file_path and resolve_body_file_path(
+            body_file_path,
+            files_root=data_root,
+            repo_root=_REPO_ROOT,
+        ) is None:
             failures.append(f"row {row_id}: body_file_path가 가리키는 파일 없음: {body_file_path}")
     return failures
 

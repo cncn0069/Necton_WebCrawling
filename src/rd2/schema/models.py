@@ -130,6 +130,7 @@ class Document(BaseModel):
     )
     ref_id: int | None = Field(
         default=None,
+        gt=0,
         description=(
             "본문을 참조한 원문 documents.id. 민감(S) 생성 문서가 어느 공개 "
             "원문에서 나왔는지를 가리킨다 — 수집 문서는 None."
