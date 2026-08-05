@@ -62,6 +62,7 @@ load_dotenv(ROOT / ".env", override=True)
 
 from rd2.source_generation.classification_taxonomy import (  # noqa: E402
     GROUND_IDS,
+    DocumentForm,
     SubclauseKey,
 )
 from rd2.generators.output_naming import generation_output_filename  # noqa: E402
@@ -144,6 +145,19 @@ def _source_row(record: dict) -> SourceRow:
         subject_category=raw.get("subject_category"),
         production_date=production_date,
     )
+
+
+def _document_form(record: dict) -> DocumentForm | None:
+    """이 건의 문서형식. ``doc_type`` 컬럼의 6칸이 여기서 정해진다.
+
+    배치가 수집 라벨(``doc_type``)에서 유도해 기록에 남긴 값이다. 원문 행의
+    영어 라벨을 그대로 쓰지 않고 이 값을 넘기는 이유는 생성분의 ``doc_type``이
+    6칸 한글이어야 하기 때문이다 — 몰아주기는 ``build_generated_document``가
+    한다. 이 필드가 없는 옛 기록은 None이 되어 지금까지처럼 원문 라벨로 남는다.
+    """
+
+    value = record.get("document_form")
+    return DocumentForm(value) if value else None
 
 
 def _input_prompt(record: dict) -> str:
@@ -255,12 +269,14 @@ def _insert_rows(args, files: list[Path], store: DocumentStore | None) -> int:
                 ),
                 generation_route=MINIMAL_GENERATION_ROUTE,
                 source_row=_source_row(record),
+                document_form=_document_form(record),
                 input_prompt=_input_prompt(record),
                 content=record["source_text"],
                 # 렌더가 아직 안 돌았다. 이 칸은 --fill-pdf-path가 메운다.
                 body_file_path=None,
-                # 맞춰 읽은 옛 계약 버전을 generated_text JSON에 되살린다.
-                document_contract_version=contract_version or None,
+                # 맞춰 읽은 옛 계약 버전은 행에 남지 않는다 — 그 값이 되살아나던
+                # ``pdf_renderd_json``이 스키마에서 빠졌다(2026-08-05). 어느
+                # 버전에서 왔는지는 아래 요약에만 남는다.
             )
         except Exception as exc:  # noqa: BLE001 - 한 건이 배치를 끊지 않는다
             print(f"  [실패] {document_id} — 조립: {type(exc).__name__}: {exc}")

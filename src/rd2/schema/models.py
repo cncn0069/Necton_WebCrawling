@@ -123,9 +123,12 @@ class Document(BaseModel):
     generated_text: str | None = Field(
         default=None,
         description=(
-            "생성된 문서 본문 평문 (생성 문서만). **JSON이 아니라 그냥 읽히는 "
-            "글이다** — 이 칸을 열었을 때 사람이 무엇이 만들어졌는지 바로 볼 수 "
-            "있어야 한다. 그 평문을 만든 블록·표 구조는 pdf_renderd_json에 있다."
+            "생성 문서의 산출물 (생성 문서만). 경로에 따라 두 모양이다 — 평문 "
+            "본문이거나, 그 본문을 만든 IR까지 함께 싼 `{\"result\": {...}}` "
+            "envelope JSON이다(문서형식·조항·블록 구조가 그 안에 있다). "
+            "**칸이 하나인 것이 요점이다.** 전에는 평문/IR/배치좌표가 세 칸으로 "
+            "나뉘어 있었는데, 읽는 쪽이 셋을 조인해야 했고 그중 하나만 비어도 "
+            "조용히 반쪽이 됐다 (2026-08-05 사용자 결정)."
         ),
     )
     ref_id: int | None = Field(
@@ -134,25 +137,6 @@ class Document(BaseModel):
         description=(
             "본문을 참조한 원문 documents.id. 민감(S) 생성 문서가 어느 공개 "
             "원문에서 나왔는지를 가리킨다 — 수집 문서는 None."
-        ),
-    )
-    batch_json: str | None = Field(
-        default=None,
-        description=(
-            "그 문서가 어떤 배치 좌표에서 어떤 서식으로 나왔는지를 담은 JSON "
-            "(생성 문서만). 본문도 구조도 넣지 않는다 — 그 둘은 generated_text/"
-            "pdf_renderd_json이 이미 갖고 있고, 같은 값을 두 칸에 두면 한쪽만 "
-            "고쳐지는 자리가 생긴다. 여기 들어가는 것은 문서형식(템플릿 선택), "
-            "비밀등급 표기, 표제부에 찍히는 기관·부서, 그리고 어느 템플릿·사건 "
-            "프레임에서 나왔는지의 좌표다."
-        ),
-    )
-    pdf_renderd_json: str | None = Field(
-        default=None,
-        description=(
-            "PDF 렌더가 읽는 문서 IR을 그대로 직렬화한 JSON (생성 문서만). PDF "
-            "앞에서 실제로 나오는 산출물이 이 JSON이고 블록·표 구조가 여기 "
-            "남는다 — 거기서 파생된 평문은 generated_text에 있다."
         ),
     )
 

@@ -139,6 +139,7 @@ def test_generated_row_inherits_source_metadata_and_marks_its_origin():
     assert doc.ordering_agency == "서울특별시"
     assert doc.department == "품질지도과"
     assert doc.production_date == date(2026, 7, 20)
+    # 형식을 모르는 호출에서만 원문 라벨이 그대로 남는다.
     assert doc.doc_type == "official_document"
     # is_synthetic 컬럼이 없어졌으므로 source 접두사가 유일한 구분자다.
     assert doc.source == "gen_seoul_opengov"
@@ -177,6 +178,26 @@ def test_source_url_is_stable_so_reruns_do_not_duplicate_rows():
     assert other != first
 
 
+def test_document_form_beats_the_inherited_english_label():
+    """생성분의 ``doc_type``은 원문에서 왔든 아니든 6칸 한글이다.
+
+    물려받은 값을 먼저 읽던 때는 원문에서 온 경로만 ``official_document``로
+    들어가 ``WHERE data_origin='G'`` 안에 영어와 한글이 섞였다.
+    """
+
+    doc = build_generated_document(
+        document=_document(),
+        plan=_plan(),
+        source_document_id="seoul_opengov-18752",
+        source_row=_row(doc_type="official_document"),
+        document_form=DocumentForm.REPORT,
+    )
+
+    assert doc.doc_type == "현황보고서"
+    # 물려받는 나머지 컬럼은 그대로다 — 바뀐 것은 이 한 칸뿐이다.
+    assert doc.ordering_agency == "서울특별시"
+
+
 def test_row_without_source_metadata_falls_back_to_the_document_form():
     doc = build_generated_document(
         document=_document(),
@@ -187,7 +208,8 @@ def test_row_without_source_metadata_falls_back_to_the_document_form():
         document_form=DocumentForm.OFFICIAL_LETTER,
     )
 
-    assert doc.doc_type == "official_letter"
+    # 형식 값(``official_letter``)이 아니라 6칸으로 몰아준 값이 들어간다.
+    assert doc.doc_type == "공문"
     assert doc.ordering_agency == "미상"
     assert doc.ref_id is None
 
@@ -382,13 +404,10 @@ def test_plan_free_route_fills_the_generation_provenance_columns():
 
     # 사용자가 지목한 네 컬럼.
     assert doc.input_prompt is not None and "조항 사례" in doc.input_prompt
-    # generated_text는 사람이 그냥 읽는 평문이고, 그 평문을 만든 IR 구조는
-    # pdf_renderd_json이 갖는다(2026-08-05 이전에는 둘이 한 칸에 있었다).
+    # envelope을 주지 않은 경로는 generated_text가 평문 그대로다. IR을 담던
+    # pdf_renderd_json은 스키마에서 빠졌다(2026-08-05) — envelope을 주는 경로는
+    # 그 IR을 generated_text 안에 싣는다.
     assert doc.generated_text == _document().body_text
-    assert json.loads(doc.pdf_renderd_json) == _document().model_dump(
-        mode="json", exclude_computed_fields=True
-    )
-    assert "body_text" not in json.loads(doc.pdf_renderd_json)
     # 컬럼이 BINARY(1)이라 int가 아니라 ASCII '1'이다(models.py 참고).
     assert doc.generated_yn == "1"
     assert doc.ref_id == 18752
