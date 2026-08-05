@@ -70,7 +70,7 @@
         >
           <ul>
             {% for item in block["items"] %}
-            <li>{{ item }}</li>
+            <li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>
             {% endfor %}
           </ul>
         </section>

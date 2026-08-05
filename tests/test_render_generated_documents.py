@@ -14,6 +14,7 @@ from rd2.generators.output_naming import (
 )
 from scripts.report.render_generated_documents import (
     _prepare_renderer_payload,
+    _output_filename,
     _renderer_payload,
 )
 
@@ -49,6 +50,23 @@ def _fake_synthetic_handwriting(
         "fallback_character_count": 0,
         "fallback_characters": {},
     }
+
+
+def test_batch_default_filename_preserves_fully_synthetic_title() -> None:
+    payload = {
+        "result": {
+            "generation_route": "fully_synthetic",
+            "generated_document": {
+                "title": "원문 제목 그대로 보존한 검토 보고서",
+            },
+        },
+    }
+
+    assert _output_filename(
+        payload,
+        1,
+        source_filename="row_13.json",
+    ) == "원문 제목 그대로 보존한 검토 보고서.pdf"
 
 
 def _scan_assignment() -> BalancedTemplateAssignment:

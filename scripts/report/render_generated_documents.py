@@ -25,6 +25,7 @@ from rd2.generators.confidential_security_templates import (
     BODY_SAFE_TOP_BOTTOM_PT,
 )
 from rd2.generators.output_naming import (
+    generation_output_filename,
     rename_rendered_files,
     requested_output_filename,
 )
@@ -80,6 +81,35 @@ def _output_id(payload: dict[str, Any], index: int) -> str:
         digest = sha256(raw.encode("utf-8")).hexdigest()[:12]
         safe = f"{safe[:80].rstrip('-._')}-{digest}"
     return safe
+
+
+def _output_filename(
+    payload: dict[str, Any],
+    index: int,
+    *,
+    source_filename: str,
+) -> str | None:
+    """명시된 이름이 없으면 생성 문서의 원문 제목을 파일명으로 쓴다."""
+
+    requested = requested_output_filename(payload, index)
+    if requested is not None:
+        return requested
+
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    document = result.get("generated_document")
+    if not isinstance(document, dict):
+        return None
+    title = document.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    route = result.get("generation_route")
+    return generation_output_filename(
+        generation_route=str(route or ""),
+        source_filename=source_filename,
+        generated_title=title,
+    )
 
 
 def _document_type(payload: dict[str, Any]) -> str | None:
@@ -474,7 +504,11 @@ def render_input_file(
 
     for index, payload in enumerate(payloads, start=1):
         payload, document_type_resolution = _prepare_renderer_payload(payload)
-        requested_filename = requested_output_filename(payload, index)
+        requested_filename = _output_filename(
+            payload,
+            index,
+            source_filename=input_path.name,
+        )
         document_id = _output_id(payload, index)
         if document_id in used_document_ids:
             document_id = f"{document_id}-{index:05d}"
@@ -590,9 +624,10 @@ def render_input_directory(
         for payload_index, payload in enumerate(payloads, start=1):
             document_index += 1
             payload, document_type_resolution = _prepare_renderer_payload(payload)
-            requested_filename = requested_output_filename(
+            requested_filename = _output_filename(
                 payload,
                 document_index,
+                source_filename=source_file,
             )
             document_id = _unique_document_id(
                 payload,

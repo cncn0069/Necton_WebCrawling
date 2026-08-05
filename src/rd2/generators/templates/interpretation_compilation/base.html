@@ -33,7 +33,7 @@
         </dl>
         {% elif block.kind == "bullet_list" %}
         <ul class="content-block block-bullet-list" data-block-id="{{ block.block_id }}">
-          {% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}
+          {% for item in block["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>{% endfor %}
         </ul>
         {% elif block.kind == "table" %}
         <section

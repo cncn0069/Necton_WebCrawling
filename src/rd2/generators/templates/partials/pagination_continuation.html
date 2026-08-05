@@ -1,6 +1,4 @@
 <main class="pagination-continuation">
-  <h1>{{ title }}</h1>
-
   {% set attachment = namespace(index=0) %}
   {% for block in source_blocks %}
   <section
@@ -18,7 +16,7 @@
         {% endfor %}
       </dl>
       {% elif block.kind == "bullet_list" %}
-      <ul>{% for item in block["items"] %}<li>{{ item }}</li>{% endfor %}</ul>
+      <ul>{% for item in block["items"] %}<li class="presentation-item level-{{ item.level }} role-{{ item.role }}" style="margin-inline-start: {{ item.level * 1.6 }}em">{{ item.text }}</li>{% endfor %}</ul>
       {% elif block.kind == "table" %}
       <table>
         <thead><tr>{% for column in block.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
