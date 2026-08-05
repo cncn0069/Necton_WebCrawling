@@ -253,23 +253,59 @@ def test_every_slot_can_carry_its_guidance(template):
 
 
 @pytest.mark.parametrize("template", _TEMPLATES, ids=_IDS)
-def test_stage_1_names_the_adversaries_with_their_gain(template):
-    """[단계 1]은 적대자를 **이름과 이득으로 함께** 세워야 한다.
+def test_case_section_names_this_frame_s_adversaries_with_their_gain(template):
+    """``[관계자]``는 적대자를 **이름과 이득으로 함께** 세워야 한다.
 
     이름만 나열하면 모델이 낱말로 짐작한다 — ``SUBCLAUSE_EXAMPLES``가 항목명이
     아니라 값을 담는 것과 같은 이유다. 그리고 위치가 한 종류로 쏠리면 [단계 1]의
     답이 한 방향으로 좁아져 같은 템플릿의 문서들이 같은 취약점만 말한다.
     """
 
-    stage_1 = render_cot_stage_1(template)
-    for adversary in template.adversaries:
-        assert adversary.who in stage_1
-        assert adversary.what_they_gain in stage_1
-        assert f"({adversary.position_label})" in stage_1
-
     assert len(template.adversaries) >= 2
     positions = {adversary.position for adversary in template.adversaries}
     assert len(positions) >= 2, "적대자 위치가 한 종류로 쏠렸다"
+
+    frame = next(iter(expand_cases(template, 1, seed=3)))
+    section = render_cot_case_section(template, frame)
+    assert "[관계자]" in section
+    for adversary in frame.adversaries:
+        assert adversary.who in section
+        assert adversary.what_they_gain in section
+        assert f"({adversary.position_label})" in section
+
+
+@pytest.mark.parametrize("template", _TEMPLATES, ids=_IDS)
+def test_stage_1_skeleton_carries_no_adversary(template):
+    """건마다 갈리는 것은 캐시 접두사에 있으면 안 된다.
+
+    v3까지 적대자 전원이 여기 있었고, 그래서 한 템플릿의 수천 건이 같은 넷을
+    읽었다. 본문 내용을 정하는 축이 고정돼 있던 자리다.
+
+    ``who``가 아니라 ``what_they_gain``으로 본다 — ``수용자``처럼 그 기관의
+    보통명사인 ``who``는 ``instruction``에도 정상적으로 나온다.
+    """
+
+    prefix = render_cot_fixed_prefix(template)
+    assert render_cot_stage_1() in prefix
+    for adversary in template.adversaries:
+        assert adversary.what_they_gain not in prefix
+
+
+@pytest.mark.parametrize("template", _TEMPLATES, ids=_IDS)
+def test_expansion_rotates_adversary_pairs(template):
+    """전개가 적대자 조합을 고르게 돌린다.
+
+    ``expand_cases``가 보장하는 축 균등이 새 축에도 걸리는지 본다 — 이 축만
+    짧은 주기에 갇히면 조합 수만 늘고 [단계 1]의 답은 그대로다.
+    """
+
+    pairs = template.adversary_pairs
+    assert len(pairs) >= 1
+    assert all(a is not b for a, b in pairs), "같은 적대자가 두 번 선 조합이 있다"
+
+    frames = list(expand_cases(template, len(pairs) * 40, seed=11))
+    seen = {frame.adversaries for frame in frames}
+    assert seen == set(pairs), "전개가 쓰지 않는 적대자 조합이 있다"
 
 
 @pytest.mark.parametrize("template", _TEMPLATES, ids=_IDS)

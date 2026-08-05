@@ -178,20 +178,20 @@ def test_the_three_generated_columns_do_not_repeat_each_other():
     assert row.generated_text.startswith("심의 대상 12건")
     assert "block_id" not in row.generated_text
 
-    # 2. batch_json — 그 평문을 만든 문서 IR.
-    ir = json.loads(row.batch_json)
+    # 2. pdf_renderd_json — 그 평문을 만든 문서 IR(렌더러가 읽는 값).
+    ir = json.loads(row.pdf_renderd_json)
     assert [block["block_id"] for block in ir["blocks"]] == ["b0", "b1"]
 
-    # 3. pdf_renderd_json — 본문 밖에서 서식을 정하는 값만.
-    payload = json.loads(row.pdf_renderd_json)
+    # 3. batch_json — 본문 밖에서 배치 좌표·서식을 정하는 값만.
+    payload = json.loads(row.batch_json)
     assert payload["ordering_agency"] == template.agency
     assert payload["department"] == frame.department
     assert payload["document_form"] == frame.document_form.value
     assert payload["security_grade"] == frame.security_grade
     assert payload["case_index"] == frame.case_index
     assert payload["prompt_version"] == "c-track-cot-test"
-    assert "심의 대상 12건" not in row.pdf_renderd_json
-    assert "block_id" not in row.pdf_renderd_json
+    assert "심의 대상 12건" not in row.batch_json
+    assert "block_id" not in row.batch_json
 
 
 def test_military_grade_only_rides_along_when_it_is_one():
