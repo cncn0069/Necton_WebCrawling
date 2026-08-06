@@ -71,12 +71,20 @@ def main() -> None:
     adapter = MohwAdapter()
 
     collected = 0
+    duplicates = 0
     quarantined = 0
     processed_position = base_skip
     docs = []
     with DocumentStore() as store:
         try:
             for raw_item in adapter.fetch_list(skip=base_skip, max_items=args.count):
+                source_url = raw_item.get("_detail_url")
+                if store.has_document(adapter.source_name, source_url):
+                    duplicates += 1
+                    processed_position += 1
+                    print(f"[dup-skip] {raw_item.get('_title')!r} (already in DB)")
+                    _save_checkpoint(checkpoint_path, processed_position)
+                    continue
                 try:
                     detail = adapter.parse_detail(raw_item)
                     doc = adapter.to_schema(detail)
@@ -100,7 +108,10 @@ def main() -> None:
                 _save_checkpoint(checkpoint_path, processed_position)
         finally:
             print()
-            print(f"Processed: {collected}, Quarantined: {quarantined}")
+            print(
+                f"Processed: {collected + duplicates + quarantined}, "
+                f"Stored: {collected}, Duplicates: {duplicates}, Quarantined: {quarantined}"
+            )
             print(f"Checkpoint now at position: {processed_position} ({checkpoint_path})")
             # count_documents는 source가 아니라 cso_classification으로만 필터링한다
             # (storage/db.py) — 이 값은 보건복지부만이 아니라 전체 소스의 O트랙 합계다.

@@ -448,6 +448,23 @@ class DocumentStore:
             self._conn.rollback()
             return False
 
+    def has_document(self, source: str, source_url: str | None) -> bool:
+        """source와 source_url로 문서 존재 여부를 인덱스로 확인한다.
+
+        수집기는 상세 페이지를 파싱하면 첨부파일부터 저장하므로, upsert의
+        중복 판정만으로는 이미 수집한 문서의 파일을 다시 내려받게 된다. 목록
+        단계에서 이 메서드를 먼저 호출하면 상세 조회와 파일 다운로드를 모두
+        건너뛸 수 있다. URL이 없는 합성 문서는 dedup 대상이 아니므로 False다.
+        """
+        if not source_url:
+            return False
+        key = _dedup_key(source, source_url)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM documents WHERE dedup_key = %s LIMIT 1", (key,)
+            )
+            return cur.fetchone() is not None
+
     def mark_pending_download(self, doc: Document) -> None:
         """파일 다운로드를 나중으로 미룬 문서를 큐에 등록한다(멱등 — 이미 있으면 무시).
         source_url이 없는 합성 문서는 다운로드 대상이 아니므로 등록하지 않는다."""

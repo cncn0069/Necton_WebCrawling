@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.0.2.0] - 2026-08-06
+
+### Changed
+
+- Skip existing `moe`, `mohw`, and `molit` documents before detail parsing and
+  attachment downloads, and allow the attachment root to be configured with
+  `RD2_FILES_ROOT` so EC2 can reuse its existing file store.
+
 ## [0.0.1.1] - 2026-08-06
 
 ### Changed

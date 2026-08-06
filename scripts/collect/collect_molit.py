@@ -73,12 +73,20 @@ def main() -> None:
     adapter = MolitAdapter()
 
     collected = 0
+    duplicates = 0
     quarantined = 0
     processed_position = base_skip
     docs = []
     with DocumentStore() as store:
         try:
             for raw_item in adapter.fetch_list(skip=base_skip, max_items=args.count):
+                source_url = raw_item.get("_detail_url")
+                if store.has_document(adapter.source_name, source_url):
+                    duplicates += 1
+                    processed_position += 1
+                    print(f"[dup-skip] {raw_item.get('_title')!r} (already in DB)")
+                    _save_checkpoint(checkpoint_path, processed_position)
+                    continue
                 try:
                     detail = adapter.parse_detail(raw_item)
                     doc = adapter.to_schema(detail)
@@ -101,7 +109,10 @@ def main() -> None:
                 _save_checkpoint(checkpoint_path, processed_position)
         finally:
             print()
-            print(f"Processed: {collected}, Quarantined: {quarantined}")
+            print(
+                f"Processed: {collected + duplicates + quarantined}, "
+                f"Stored: {collected}, Duplicates: {duplicates}, Quarantined: {quarantined}"
+            )
             print(f"Checkpoint now at position: {processed_position} ({checkpoint_path})")
             print(f"Total O-track docs in DB (전체 소스 합산): {store.count_documents(cso_classification='O')}")
             if docs:

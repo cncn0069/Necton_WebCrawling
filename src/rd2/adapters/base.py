@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Iterator
+
+from dotenv import load_dotenv
 
 from rd2.schema.models import Document
 
 # 본문파일 저장 루트 기본값 — repo 루트의 data/ 폴더.
 # 파일을 저장하는 모든 어댑터(prism.py, mohw.py)가 개별적으로 계산하던 걸
-# 여기로 옮겨 중복 제거(2026-07-09 plan-eng-review 결정 5번).
-DEFAULT_FILES_ROOT = Path(__file__).resolve().parents[3] / "data"
+# 여기로 옮겨 중복 제거(2026-07-09 plan-eng-review 결정 5번). 운영 환경에서
+# 기존 파일 저장소를 재사용해야 하므로 RD2_FILES_ROOT로 덮어쓸 수 있다.
+load_dotenv()
+DEFAULT_FILES_ROOT = Path(
+    os.environ.get("RD2_FILES_ROOT") or Path(__file__).resolve().parents[3] / "data"
+)
 
 
 class SourceAdapter(ABC):
