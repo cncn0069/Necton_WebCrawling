@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.0.1.1] - 2026-08-06
+
+### Changed
+
+- Replace the `pip freeze` environment dump in `requirements.txt` with the 20 packages the code imports directly, so a fresh install no longer pulls conda tooling, build backends, and unused transitive pins.
+
 ## [0.0.1.0] - 2026-08-05
 
 ### Added
