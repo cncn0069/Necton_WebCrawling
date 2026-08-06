@@ -47,11 +47,9 @@ _POINTS_PER_CM = 72.0 / 2.54
 _COVER_WIDTH_PT = 17.0 * _POINTS_PER_CM
 _COVER_PAGE_MARGIN_PT = 12.0
 _COVER_RASTER_WIDTH_PX = 2000
-_COVER_COLORS: dict[str, tuple[int, int, int]] = {
-    "1급": (190, 0, 0),
-    "2급": (194, 142, 0),
-    "3급": (0, 76, 173),
-}
+# 군사기밀 등급별 앞표지는 등급에 따라 색을 바꾸지 않고 검정색으로 고정한다.
+# 등급의 의미는 표지 안의 한글 등급 표기로만 구분한다.
+_COVER_COLOR = (0, 0, 0)
 
 
 class SecurityMarkingError(RuntimeError):
@@ -175,8 +173,8 @@ def _confidential_mark_bytes(asset_path: Path) -> tuple[bytes, float]:
 
 
 @lru_cache(maxsize=3)
-def _cover_image_bytes(asset_path: Path, grade: str) -> tuple[bytes, float]:
-    """흑백 규정 도안을 등급 색으로 선명하게 만든 고해상도 PNG를 반환한다."""
+def _cover_image_bytes(asset_path: Path) -> tuple[bytes, float]:
+    """흑백 규정 도안을 검정색으로 선명하게 만든 고해상도 PNG를 반환한다."""
 
     if not asset_path.is_file():
         raise SecurityMarkingError(f"군사기밀 표지 이미지가 없습니다: {asset_path}")
@@ -202,7 +200,7 @@ def _cover_image_bytes(asset_path: Path, grade: str) -> tuple[bytes, float]:
     grayscale = ImageEnhance.Sharpness(grayscale).enhance(1.45)
     tinted = ImageOps.colorize(
         grayscale,
-        black=_COVER_COLORS[grade],
+        black=_COVER_COLOR,
         white=(255, 255, 255),
     )
     output = BytesIO()
@@ -242,7 +240,6 @@ def _prepend_cover_page(document: fitz.Document, spec: SecurityMarkingSpec) -> N
     first_page_rect = document[0].rect
     cover_bytes, cover_ratio = _cover_image_bytes(
         spec.cover_asset_path,
-        spec.military_secret_grade,
     )
     cover = document.new_page(
         pno=0,
@@ -390,7 +387,7 @@ def _save_marked_pdf(
             "page_count": 1,
             "counted_in_page_limit": False,
             "width_cm": 17.0,
-            "color_rgb": list(_COVER_COLORS[spec.military_secret_grade]),
+            "color_rgb": list(_COVER_COLOR),
         }
         placement["body"].update(
             {

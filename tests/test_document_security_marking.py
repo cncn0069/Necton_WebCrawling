@@ -118,6 +118,7 @@ def test_military_secret_adds_unlimited_front_cover_and_body_marks(
     )
     assert marking["security_template"]["slug"] == "military_neutral_frame"
     assert marking["placement"]["cover"]["counted_in_page_limit"] is False
+    assert marking["placement"]["cover"]["color_rgb"] == [0, 0, 0]
     assert marking["content_page_count"] == 2
     assert marking["final_pdf_page_count"] == 3
     # 본문 상한을 나타내는 기존 manifest 값은 표지 추가로 바꾸지 않는다.
@@ -128,6 +129,15 @@ def test_military_secret_adds_unlimited_front_cover_and_body_marks(
         assert document.page_count == 3
         assert document[0].get_text().strip() == ""
         assert len(document[0].get_images(full=True)) == 1
+        cover_pixmap = document[0].get_pixmap(alpha=False)
+        assert cover_pixmap.n == 3
+        assert min(cover_pixmap.samples) < 32
+        assert all(
+            cover_pixmap.samples[offset]
+            == cover_pixmap.samples[offset + 1]
+            == cover_pixmap.samples[offset + 2]
+            for offset in range(0, len(cover_pixmap.samples), cover_pixmap.n)
+        )
         for page_number in range(1, document.page_count):
             page = document[page_number]
             assert "Central body text" in page.get_text()
