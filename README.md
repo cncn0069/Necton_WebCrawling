@@ -97,6 +97,9 @@ cp .env.example .env
 - `OPENAI_API_KEY` — C/S 생성에 사용
 - `MARIADB_HOST=127.0.0.1`, `MARIADB_PORT=3306`, `MARIADB_USER=rd2`,
   `MARIADB_PASSWORD=…`, `MARIADB_DATABASE=rd2_dump`
+- `RD2_FILES_ROOT` (선택) — 첨부파일 저장 루트. 생략하면 저장소 루트의 `data/`를
+  사용한다. 기존 EC2 파일을 재사용하는 수집 환경에서는 `/home/ubuntu/data`를
+  지정한다.
 - `RDS_MARIADB_*` — 운영 RDS. **로컬용과 이름을 나눠 둔다.** 한 벌을 돌려쓰면
   전환이 `.env` 편집으로 일어나고, 그건 되돌리는 걸 잊기 쉽다. 전환은 `--from-rds`
   플래그 하나로만 일어난다.

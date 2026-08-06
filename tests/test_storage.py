@@ -90,6 +90,14 @@ def test_upsert_dedup_same_source_url_skipped(store):
     assert store.count_documents() == 1
 
 
+def test_has_document_uses_source_and_source_url(store):
+    assert store.has_document(SOURCE_OPEN_GO_KR, "https://open.go.kr/doc/1") is False
+    store.upsert(_doc())
+    assert store.has_document(SOURCE_OPEN_GO_KR, "https://open.go.kr/doc/1") is True
+    assert store.has_document(SOURCE_PRISM, "https://open.go.kr/doc/1") is False
+    assert store.has_document(SOURCE_OPEN_GO_KR, None) is False
+
+
 def test_upsert_different_url_not_deduped(store):
     store.upsert(_doc(source_url="https://open.go.kr/doc/1"))
     store.upsert(_doc(source_url="https://open.go.kr/doc/2"))
